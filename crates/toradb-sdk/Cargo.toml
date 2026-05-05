@@ -1,0 +1,16 @@
+[package]
+name = "toradb-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "toradb_sdk"
+crate-type = ["cdylib"]
+
+[dependencies]
+toradb-core = { workspace = true }
+toradb-engine = { workspace = true }
+toradb-sql = { workspace = true }
+toradb-storage = { workspace = true }
+pyo3 = { version = "0.28", features = ["extension-module"] }

@@ -1,12 +1,26 @@
-[package]
-name = "toradb"
+[workspace]
+resolver = "2"
+members = [
+    "crates/toradb-core",
+    "crates/toradb-simd",
+    "crates/toradb-storage",
+    "crates/toradb-index",
+    "crates/toradb-engine",
+    "crates/toradb-sql",
+    "crates/toradb-sdk",
+]
+
+[workspace.package]
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+license = "Apache-2.0"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[lib]
-name = "toradb"
-crate-type = ["cdylib"]
-
-[dependencies]
-pyo3 = "0.28.3"
+[workspace.dependencies]
+toradb-core = { path = "crates/toradb-core" }
+toradb-simd = { path = "crates/toradb-simd" }
+toradb-storage = { path = "crates/toradb-storage" }
+toradb-index = { path = "crates/toradb-index" }
+toradb-engine = { path = "crates/toradb-engine" }
+toradb-sql = { path = "crates/toradb-sql" }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }

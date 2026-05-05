@@ -1,0 +1,12 @@
+[package]
+name = "toradb-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+toradb-core = { workspace = true }
+toradb-simd = { workspace = true }
+toradb-storage = { workspace = true }
+toradb-index = { workspace = true }
+thiserror = { workspace = true }

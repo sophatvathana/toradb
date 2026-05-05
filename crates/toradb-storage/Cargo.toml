@@ -1,0 +1,13 @@
+[package]
+name = "toradb-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+toradb-core = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+toradb-core = { workspace = true }

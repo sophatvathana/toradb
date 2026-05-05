@@ -1,0 +1,9 @@
+[package]
+name = "toradb-sql"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+toradb-core = { workspace = true }
+thiserror = { workspace = true }

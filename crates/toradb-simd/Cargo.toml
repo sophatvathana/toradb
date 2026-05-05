@@ -1,0 +1,11 @@
+[package]
+name = "toradb-simd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+avx2 = []
+avx512 = []
+neon = []
