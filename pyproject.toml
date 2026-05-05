@@ -11,3 +11,12 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dynamic = ["version"]
+
+[project.scripts]
+toradb = "toradb.cli:main"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "toradb._toradb_sdk"
+python-source = "python"
+manifest-path = "crates/toradb-sdk/Cargo.toml"
