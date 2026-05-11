@@ -1,18 +1,23 @@
 use toradb_core::Batch;
 
-/// Hypothetical-document expansion hook (tier-2); production encoder deferred.
-pub fn apply_hyde(batch: &mut Batch) {
-    if batch.query.is_empty() {
-        return;
-    }
-    batch.query = format!("{} [hyde-expanded]", batch.query);
-}
-
-/// Corrective retrieval hook: trim low-confidence candidates (stub threshold).
+/// Corrective retrieval: drop candidates below the median score.
 pub fn apply_crag(batch: &mut Batch) {
     if batch.candidates.len() <= 1 {
         return;
     }
-    let keep = (batch.candidates.len() / 2).max(1);
-    batch.candidates.truncate(keep);
+    let mut scores = batch.candidates.scores.clone();
+    scores.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = scores[scores.len() / 2];
+    let mut kept_ids = Vec::new();
+    let mut kept_scores = Vec::new();
+    for (i, id) in batch.candidates.ids.iter().enumerate() {
+        if batch.candidates.scores[i] >= median {
+            kept_ids.push(*id);
+            kept_scores.push(batch.candidates.scores[i]);
+        }
+    }
+    if !kept_ids.is_empty() {
+        batch.candidates.ids = kept_ids;
+        batch.candidates.scores = kept_scores;
+    }
 }

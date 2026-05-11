@@ -9,6 +9,8 @@ pub struct Batch {
     pub enable_crag: bool,
     pub graph_expand: bool,
     pub graph_depth: u32,
+    pub table: String,
+    pub query_vector: Option<Vec<f32>>,
 }
 
 impl Batch {
