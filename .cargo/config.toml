@@ -1,0 +1,8 @@
+# PyO3 extension modules resolve Python symbols at load time (not link time).
+# Required for `cargo build -p toradb-sdk`; maturin sets equivalent flags when packaging.
+
+[target.'cfg(target_os = "macos")']
+rustflags = [
+  "-C", "link-arg=-undefined",
+  "-C", "link-arg=dynamic_lookup",
+]
