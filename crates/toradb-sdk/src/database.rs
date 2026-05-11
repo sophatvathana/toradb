@@ -26,6 +26,19 @@ impl Database {
     pub(crate) fn run_retrieval(&mut self, batch: &mut Batch, ctx: &ExecCtx) -> QueryMetrics {
         self.dag.run(batch, ctx)
     }
+
+    pub(crate) fn ensure_table(&mut self, name: &str) {
+        self.dag.ensure_table(name);
+    }
+
+    pub(crate) fn add_documents(
+        &mut self,
+        table: &str,
+        docs: Vec<toradb_index::IngestDoc>,
+    ) -> usize {
+        self.dag.ensure_table(table);
+        self.dag.add_documents(table, docs)
+    }
 }
 
 #[pymethods]
@@ -67,6 +80,7 @@ impl Database {
                 m.to_uppercase()
             ))?;
         }
+        slf.ensure_table(name);
         let db = slf.into_pyobject(py)?.unbind();
         Ok(super::table::Table::new(name.to_string(), db))
     }

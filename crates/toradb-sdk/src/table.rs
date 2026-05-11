@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use pyo3::prelude::*;
-use pyo3::types::PyList;
+use pyo3::types::{PyDict, PyList};
 use toradb_core::{Batch, ExecCtx};
 use toradb_engine::tune_ctx;
+use toradb_index::IngestDoc;
 
 use crate::database::Database;
 
@@ -22,13 +25,70 @@ fn exec_ctx(top_k: Option<u32>) -> ExecCtx {
     ExecCtx::new(k.saturating_mul(50).min(1000), k.saturating_mul(5).min(100), k)
 }
 
-#[pymethods]
-impl Table {
-    fn add(&self, docs: &Bound<'_, PyList>) -> PyResult<usize> {
-        Ok(docs.len())
+fn parse_ingest_doc(item: &Bound<'_, PyAny>) -> PyResult<IngestDoc> {
+    if let Ok(text) = item.extract::<String>() {
+        return Ok(IngestDoc {
+            text,
+            metadata: HashMap::new(),
+            vector: None,
+        });
     }
 
-    #[pyo3(signature = (query, top_k=None, strategy=None, explain=None, graph_expand=None, depth=None))]
+    let dict = item
+        .cast::<PyDict>()
+        .map_err(|_| pyo3::exceptions::PyTypeError::new_err("document must be str or dict"))?;
+
+    let text = match dict.get_item("text")? {
+        Some(v) => v.extract::<String>()?,
+        None => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "dict document requires a 'text' field",
+            ));
+        }
+    };
+
+    let mut metadata = HashMap::new();
+    let mut vector = None;
+
+    for (key, value) in dict.iter() {
+        let k = key.extract::<String>()?;
+        if k == "text" {
+            continue;
+        }
+        if k == "vector" || k == "embedding" {
+            if let Ok(v) = value.extract::<Vec<f32>>() {
+                vector = Some(v);
+            }
+            continue;
+        }
+        if let Ok(s) = value.extract::<String>() {
+            metadata.insert(k, s);
+        } else if let Ok(n) = value.extract::<i64>() {
+            metadata.insert(k, n.to_string());
+        } else if let Ok(n) = value.extract::<f64>() {
+            metadata.insert(k, n.to_string());
+        }
+    }
+
+    Ok(IngestDoc {
+        text,
+        metadata,
+        vector,
+    })
+}
+
+#[pymethods]
+impl Table {
+    fn add(&self, py: Python<'_>, docs: &Bound<'_, PyList>) -> PyResult<usize> {
+        let mut parsed = Vec::with_capacity(docs.len());
+        for item in docs.iter() {
+            parsed.push(parse_ingest_doc(&item)?);
+        }
+        let mut db = self.db.borrow_mut(py);
+        Ok(db.add_documents(&self.name, parsed))
+    }
+
+    #[pyo3(signature = (query, top_k=None, strategy=None, explain=None, graph_expand=None, depth=None, query_vector=None))]
     fn search(
         &self,
         py: Python<'_>,
@@ -38,10 +98,13 @@ impl Table {
         explain: Option<bool>,
         graph_expand: Option<bool>,
         depth: Option<u32>,
+        query_vector: Option<Vec<f32>>,
     ) -> PyResult<SearchResults> {
         let mut db = self.db.borrow_mut(py);
         let mut batch = Batch::new();
+        batch.table = self.name.clone();
         batch.query = query.to_string();
+        batch.query_vector = query_vector;
         batch.enable_hyde = matches!(strategy, Some("hyde"));
         batch.enable_crag = matches!(strategy, Some("crag"));
         batch.graph_expand = graph_expand.unwrap_or(false)

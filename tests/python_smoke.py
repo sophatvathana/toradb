@@ -11,9 +11,17 @@ toradb = pytest.importorskip("toradb")
 def test_local_text_search():
     db = toradb.local("./test_db_smoke")
     docs = db.create_table("docs", mode="text")
-    results = docs.search("hello world", top_k=5)
+    docs.add(
+        [
+            "Nikola Tesla invented the alternating current induction motor",
+            "Marie Curie studied radioactivity and Nobel prizes",
+        ]
+    )
+    results = docs.search("Nikola Tesla alternating current motor", top_k=5)
     assert results is not None
-    assert len(results.explain()) > 0
+    frame = results.to_pandas()
+    assert len(frame["id"]) > 0
+    assert frame["id"][0] == 0
 
 
 def test_hybrid_schema_builder():
@@ -56,6 +64,7 @@ def test_langchain_adapter():
     db = toradb.local("./test_db_lc")
     t = db.create_table("lc", mode="text")
     store = ToraDBVectorStore.from_table(t)
-    store.add_texts(["doc one", "doc two"])
-    hits = store.similarity_search("doc", k=2)
-    assert len(hits) == 2
+    store.add_texts(["doc one about Tesla motors", "doc two about Curie radiation"])
+    hits = store.similarity_search("Tesla motors", k=2)
+    assert len(hits) >= 1
+    assert hits[0]["id"] == 0

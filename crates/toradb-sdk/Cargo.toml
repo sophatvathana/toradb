@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 [dependencies]
 toradb-core = { workspace = true }
 toradb-engine = { workspace = true }
+toradb-index = { workspace = true }
 toradb-sql = { workspace = true }
 toradb-storage = { workspace = true }
 pyo3 = { version = "0.28", features = ["extension-module"] }
