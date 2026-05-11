@@ -13,7 +13,11 @@ pub struct SegmentManager {
 
 impl SegmentManager {
     pub fn new() -> Self {
-        Self::default()
+        let mut mgr = Self::default();
+        for _ in 0..4 {
+            mgr.create_segment();
+        }
+        mgr
     }
 
     pub fn create_segment(&mut self) -> SegmentId {

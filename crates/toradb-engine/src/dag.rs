@@ -1,6 +1,8 @@
 use toradb_core::{Batch, ExecCtx, QueryMetrics};
 use toradb_index::RetrievalRuntime;
 use toradb_storage::SegmentManager;
+use crate::advanced::{apply_crag, apply_hyde};
+use crate::fusion::rrf_merge;
 use crate::lowering::{lower_tier1, lower_tier2, lower_tier3};
 use crate::scheduler::SegmentScheduler;
 
@@ -25,7 +27,16 @@ impl DagRunner {
         metrics.tier1_candidates = t1.execute(batch, ctx) as u32;
         self.retrieval.run_tier1(batch, ctx);
 
+        if batch.enable_hyde {
+            apply_hyde(batch);
+        }
+        let pre_tier2 = batch.candidates.clone();
         let t2 = lower_tier2();
+        self.retrieval.run_tier2(batch, ctx);
+        batch.candidates = rrf_merge(&pre_tier2, &batch.candidates, 60);
+        if batch.enable_crag {
+            apply_crag(batch);
+        }
         metrics.tier2_candidates = t2.execute(batch, ctx) as u32;
 
         let scheduler = SegmentScheduler::new(4);
