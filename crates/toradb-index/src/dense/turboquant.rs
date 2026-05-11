@@ -1,3 +1,12 @@
 use toradb_core::CandidateSet;
 
-pub fn search(_vec: &[f32], k: usize) -> CandidateSet { let mut c = CandidateSet::with_capacity(k); c.push(10, 0.8); c }
+use crate::corpus::CorpusStore;
+use crate::dense::search;
+
+/// Reduced-dimension vector probe (8-d prefix) before full re-rank in tier 3.
+pub fn search(store: &CorpusStore, table: &str, query: &[f32], k: usize) -> CandidateSet {
+    if query.len() <= 8 {
+        return search::search(store, table, query, k);
+    }
+    search::search(store, table, &query[..8], k)
+}

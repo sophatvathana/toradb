@@ -203,6 +203,7 @@ dependencies = [
  "pyo3",
  "toradb-core",
  "toradb-engine",
+ "toradb-index",
  "toradb-sql",
  "toradb-storage",
 ]

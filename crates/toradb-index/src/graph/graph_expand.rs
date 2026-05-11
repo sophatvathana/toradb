@@ -1,10 +1,23 @@
 use toradb_core::CandidateSet;
 
-pub fn expand(candidates: &CandidateSet, depth: u32) -> CandidateSet {
+use crate::corpus::CorpusStore;
+
+pub fn expand(
+    store: &CorpusStore,
+    table: &str,
+    candidates: &CandidateSet,
+    depth: u32,
+) -> CandidateSet {
+    let Some(t) = store.table(table) else {
+        return candidates.clone();
+    };
     let mut out = candidates.clone();
-    for d in 0..depth {
-        for id in candidates.ids.iter() {
-            out.push(id + (d as u64) + 1, 0.5);
+    for &id in &candidates.ids {
+        let n = t.neighbors(id, depth);
+        for (i, nid) in n.ids.iter().enumerate() {
+            if out.len() < 256 {
+                out.push(*nid, n.scores[i]);
+            }
         }
     }
     out

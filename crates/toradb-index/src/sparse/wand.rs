@@ -1,7 +1,11 @@
 use toradb_core::CandidateSet;
 
-pub fn search(query: &str, k: usize) -> CandidateSet {
-    let mut c = CandidateSet::with_capacity(k);
-    if !query.is_empty() { c.push(4, 0.85); }
-    c
+use crate::corpus::CorpusStore;
+
+/// WAND-style max-score retrieval; for in-memory tables this delegates to BM25 scoring.
+pub fn search(store: &CorpusStore, table: &str, query: &str, k: usize) -> CandidateSet {
+    store
+        .table(table)
+        .map(|t| t.bm25_search(query, k))
+        .unwrap_or_default()
 }
