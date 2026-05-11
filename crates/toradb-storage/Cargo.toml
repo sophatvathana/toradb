@@ -7,7 +7,10 @@ license.workspace = true
 [dependencies]
 toradb-core = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+arrow = { workspace = true }
+parquet = { workspace = true }
 
 [dev-dependencies]
 toradb-core = { workspace = true }

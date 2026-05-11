@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod columnar;
 pub mod manifest;
 pub mod numa;
 pub mod segment;
