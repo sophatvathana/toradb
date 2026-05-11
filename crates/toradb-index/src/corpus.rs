@@ -144,8 +144,66 @@ impl TableCorpus {
         self.docs.len()
     }
 
+    pub fn next_id(&self) -> DocId {
+        self.next_id
+    }
+
     pub fn doc_text(&self, id: DocId) -> Option<&str> {
         self.docs.get(&id).map(|d| d.text.as_str())
+    }
+
+    /// Insert a document with a fixed id (used when reloading columnar segments).
+    pub fn add_with_id(&mut self, id: DocId, doc: IngestDoc, num_segments: u32) -> DocId {
+        if id >= self.next_id {
+            self.next_id = id + 1;
+        }
+        let segment = (id % num_segments as u64) as u32;
+        if let Some(ref v) = doc.vector {
+            match self.vector_dim {
+                None => self.vector_dim = Some(v.len()),
+                Some(d) if d != v.len() => {}
+                _ => {}
+            }
+        }
+        self.bm25.add_document(id, &doc.text);
+        if id > 0 {
+            self.graph.edges.push((id - 1, id));
+            self.graph.edges.push((id, id - 1));
+        }
+        self.docs.insert(
+            id,
+            StoredDoc {
+                text: doc.text,
+                metadata: doc.metadata,
+                vector: doc.vector,
+                segment,
+            },
+        );
+        id
+    }
+
+    pub fn docs_with_ids_since(&self, since_id: DocId) -> Vec<(DocId, IngestDoc)> {
+        let mut ids: Vec<DocId> = self
+            .docs
+            .keys()
+            .copied()
+            .filter(|id| *id >= since_id)
+            .collect();
+        ids.sort_unstable();
+        ids.into_iter()
+            .filter_map(|id| {
+                self.docs.get(&id).map(|d| {
+                    (
+                        id,
+                        IngestDoc {
+                            text: d.text.clone(),
+                            metadata: d.metadata.clone(),
+                            vector: d.vector.clone(),
+                        },
+                    )
+                })
+            })
+            .collect()
     }
 }
 
@@ -163,6 +221,10 @@ impl CorpusStore {
         self.tables.get(name)
     }
 
+    pub fn next_id(&self, table: &str) -> DocId {
+        self.table(table).map(|t| t.next_id()).unwrap_or(0)
+    }
+
     pub fn add_documents(&mut self, table: &str, docs: Vec<IngestDoc>, num_segments: u32) -> usize {
         let t = self.ensure_table(table);
         let mut n = 0;
@@ -171,6 +233,22 @@ impl CorpusStore {
             n += 1;
         }
         n
+    }
+
+    pub fn add_document_with_id(
+        &mut self,
+        table: &str,
+        id: DocId,
+        doc: IngestDoc,
+        num_segments: u32,
+    ) {
+        self.ensure_table(table).add_with_id(id, doc, num_segments);
+    }
+
+    pub fn docs_with_ids_since(&self, table: &str, since_id: DocId) -> Vec<(DocId, IngestDoc)> {
+        self.table(table)
+            .map(|t| t.docs_with_ids_since(since_id))
+            .unwrap_or_default()
     }
 
     pub fn expand_query_terms(&self, table: &str, query: &str) -> String {
