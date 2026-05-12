@@ -58,6 +58,26 @@ def test_add_file_ingest():
         Path(path).unlink(missing_ok=True)
 
 
+def test_persist_reload_search():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_reload_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(["Nikola Tesla alternating current induction motor"])
+        del db
+
+        db2 = toradb.local(str(path))
+        t2 = db2.create_table("docs", mode="text")
+        results = t2.search("Nikola Tesla alternating current", top_k=5)
+        frame = results.to_pandas()
+        assert len(frame["id"]) > 0
+        assert frame["id"][0] == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_langchain_adapter():
     from toradb.integrations import ToraDBVectorStore
 
