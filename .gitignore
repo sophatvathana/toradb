@@ -70,3 +70,8 @@ docs/_build/
 
 # Pyenv
 .python-version
+
+# Local databases / demos
+test_db_*/
+examples/_demo_db/
+_demo_db/
