@@ -73,6 +73,10 @@ impl DagRunner {
         self.retrieval.store.ensure_table(table);
     }
 
+    pub fn db_path(&self) -> Option<&std::path::Path> {
+        self.db_path.as_ref().map(|p| p.as_path())
+    }
+
     pub fn run(&mut self, batch: &mut Batch, ctx: &ExecCtx) -> QueryMetrics {
         let mut metrics = QueryMetrics::default();
 

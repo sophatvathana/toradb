@@ -2,6 +2,7 @@ use toradb_core::{Batch, ExecCtx, QueryMetrics};
 use toradb_sql::ast::SelectStmt;
 
 use crate::dag::DagRunner;
+use crate::olap::{run_aggregate, SqlAggregateResult};
 
 pub struct SqlSearchResult {
     pub ids: Vec<u64>,
@@ -9,7 +10,19 @@ pub struct SqlSearchResult {
     pub metrics: QueryMetrics,
 }
 
-pub fn run_select(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSearchResult, String> {
+pub enum SqlSelectResult {
+    Search(SqlSearchResult),
+    Aggregate(SqlAggregateResult),
+}
+
+pub fn run_select(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSelectResult, String> {
+    if sel.group_by.is_some() {
+        return Ok(SqlSelectResult::Aggregate(run_aggregate(dag, sel)?));
+    }
+    Ok(SqlSelectResult::Search(run_sparse_search(dag, sel)?))
+}
+
+pub(crate) fn run_sparse_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSearchResult, String> {
     let query = sel
         .sparse_query
         .clone()

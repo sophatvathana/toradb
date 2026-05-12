@@ -33,7 +33,10 @@ fn sql_select_runs_sparse_search() {
         panic!("select");
     };
 
-    let out = sql_exec::run_select(&mut dag, sel).expect("run");
+    let sql_exec::SqlSelectResult::Search(out) = sql_exec::run_select(&mut dag, sel).expect("run")
+    else {
+        panic!("expected search");
+    };
     assert!(!out.ids.is_empty());
     assert_eq!(out.ids[0], 0);
 
