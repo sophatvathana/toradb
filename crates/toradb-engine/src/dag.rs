@@ -1,9 +1,13 @@
+use std::path::Path;
+
 use toradb_core::{Batch, ExecCtx, QueryMetrics};
 use toradb_index::RetrievalRuntime;
 use toradb_storage::SegmentManager;
+
 use crate::advanced::apply_crag;
 use crate::fusion::rrf_merge;
 use crate::lowering::{lower_tier1, lower_tier2, lower_tier3};
+use crate::persist::{self, DbPath};
 use crate::scheduler::SegmentScheduler;
 
 /// Single execution path for all queries (SQL and SDK).
@@ -11,6 +15,7 @@ use crate::scheduler::SegmentScheduler;
 pub struct DagRunner {
     pub retrieval: RetrievalRuntime,
     pub segments: SegmentManager,
+    db_path: Option<DbPath>,
 }
 
 impl DagRunner {
@@ -18,18 +23,50 @@ impl DagRunner {
         Self {
             retrieval: RetrievalRuntime::new(),
             segments: SegmentManager::new(),
+            db_path: None,
         }
+    }
+
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
+        let db_path = DbPath::new(path.as_ref());
+        std::fs::create_dir_all(db_path.as_path()).map_err(|e| e.to_string())?;
+        let mut runner = Self::new();
+        runner.db_path = Some(db_path);
+        runner.reload_from_disk()?;
+        Ok(runner)
+    }
+
+    pub fn reload_from_disk(&mut self) -> Result<usize, String> {
+        let Some(ref path) = self.db_path else {
+            return Ok(0);
+        };
+        self.retrieval.store = toradb_index::CorpusStore::default();
+        persist::load_all(
+            path.as_path(),
+            &mut self.retrieval.store,
+            self.segments.len(),
+        )
     }
 
     pub fn add_documents(
         &mut self,
         table: &str,
         docs: Vec<toradb_index::IngestDoc>,
-    ) -> usize {
+    ) -> Result<usize, String> {
+        if docs.is_empty() {
+            return Ok(0);
+        }
+        self.ensure_table(table);
+        let since_id = self.retrieval.store.next_id(table);
         let n = self.segments.len() as u32;
-        self.retrieval
+        let added = self
+            .retrieval
             .store
-            .add_documents(table, docs, n.max(1))
+            .add_documents(table, docs, n.max(1));
+        if let Some(ref path) = self.db_path {
+            persist::flush_new_docs(path.as_path(), table, &self.retrieval.store, since_id)?;
+        }
+        Ok(added)
     }
 
     pub fn ensure_table(&mut self, table: &str) {

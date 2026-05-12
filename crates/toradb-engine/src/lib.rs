@@ -4,6 +4,7 @@ pub mod dag;
 pub mod fusion;
 pub mod lowering;
 pub mod operator;
+pub mod persist;
 pub mod scheduler;
 
 pub use adaptive::tune_ctx;
