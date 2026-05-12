@@ -6,6 +6,7 @@ pub mod lowering;
 pub mod operator;
 pub mod persist;
 pub mod scheduler;
+pub mod sql_exec;
 
 pub use adaptive::tune_ctx;
 

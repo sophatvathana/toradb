@@ -934,6 +934,7 @@ dependencies = [
  "toradb-core",
  "toradb-index",
  "toradb-simd",
+ "toradb-sql",
  "toradb-storage",
 ]
 

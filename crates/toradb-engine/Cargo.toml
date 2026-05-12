@@ -9,4 +9,5 @@ toradb-core = { workspace = true }
 toradb-simd = { workspace = true }
 toradb-storage = { workspace = true }
 toradb-index = { workspace = true }
+toradb-sql = { workspace = true }
 thiserror = { workspace = true }
