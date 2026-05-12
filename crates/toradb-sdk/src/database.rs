@@ -4,11 +4,12 @@ use toradb_core::{Batch, ExecCtx, QueryMetrics};
 use toradb_engine::{sql_exec, DagRunner};
 use toradb_sql::{ast::Stmt, binder::Binder, parse};
 
-use crate::table::SearchResults;
+use crate::table::{AnalyticsResults, SearchResults};
 
 enum SqlOutcome {
     Message(String),
     Search(SearchResults),
+    Aggregate(AnalyticsResults),
 }
 
 #[pyclass]
@@ -34,11 +35,16 @@ impl Database {
             if let Stmt::Select(sel) = &stmts[0] {
                 let out = sql_exec::run_select(&mut self.dag, sel)
                     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
-                return Ok(SqlOutcome::Search(SearchResults::from_sql(
-                    out.ids,
-                    out.scores,
-                    out.metrics,
-                )));
+                return match out {
+                    sql_exec::SqlSelectResult::Search(s) => Ok(SqlOutcome::Search(SearchResults::from_sql(
+                        s.ids,
+                        s.scores,
+                        s.metrics,
+                    ))),
+                    sql_exec::SqlSelectResult::Aggregate(a) => Ok(SqlOutcome::Aggregate(
+                        AnalyticsResults::new(a.group_by_column, a.group_keys, a.counts),
+                    )),
+                };
             }
         }
         self.binder
@@ -77,6 +83,7 @@ impl Database {
         match self.execute_sql(query)? {
             SqlOutcome::Message(s) => Ok(s.into_pyobject(py)?.into_any()),
             SqlOutcome::Search(results) => Ok(results.into_pyobject(py)?.into_any()),
+            SqlOutcome::Aggregate(results) => Ok(results.into_pyobject(py)?.into_any()),
         }
     }
 

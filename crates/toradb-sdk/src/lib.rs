@@ -20,5 +20,6 @@ fn _toradb_sdk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<database::Database>()?;
     m.add_class::<table::Table>()?;
     m.add_class::<table::SearchResults>()?;
+    m.add_class::<table::AnalyticsResults>()?;
     Ok(())
 }
