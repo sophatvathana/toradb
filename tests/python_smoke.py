@@ -58,6 +58,28 @@ def test_add_file_ingest():
         Path(path).unlink(missing_ok=True)
 
 
+def test_sql_group_by_analytics():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_olap_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                {"text": "Nikola Tesla AC motor", "tag": "patent"},
+                {"text": "Nikola Tesla coil", "tag": "patent"},
+                {"text": "Marie Curie radiation", "tag": "science"},
+            ]
+        )
+        frame = db.sql("SELECT tag, COUNT(*) FROM docs GROUP BY tag").to_pandas()
+        counts = dict(zip(frame["tag"], frame["count"]))
+        assert counts["patent"] == 2
+        assert counts["science"] == 1
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_sql_sparse_search():
     import shutil
 
@@ -102,12 +124,18 @@ def test_persist_reload_search():
 
 
 def test_langchain_adapter():
+    import shutil
+
     from toradb.integrations import ToraDBVectorStore
 
-    db = toradb.local("./test_db_lc")
-    t = db.create_table("lc", mode="text")
-    store = ToraDBVectorStore.from_table(t)
-    store.add_texts(["doc one about Tesla motors", "doc two about Curie radiation"])
-    hits = store.similarity_search("Tesla motors", k=2)
-    assert len(hits) >= 1
-    assert hits[0]["id"] == 0
+    path = Path(tempfile.mkdtemp(prefix="toradb_lc_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("lc", mode="text")
+        store = ToraDBVectorStore.from_table(t)
+        store.add_texts(["doc one about Tesla motors", "doc two about Curie radiation"])
+        hits = store.similarity_search("Tesla motors", k=2)
+        assert len(hits) >= 1
+        assert hits[0]["id"] == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
