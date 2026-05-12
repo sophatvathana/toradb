@@ -4,7 +4,7 @@ use toradb_core::{CandidateSet, DocId};
 use toradb_simd::dot_f32;
 
 use crate::graph::csr::CsrGraph;
-use crate::sparse::bm25::{Bm25Index, tokenize};
+use crate::sparse::bm25::{Bm25Index, Bm25Snapshot, tokenize};
 
 #[derive(Debug, Clone)]
 pub struct IngestDoc {
@@ -182,6 +182,47 @@ impl TableCorpus {
         id
     }
 
+    pub fn insert_stored(&mut self, id: DocId, doc: IngestDoc, num_segments: u32) {
+        if id >= self.next_id {
+            self.next_id = id + 1;
+        }
+        let segment = (id % num_segments as u64) as u32;
+        if let Some(ref v) = doc.vector {
+            match self.vector_dim {
+                None => self.vector_dim = Some(v.len()),
+                Some(d) if d != v.len() => {}
+                _ => {}
+            }
+        }
+        self.docs.insert(
+            id,
+            StoredDoc {
+                text: doc.text,
+                metadata: doc.metadata,
+                vector: doc.vector,
+                segment,
+            },
+        );
+    }
+
+    pub fn rebuild_bm25(&mut self) {
+        self.bm25 = Bm25Index::default();
+        let mut ids: Vec<DocId> = self.docs.keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
+            let text = self.docs.get(&id).map(|d| d.text.as_str()).unwrap_or("");
+            self.bm25.add_document(id, text);
+        }
+    }
+
+    pub fn restore_bm25(&mut self, snap: Bm25Snapshot) {
+        self.bm25 = Bm25Index::from_snapshot(snap);
+    }
+
+    pub fn bm25_snapshot(&self) -> Bm25Snapshot {
+        self.bm25.snapshot()
+    }
+
     pub fn docs_with_ids_since(&self, since_id: DocId) -> Vec<(DocId, IngestDoc)> {
         let mut ids: Vec<DocId> = self
             .docs
@@ -253,6 +294,22 @@ impl CorpusStore {
 
     pub fn all_documents(&self, table: &str) -> Vec<(DocId, IngestDoc)> {
         self.docs_with_ids_since(table, 0)
+    }
+
+    pub fn insert_stored(&mut self, table: &str, id: DocId, doc: IngestDoc, num_segments: u32) {
+        self.ensure_table(table).insert_stored(id, doc, num_segments);
+    }
+
+    pub fn rebuild_bm25(&mut self, table: &str) {
+        self.ensure_table(table).rebuild_bm25();
+    }
+
+    pub fn restore_bm25(&mut self, table: &str, snap: Bm25Snapshot) {
+        self.ensure_table(table).restore_bm25(snap);
+    }
+
+    pub fn bm25_snapshot(&self, table: &str) -> Option<Bm25Snapshot> {
+        self.table(table).map(|t| t.bm25_snapshot())
     }
 
     pub fn expand_query_terms(&self, table: &str, query: &str) -> String {

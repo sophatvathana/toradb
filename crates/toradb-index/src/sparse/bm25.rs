@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
 use toradb_core::{CandidateSet, DocId};
 
 const K1: f32 = 1.2;
@@ -62,6 +63,35 @@ impl Bm25Index {
         }
         out
     }
+
+    pub fn snapshot(&self) -> Bm25Snapshot {
+        Bm25Snapshot {
+            postings: self.postings.clone(),
+            doc_len: self.doc_len.clone(),
+            doc_freq: self.doc_freq.clone(),
+            num_docs: self.num_docs,
+            avg_dl: self.avg_dl,
+        }
+    }
+
+    pub fn from_snapshot(snap: Bm25Snapshot) -> Self {
+        Self {
+            postings: snap.postings,
+            doc_len: snap.doc_len,
+            doc_freq: snap.doc_freq,
+            num_docs: snap.num_docs,
+            avg_dl: snap.avg_dl,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bm25Snapshot {
+    pub postings: HashMap<String, Vec<(DocId, u32)>>,
+    pub doc_len: HashMap<DocId, u32>,
+    pub doc_freq: HashMap<String, u32>,
+    pub num_docs: u32,
+    pub avg_dl: f32,
 }
 
 fn is_khmer(c: char) -> bool {
