@@ -58,6 +58,29 @@ def test_add_file_ingest():
         Path(path).unlink(missing_ok=True)
 
 
+def test_sql_sparse_search():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                "Nikola Tesla alternating current induction motor",
+                "Marie Curie studied radioactivity",
+            ]
+        )
+        results = db.sql(
+            "SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 5"
+        )
+        frame = results.to_pandas()
+        assert len(frame["id"]) > 0
+        assert frame["id"][0] == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_persist_reload_search():
     import shutil
 
