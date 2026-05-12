@@ -251,6 +251,10 @@ impl CorpusStore {
             .unwrap_or_default()
     }
 
+    pub fn all_documents(&self, table: &str) -> Vec<(DocId, IngestDoc)> {
+        self.docs_with_ids_since(table, 0)
+    }
+
     pub fn expand_query_terms(&self, table: &str, query: &str) -> String {
         let Some(t) = self.table(table) else {
             return query.to_string();
