@@ -13,7 +13,9 @@ pub struct Database {
 
 impl Database {
     pub fn open(path: String) -> PyResult<Self> {
-        Ok(Self { path, dag: DagRunner::new(), binder: Binder::new() })
+        let dag = DagRunner::open(&path)
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))?;
+        Ok(Self { path, dag, binder: Binder::new() })
     }
 
     fn execute_sql(&mut self, query: &str) -> PyResult<usize> {
@@ -35,9 +37,10 @@ impl Database {
         &mut self,
         table: &str,
         docs: Vec<toradb_index::IngestDoc>,
-    ) -> usize {
-        self.dag.ensure_table(table);
-        self.dag.add_documents(table, docs)
+    ) -> PyResult<usize> {
+        self.dag
+            .add_documents(table, docs)
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))
     }
 }
 

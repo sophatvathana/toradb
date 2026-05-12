@@ -85,7 +85,7 @@ impl Table {
             parsed.push(parse_ingest_doc(&item)?);
         }
         let mut db = self.db.borrow_mut(py);
-        Ok(db.add_documents(&self.name, parsed))
+        db.add_documents(&self.name, parsed)
     }
 
     #[pyo3(signature = (query, top_k=None, strategy=None, explain=None, graph_expand=None, depth=None, query_vector=None))]
