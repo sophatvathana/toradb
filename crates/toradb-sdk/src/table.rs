@@ -149,6 +149,21 @@ pub struct SearchResults {
     explain_text: Option<String>,
 }
 
+impl SearchResults {
+    pub(crate) fn from_sql(
+        ids: Vec<u64>,
+        scores: Vec<f32>,
+        metrics: toradb_core::QueryMetrics,
+    ) -> Self {
+        Self {
+            ids,
+            scores,
+            metrics,
+            explain_text: None,
+        }
+    }
+}
+
 #[pymethods]
 impl SearchResults {
     fn to_pandas<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {

@@ -1,8 +1,15 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use toradb_core::{Batch, ExecCtx, QueryMetrics};
-use toradb_engine::DagRunner;
-use toradb_sql::{binder::Binder, parse};
+use toradb_engine::{sql_exec, DagRunner};
+use toradb_sql::{ast::Stmt, binder::Binder, parse};
+
+use crate::table::SearchResults;
+
+enum SqlOutcome {
+    Message(String),
+    Search(SearchResults),
+}
 
 #[pyclass]
 pub struct Database {
@@ -18,11 +25,26 @@ impl Database {
         Ok(Self { path, dag, binder: Binder::new() })
     }
 
-    fn execute_sql(&mut self, query: &str) -> PyResult<usize> {
+    fn execute_sql(&mut self, query: &str) -> PyResult<SqlOutcome> {
         let stmts = parse(query).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
-        let n = stmts.len();
-        self.binder.bind(&stmts).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
-        Ok(n)
+        if stmts.is_empty() {
+            return Ok(SqlOutcome::Message("ok:0 stmts".into()));
+        }
+        if stmts.len() == 1 {
+            if let Stmt::Select(sel) = &stmts[0] {
+                let out = sql_exec::run_select(&mut self.dag, sel)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                return Ok(SqlOutcome::Search(SearchResults::from_sql(
+                    out.ids,
+                    out.scores,
+                    out.metrics,
+                )));
+            }
+        }
+        self.binder
+            .bind(&stmts)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        Ok(SqlOutcome::Message(format!("ok:{} stmts", stmts.len())))
     }
 
     pub(crate) fn run_retrieval(&mut self, batch: &mut Batch, ctx: &ExecCtx) -> QueryMetrics {
@@ -51,9 +73,11 @@ impl Database {
         Self::open(path)
     }
 
-    fn sql(&mut self, query: &str) -> PyResult<String> {
-        let n = self.execute_sql(query)?;
-        Ok(format!("ok:{} stmts", n))
+    fn sql<'py>(&mut self, py: Python<'py>, query: &str) -> PyResult<Bound<'py, PyAny>> {
+        match self.execute_sql(query)? {
+            SqlOutcome::Message(s) => Ok(s.into_pyobject(py)?.into_any()),
+            SqlOutcome::Search(results) => Ok(results.into_pyobject(py)?.into_any()),
+        }
     }
 
     #[pyo3(signature = (name, mode=None, schema=None))]
