@@ -23,9 +23,16 @@ pub struct CreateIndexStmt {
     pub using: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectExpr {
+    Column(String),
+    CountStar,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectStmt {
     pub table: String,
+    pub select_items: Vec<SelectExpr>,
     /// BM25 / sparse method name (e.g. "bm25").
     pub sparse: Option<String>,
     /// Query text from BM25('...') or SPARSE SEARCH clause.

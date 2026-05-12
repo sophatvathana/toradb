@@ -19,6 +19,44 @@ fn expect_ident(tokens: &[Token], i: &mut usize, word: &str) -> Result<(), Strin
     Ok(())
 }
 
+fn parse_select_exprs(tokens: &[Token], i: &mut usize) -> Result<Vec<SelectExpr>, String> {
+    let mut items = Vec::new();
+    loop {
+        if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "FROM") {
+            break;
+        }
+        if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "COUNT") {
+            *i += 1;
+            if matches!(tokens.get(*i), Some(Token::LParen)) {
+                *i += 1;
+                if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "*") {
+                    *i += 1;
+                } else if ident_at(tokens, *i).is_some() {
+                    *i += 1;
+                }
+                if matches!(tokens.get(*i), Some(Token::RParen)) {
+                    *i += 1;
+                }
+            }
+            items.push(SelectExpr::CountStar);
+        } else if let Some(col) = ident_at(tokens, *i) {
+            items.push(SelectExpr::Column(col.to_lowercase()));
+            *i += 1;
+        } else {
+            return Err("expected select expression".into());
+        }
+        if matches!(tokens.get(*i), Some(Token::Comma)) {
+            *i += 1;
+            continue;
+        }
+        if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "FROM") {
+            break;
+        }
+        return Err("expected comma or FROM in select list".into());
+    }
+    Ok(items)
+}
+
 fn parse_sparse_search(tokens: &[Token], i: &mut usize) -> Result<(Option<String>, Option<String>), String> {
     // SPARSE SEARCH <col> BM25 ( 'query' )
     expect_ident(tokens, i, "SPARSE")?;
@@ -78,12 +116,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
         }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "SELECT") {
             i += 1;
-            while i < tokens.len() {
-                if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "FROM") {
-                    break;
-                }
-                i += 1;
-            }
+            let select_items = parse_select_exprs(&tokens, &mut i)?;
             if !matches!(tokens.get(i), Some(Token::Ident(k)) if k == "FROM") {
                 return Err("SELECT requires FROM".into());
             }
@@ -138,6 +171,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             }
             out.push(Stmt::Select(SelectStmt {
                 table,
+                select_items,
                 sparse,
                 sparse_query,
                 vector,
