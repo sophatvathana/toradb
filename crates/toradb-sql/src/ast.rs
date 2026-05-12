@@ -26,7 +26,10 @@ pub struct CreateIndexStmt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectStmt {
     pub table: String,
+    /// BM25 / sparse method name (e.g. "bm25").
     pub sparse: Option<String>,
+    /// Query text from BM25('...') or SPARSE SEARCH clause.
+    pub sparse_query: Option<String>,
     pub vector: bool,
     pub limit: u32,
     pub group_by: Option<String>,
