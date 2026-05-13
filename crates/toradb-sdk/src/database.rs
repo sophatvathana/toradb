@@ -42,7 +42,12 @@ impl Database {
                         s.metrics,
                     ))),
                     sql_exec::SqlSelectResult::Aggregate(a) => Ok(SqlOutcome::Aggregate(
-                        AnalyticsResults::new(a.group_by_column, a.group_keys, a.counts),
+                        AnalyticsResults::new(
+                            a.group_by_column,
+                            a.group_keys,
+                            a.value_column,
+                            a.values,
+                        ),
                     )),
                 };
             }

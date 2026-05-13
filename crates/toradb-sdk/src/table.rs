@@ -195,15 +195,22 @@ impl SearchResults {
 pub struct AnalyticsResults {
     group_by_column: String,
     group_keys: Vec<String>,
-    counts: Vec<u64>,
+    value_column: String,
+    values: Vec<f64>,
 }
 
 impl AnalyticsResults {
-    pub(crate) fn new(group_by_column: String, group_keys: Vec<String>, counts: Vec<u64>) -> Self {
+    pub(crate) fn new(
+        group_by_column: String,
+        group_keys: Vec<String>,
+        value_column: String,
+        values: Vec<f64>,
+    ) -> Self {
         Self {
             group_by_column,
             group_keys,
-            counts,
+            value_column,
+            values,
         }
     }
 }
@@ -213,7 +220,7 @@ impl AnalyticsResults {
     fn to_pandas<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item(&self.group_by_column, self.group_keys.clone())?;
-        dict.set_item("count", self.counts.clone())?;
+        dict.set_item(&self.value_column, self.values.clone())?;
         Ok(dict.into_any())
     }
 
