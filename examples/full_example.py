@@ -51,8 +51,14 @@ def main() -> None:
 
     n1 = articles.add(
         [
-            "Nikola Tesla pioneered alternating current systems and the induction motor",
-            "Thomas Edison promoted direct current for early electric lighting",
+            {
+                "text": "Nikola Tesla pioneered alternating current systems and the induction motor",
+                "tag": "history",
+            },
+            {
+                "text": "Thomas Edison promoted direct current for early electric lighting",
+                "tag": "history",
+            },
             "Nikola Tesla demonstrated wireless transmission experiments in Colorado Springs",
         ]
     )
@@ -152,16 +158,37 @@ def main() -> None:
         papers.search("Tesla coil resonant", top_k=2, strategy="dense"),
     )
 
-    section("10. SQL DDL")
+    section("10. SQL retrieval")
+    show_results(
+        "SQL SPARSE SEARCH",
+        db.sql(
+            "SELECT id FROM articles SPARSE SEARCH body BM25('Nikola Tesla alternating current') LIMIT 3"
+        ),
+    )
+
+    section("11. SQL analytics (GROUP BY)")
+    analytics = db.sql(
+        "SELECT tag, COUNT(*) FROM articles GROUP BY tag"
+    ).to_pandas()
+    print("GROUP BY tag:", dict(zip(analytics["tag"], analytics["count"])))
+
+    section("12. SQL retrieval + analytics")
+    hybrid = db.sql(
+        "SELECT tag, COUNT(*) FROM articles "
+        "SPARSE SEARCH body BM25('Nikola Tesla') GROUP BY tag"
+    ).to_pandas()
+    print("Search then GROUP BY tag:", dict(zip(hybrid["tag"], hybrid["count"])))
+
+    section("13. SQL DDL")
     print(db.sql("CREATE TABLE logs USING text"))
     print(db.sql("SHOW TABLES"))
 
-    section("11. Export results (pandas-style dict)")
+    section("14. Export results (pandas-style dict)")
     results = articles.search("Nikola Tesla", top_k=3)
     print(results.to_pandas())
     print(results.to_polars())
 
-    section("12. LangChain adapter")
+    section("15. LangChain adapter")
     store = ToraDBVectorStore.from_table(articles)
     store.add_texts(
         ["Nikola Tesla envisioned worldwide wireless power distribution"]
@@ -169,7 +196,7 @@ def main() -> None:
     hits = store.similarity_search("wireless power Tesla", k=2)
     print("LangChain hits:", hits)
 
-    section("13. LlamaIndex-style adapter")
+    section("16. LlamaIndex-style adapter")
     li_store = ToraDBLlamaIndexStore.from_table(articles)
 
     class SimpleNode:
