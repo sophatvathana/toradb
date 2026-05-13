@@ -35,6 +35,16 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
                 continue;
             }
         }
+        if let Some(ref pred) = sel.where_eq {
+            let matches = doc
+                .metadata
+                .get(&pred.column)
+                .map(|v| v == &pred.value)
+                .unwrap_or(false);
+            if !matches {
+                continue;
+            }
+        }
         let key = doc
             .metadata
             .get(&group_col)

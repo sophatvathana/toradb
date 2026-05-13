@@ -92,3 +92,42 @@ fn search_then_group_by_filters_docs() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn where_eq_filters_before_group_by() {
+    let dir = std::env::temp_dir().join("toradb_olap_where");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let mut dag = DagRunner::open(&dir).expect("open");
+    dag.add_documents(
+        "docs",
+        vec![
+            IngestDoc {
+                text: "Nikola Tesla AC".into(),
+                metadata: [("tag".into(), "patent".into())].into(),
+                vector: None,
+            },
+            IngestDoc {
+                text: "Marie Curie radiation".into(),
+                metadata: [("tag".into(), "science".into())].into(),
+                vector: None,
+            },
+        ],
+    )
+    .expect("add");
+
+    let stmts =
+        parse("SELECT tag, COUNT(*) FROM docs WHERE tag = 'science' GROUP BY tag").unwrap();
+    let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+
+    let sql_exec::SqlSelectResult::Aggregate(out) = sql_exec::run_select(&mut dag, sel).unwrap()
+    else {
+        panic!("aggregate");
+    };
+    assert_eq!(out.group_keys, vec!["science".to_string()]);
+    assert_eq!(out.counts, vec![1]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
