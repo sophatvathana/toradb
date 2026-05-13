@@ -43,6 +43,33 @@ def test_search_with_strategy_and_explain():
     assert "graph_expand=" in text
 
 
+def test_add_arrow_ingest():
+    pa = pytest.importorskip("pyarrow")
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_arrow_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("arrow", mode="text")
+        table = pa.table(
+            {
+                "text": [
+                    "Nikola Tesla alternating current motor",
+                    "Marie Curie radioactivity research",
+                ],
+                "tag": ["patent", "science"],
+            }
+        )
+        from toradb.ingest import add_arrow
+
+        n = add_arrow(t, table)
+        assert n == 2
+        frame = t.search("Nikola Tesla motor", top_k=3).to_pandas()
+        assert len(frame["id"]) > 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_add_file_ingest():
     db = toradb.local("./test_db_ingest")
     t = db.create_table("files", mode="text")
