@@ -9,19 +9,25 @@ toradb = pytest.importorskip("toradb")
 
 
 def test_local_text_search():
-    db = toradb.local("./test_db_smoke")
-    docs = db.create_table("docs", mode="text")
-    docs.add(
-        [
-            "Nikola Tesla invented the alternating current induction motor",
-            "Marie Curie studied radioactivity and Nobel prizes",
-        ]
-    )
-    results = docs.search("Nikola Tesla alternating current motor", top_k=5)
-    assert results is not None
-    frame = results.to_pandas()
-    assert len(frame["id"]) > 0
-    assert frame["id"][0] == 0
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_smoke_"))
+    try:
+        db = toradb.local(str(path))
+        docs = db.create_table("docs", mode="text")
+        docs.add(
+            [
+                "Nikola Tesla invented the alternating current induction motor",
+                "Marie Curie studied radioactivity and Nobel prizes",
+            ]
+        )
+        results = docs.search("Nikola Tesla alternating current motor", top_k=5)
+        assert results is not None
+        frame = results.to_pandas()
+        assert len(frame["id"]) > 0
+        assert frame["id"][0] == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def test_hybrid_schema_builder():
@@ -35,12 +41,22 @@ def test_hybrid_schema_builder():
 
 
 def test_search_with_strategy_and_explain():
-    db = toradb.local("./test_db_strategy")
-    t = db.create_table("docs", mode="text")
-    r = t.search("machine learning retrieval", top_k=10, strategy="hybrid", explain=True)
-    text = r.explain()
-    assert "tier1=" in text
-    assert "graph_expand=" in text
+    import re
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_explain_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(["machine learning retrieval vector database"])
+        r = t.search("machine learning retrieval", top_k=10, strategy="hybrid", explain=True)
+        text = r.explain()
+        assert "tier1=" in text
+        assert "graph_expand=" in text
+        tier1 = int(re.search(r"tier1=(\d+)", text).group(1))
+        assert tier1 > 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def test_add_arrow_ingest():
@@ -83,6 +99,52 @@ def test_add_file_ingest():
         assert n == 3
     finally:
         Path(path).unlink(missing_ok=True)
+
+
+def test_sql_search_group_by_analytics():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_sg_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                {"text": "Nikola Tesla AC motor", "tag": "patent"},
+                {"text": "Marie Curie radiation", "tag": "science"},
+            ]
+        )
+        frame = db.sql(
+            "SELECT tag, COUNT(*) FROM docs "
+            "SPARSE SEARCH body BM25('Nikola Tesla') GROUP BY tag"
+        ).to_pandas()
+        counts = dict(zip(frame["tag"], frame["count"]))
+        assert counts.get("patent") == 1
+        assert "science" not in counts or counts.get("science", 0) == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_sql_where_group_by_analytics():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_where_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                {"text": "Nikola Tesla AC motor", "tag": "patent"},
+                {"text": "Marie Curie radiation", "tag": "science"},
+            ]
+        )
+        frame = db.sql(
+            "SELECT tag, COUNT(*) FROM docs WHERE tag = 'science' GROUP BY tag"
+        ).to_pandas()
+        counts = dict(zip(frame["tag"], frame["count"]))
+        assert counts == {"science": 1}
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def test_sql_group_by_analytics():
