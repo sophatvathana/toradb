@@ -1,10 +1,9 @@
 use toradb_core::{Batch, CandidateSet, ExecCtx};
 
 use crate::corpus::CorpusStore;
-use crate::dense::{diskann, hnsw, ivf, matryoshka, muvera, turboquant};
+use crate::dense;
 use crate::filter::{bitmap, metadata};
 use crate::graph::{acorn, graph_expand};
-use crate::sparse::{seismic, splade, wand};
 
 #[derive(Debug, Default)]
 pub struct RetrievalRuntime {
@@ -43,17 +42,9 @@ impl RetrievalRuntime {
                 .map(|t| t.bm25_search(q, cap))
                 .unwrap_or_default(),
         );
-        push_cap(&mut merged, splade::search(&self.store, table, q, cap));
-        push_cap(&mut merged, seismic::search(&self.store, table, q, cap));
-        push_cap(&mut merged, wand::search(&self.store, table, q, cap));
 
         if !query_vec.is_empty() {
-            push_cap(&mut merged, hnsw::search(&self.store, table, query_vec, cap));
-            push_cap(&mut merged, ivf::search(&self.store, table, query_vec, cap));
-            push_cap(&mut merged, diskann::search(&self.store, table, query_vec, cap));
-            push_cap(&mut merged, turboquant::search(&self.store, table, query_vec, cap));
-            push_cap(&mut merged, muvera::search(&self.store, table, query_vec, cap));
-            push_cap(&mut merged, matryoshka::search(&self.store, table, query_vec, cap));
+            push_cap(&mut merged, dense::search::search(&self.store, table, query_vec, cap));
         }
 
         if metadata::parse_field_filter(q).is_some() {
