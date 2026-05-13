@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use toradb_sql::ast::SelectStmt;
+use toradb_sql::ast::{AggFunc, SelectExpr, SelectStmt};
 
 use crate::dag::DagRunner;
 use crate::sql_exec::run_sparse_search;
@@ -9,7 +9,101 @@ use crate::sql_exec::run_sparse_search;
 pub struct SqlAggregateResult {
     pub group_by_column: String,
     pub group_keys: Vec<String>,
-    pub counts: Vec<u64>,
+    pub value_column: String,
+    pub values: Vec<f64>,
+}
+
+fn parse_numeric_metadata(value: &str) -> Option<f64> {
+    value.trim().parse().ok()
+}
+
+fn value_column_name(func: &AggFunc, column: Option<&str>) -> String {
+    match func {
+        AggFunc::CountStar => "count".into(),
+        AggFunc::Sum => format!("sum_{}", column.unwrap_or("value")),
+        AggFunc::Avg => format!("avg_{}", column.unwrap_or("value")),
+        AggFunc::Min => format!("min_{}", column.unwrap_or("value")),
+        AggFunc::Max => format!("max_{}", column.unwrap_or("value")),
+    }
+}
+
+fn primary_aggregate(sel: &SelectStmt) -> Result<(AggFunc, Option<String>), String> {
+    let mut aggs = Vec::new();
+    for item in &sel.select_items {
+        if let SelectExpr::Aggregate { func, column } = item {
+            aggs.push((func.clone(), column.clone()));
+        }
+    }
+    if aggs.len() != 1 {
+        return Err("analytics SELECT requires exactly one aggregate expression".into());
+    }
+    Ok(aggs.remove(0))
+}
+
+enum GroupAccum {
+    Count(u64),
+    Sum(f64),
+    Avg { sum: f64, n: u64 },
+    Min(Option<f64>),
+    Max(Option<f64>),
+}
+
+impl GroupAccum {
+    fn new(func: &AggFunc) -> Self {
+        match func {
+            AggFunc::CountStar => GroupAccum::Count(0),
+            AggFunc::Sum => GroupAccum::Sum(0.0),
+            AggFunc::Avg => GroupAccum::Avg { sum: 0.0, n: 0 },
+            AggFunc::Min => GroupAccum::Min(None),
+            AggFunc::Max => GroupAccum::Max(None),
+        }
+    }
+
+    fn update(&mut self, func: &AggFunc, col: Option<&str>, doc_value: Option<f64>) {
+        match (self, func) {
+            (GroupAccum::Count(n), AggFunc::CountStar) => *n += 1,
+            (GroupAccum::Sum(s), AggFunc::Sum) => {
+                if let Some(v) = doc_value {
+                    *s += v;
+                }
+            }
+            (GroupAccum::Avg { sum, n }, AggFunc::Avg) => {
+                if let Some(v) = doc_value {
+                    *sum += v;
+                    *n += 1;
+                }
+            }
+            (GroupAccum::Min(cur), AggFunc::Min) => {
+                if let Some(v) = doc_value {
+                    *cur = Some(cur.map(|m| m.min(v)).unwrap_or(v));
+                }
+            }
+            (GroupAccum::Max(cur), AggFunc::Max) => {
+                if let Some(v) = doc_value {
+                    *cur = Some(cur.map(|m| m.max(v)).unwrap_or(v));
+                }
+            }
+            _ => {}
+        }
+        let _ = col;
+    }
+
+    fn finish(self, func: &AggFunc) -> f64 {
+        match (self, func) {
+            (GroupAccum::Count(n), AggFunc::CountStar) => n as f64,
+            (GroupAccum::Sum(s), AggFunc::Sum) => s,
+            (GroupAccum::Avg { sum, n }, AggFunc::Avg) => {
+                if n == 0 {
+                    0.0
+                } else {
+                    sum / n as f64
+                }
+            }
+            (GroupAccum::Min(v), AggFunc::Min) => v.unwrap_or(0.0),
+            (GroupAccum::Max(v), AggFunc::Max) => v.unwrap_or(0.0),
+            _ => 0.0,
+        }
+    }
 }
 
 pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggregateResult, String> {
@@ -17,6 +111,9 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
         .group_by
         .clone()
         .ok_or("analytics SELECT requires GROUP BY column")?;
+
+    let (agg_func, agg_col) = primary_aggregate(sel)?;
+    let value_col = value_column_name(&agg_func, agg_col.as_deref());
 
     let filter_ids: Option<HashSet<u64>> = if sel.sparse_query.is_some() {
         let hits = run_sparse_search(dag, sel)?;
@@ -27,7 +124,7 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
 
     dag.ensure_table(&sel.table);
     let docs = dag.table_documents(&sel.table)?;
-    let mut counts: HashMap<String, u64> = HashMap::new();
+    let mut groups: HashMap<String, GroupAccum> = HashMap::new();
 
     for (id, doc) in docs {
         if let Some(ref allowed) = filter_ids {
@@ -50,10 +147,26 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
             .get(&group_col)
             .cloned()
             .unwrap_or_else(|| "_null".into());
-        *counts.entry(key).or_insert(0) += 1;
+
+        let numeric = agg_col
+            .as_deref()
+            .and_then(|c| doc.metadata.get(c))
+            .and_then(|v| parse_numeric_metadata(v));
+
+        let entry = groups
+            .entry(key)
+            .or_insert_with(|| GroupAccum::new(&agg_func));
+        if matches!(agg_func, AggFunc::CountStar) {
+            entry.update(&agg_func, None, None);
+        } else {
+            entry.update(&agg_func, agg_col.as_deref(), numeric);
+        }
     }
 
-    let mut pairs: Vec<(String, u64)> = counts.into_iter().collect();
+    let mut pairs: Vec<(String, f64)> = groups
+        .into_iter()
+        .map(|(k, acc)| (k, acc.finish(&agg_func)))
+        .collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
 
     let limit = sel.limit as usize;
@@ -61,11 +174,12 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
         pairs.truncate(limit);
     }
 
-    let (group_keys, counts): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+    let (group_keys, values): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
 
     Ok(SqlAggregateResult {
         group_by_column: group_col,
         group_keys,
-        counts,
+        value_column: value_col,
+        values,
     })
 }
