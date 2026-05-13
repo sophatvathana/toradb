@@ -19,26 +19,52 @@ fn expect_ident(tokens: &[Token], i: &mut usize, word: &str) -> Result<(), Strin
     Ok(())
 }
 
+fn parse_aggregate(tokens: &[Token], i: &mut usize) -> Result<SelectExpr, String> {
+    let func = match ident_at(tokens, *i).as_deref() {
+        Some("COUNT") => AggFunc::CountStar,
+        Some("SUM") => AggFunc::Sum,
+        Some("AVG") => AggFunc::Avg,
+        Some("MIN") => AggFunc::Min,
+        Some("MAX") => AggFunc::Max,
+        Some(other) => return Err(format!("unknown aggregate {other}")),
+        None => return Err("expected aggregate function".into()),
+    };
+    *i += 1;
+    let mut column = None;
+    if matches!(tokens.get(*i), Some(Token::LParen)) {
+        *i += 1;
+        if matches!(tokens.get(*i), Some(Token::RParen)) {
+            if !matches!(func, AggFunc::CountStar) {
+                return Err("aggregate requires column argument".into());
+            }
+        } else if let Some(col) = ident_at(tokens, *i) {
+            column = Some(col.to_lowercase());
+            *i += 1;
+        } else {
+            return Err("aggregate requires column or )".into());
+        }
+        if !matches!(tokens.get(*i), Some(Token::RParen)) {
+            return Err("expected ) after aggregate".into());
+        }
+        *i += 1;
+    }
+    if !matches!(func, AggFunc::CountStar) && column.is_none() {
+        return Err("aggregate requires a column argument".into());
+    }
+    Ok(SelectExpr::Aggregate { func, column })
+}
+
 fn parse_select_exprs(tokens: &[Token], i: &mut usize) -> Result<Vec<SelectExpr>, String> {
     let mut items = Vec::new();
     loop {
         if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "FROM") {
             break;
         }
-        if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "COUNT") {
-            *i += 1;
-            if matches!(tokens.get(*i), Some(Token::LParen)) {
-                *i += 1;
-                if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "*") {
-                    *i += 1;
-                } else if ident_at(tokens, *i).is_some() {
-                    *i += 1;
-                }
-                if matches!(tokens.get(*i), Some(Token::RParen)) {
-                    *i += 1;
-                }
-            }
-            items.push(SelectExpr::CountStar);
+        if matches!(
+            tokens.get(*i),
+            Some(Token::Ident(k)) if matches!(k.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+        ) {
+            items.push(parse_aggregate(tokens, i)?);
         } else if let Some(col) = ident_at(tokens, *i) {
             items.push(SelectExpr::Column(col.to_lowercase()));
             *i += 1;

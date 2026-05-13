@@ -24,9 +24,21 @@ pub struct CreateIndexStmt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AggFunc {
+    CountStar,
+    Sum,
+    Avg,
+    Min,
+    Max,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelectExpr {
     Column(String),
-    CountStar,
+    Aggregate {
+        func: AggFunc,
+        column: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
