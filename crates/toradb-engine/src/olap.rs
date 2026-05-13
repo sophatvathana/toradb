@@ -26,7 +26,7 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
     };
 
     dag.ensure_table(&sel.table);
-    let docs = dag.retrieval.store.all_documents(&sel.table);
+    let docs = dag.table_documents(&sel.table)?;
     let mut counts: HashMap<String, u64> = HashMap::new();
 
     for (id, doc) in docs {

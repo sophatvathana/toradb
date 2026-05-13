@@ -11,3 +11,4 @@ toradb-storage = { workspace = true }
 toradb-index = { workspace = true }
 toradb-sql = { workspace = true }
 thiserror = { workspace = true }
+serde_json = { workspace = true }

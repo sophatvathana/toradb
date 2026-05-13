@@ -77,6 +77,17 @@ impl DagRunner {
         self.db_path.as_ref().map(|p| p.as_path())
     }
 
+    pub fn table_documents(
+        &self,
+        table: &str,
+    ) -> Result<Vec<(u64, toradb_index::IngestDoc)>, String> {
+        crate::persist::table_documents(
+            &self.retrieval.store,
+            self.db_path(),
+            table,
+        )
+    }
+
     pub fn run(&mut self, batch: &mut Batch, ctx: &ExecCtx) -> QueryMetrics {
         let mut metrics = QueryMetrics::default();
 

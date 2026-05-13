@@ -930,6 +930,7 @@ dependencies = [
 name = "toradb-engine"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "thiserror",
  "toradb-core",
  "toradb-index",
@@ -942,6 +943,7 @@ dependencies = [
 name = "toradb-index"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "toradb-core",
  "toradb-simd",
 ]
