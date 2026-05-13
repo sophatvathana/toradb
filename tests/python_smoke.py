@@ -147,6 +147,28 @@ def test_sql_where_group_by_analytics():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_sql_sum_group_by_analytics():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_sum_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                {"text": "a", "tag": "patent", "score": "10"},
+                {"text": "b", "tag": "patent", "score": "20"},
+                {"text": "c", "tag": "science", "score": "5"},
+            ]
+        )
+        frame = db.sql("SELECT tag, SUM(score) FROM docs GROUP BY tag").to_pandas()
+        sums = dict(zip(frame["tag"], frame["sum_score"]))
+        assert sums["patent"] == 30.0
+        assert sums["science"] == 5.0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_sql_group_by_analytics():
     import shutil
 
