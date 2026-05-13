@@ -17,4 +17,4 @@ maturin develop
 python examples/full_example.py
 ```
 
-Optional: install pandas for dataframe ingest (`pip install pandas`).
+Optional: `pip install pandas pyarrow` for dataframe / Arrow ingest.
