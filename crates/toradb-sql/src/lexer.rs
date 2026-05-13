@@ -7,6 +7,7 @@ pub enum Token {
     RParen,
     Comma,
     Semi,
+    Eq,
     Eof,
 }
 
@@ -63,6 +64,7 @@ pub fn tokenize(input: &str) -> Vec<Token> {
             b')' => tokens.push(Token::RParen),
             b',' => tokens.push(Token::Comma),
             b';' => tokens.push(Token::Semi),
+            b'=' => tokens.push(Token::Eq),
             _ => {}
         }
         i += 1;

@@ -57,6 +57,31 @@ fn parse_select_exprs(tokens: &[Token], i: &mut usize) -> Result<Vec<SelectExpr>
     Ok(items)
 }
 
+fn parse_where_eq(tokens: &[Token], i: &mut usize) -> Result<WhereEq, String> {
+    expect_ident(tokens, i, "WHERE")?;
+    let column = ident_at(tokens, *i).ok_or("WHERE requires column name")?;
+    *i += 1;
+    if !matches!(tokens.get(*i), Some(Token::Eq)) {
+        return Err("WHERE requires =".into());
+    }
+    *i += 1;
+    let value = match tokens.get(*i) {
+        Some(Token::String(s)) => {
+            *i += 1;
+            s.clone()
+        }
+        Some(Token::Ident(s)) => {
+            *i += 1;
+            s.to_lowercase()
+        }
+        _ => return Err("WHERE requires string or identifier value".into()),
+    };
+    Ok(WhereEq {
+        column: column.to_lowercase(),
+        value,
+    })
+}
+
 fn parse_sparse_search(tokens: &[Token], i: &mut usize) -> Result<(Option<String>, Option<String>), String> {
     // SPARSE SEARCH <col> BM25 ( 'query' )
     expect_ident(tokens, i, "SPARSE")?;
@@ -133,6 +158,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             let mut vector = false;
             let mut limit = 20;
             let mut group_by = None;
+            let mut where_eq = None;
             while i < tokens.len() && !matches!(tokens.get(i), Some(Token::Eof)) {
                 match tokens.get(i) {
                     Some(Token::Ident(k)) if k == "SPARSE" => {
@@ -165,6 +191,9 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                             i += 1;
                         }
                     }
+                    Some(Token::Ident(k)) if k == "WHERE" => {
+                        where_eq = Some(parse_where_eq(&tokens, &mut i)?);
+                    }
                     Some(Token::Semi) | Some(Token::Eof) => break,
                     _ => i += 1,
                 }
@@ -177,6 +206,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 vector,
                 limit,
                 group_by,
+                where_eq,
             }));
             continue;
         }

@@ -30,6 +30,12 @@ pub enum SelectExpr {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct WhereEq {
+    pub column: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SelectStmt {
     pub table: String,
     pub select_items: Vec<SelectExpr>,
@@ -40,4 +46,5 @@ pub struct SelectStmt {
     pub vector: bool,
     pub limit: u32,
     pub group_by: Option<String>,
+    pub where_eq: Option<WhereEq>,
 }
