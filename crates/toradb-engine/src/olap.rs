@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use toradb_sql::ast::{AggFunc, SelectExpr, SelectStmt};
+use toradb_sql::ast::{AggFunc, CompareOp, SelectExpr, SelectStmt, WherePred};
 
 use crate::dag::DagRunner;
 use crate::sql_exec::run_sparse_search;
@@ -15,6 +15,38 @@ pub struct SqlAggregateResult {
 
 fn parse_numeric_metadata(value: &str) -> Option<f64> {
     value.trim().parse().ok()
+}
+
+fn metadata_matches(pred: &WherePred, metadata: &std::collections::HashMap<String, String>) -> bool {
+    match pred {
+        WherePred::Compare { column, op, value } => {
+            let Some(v) = metadata.get(column) else {
+                return false;
+            };
+            match op {
+                CompareOp::Eq => v == value,
+                CompareOp::Ne => v != value,
+                CompareOp::Lt | CompareOp::Lte | CompareOp::Gt | CompareOp::Gte => {
+                    let (Some(a), Some(b)) =
+                        (parse_numeric_metadata(v), parse_numeric_metadata(value))
+                    else {
+                        return false;
+                    };
+                    match op {
+                        CompareOp::Lt => a < b,
+                        CompareOp::Lte => a <= b,
+                        CompareOp::Gt => a > b,
+                        CompareOp::Gte => a >= b,
+                        CompareOp::Eq | CompareOp::Ne => false,
+                    }
+                }
+            }
+        }
+        WherePred::In { column, values } => metadata
+            .get(column)
+            .map(|v| values.iter().any(|x| x == v))
+            .unwrap_or(false),
+    }
 }
 
 fn value_column_name(func: &AggFunc, column: Option<&str>) -> String {
@@ -132,13 +164,8 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
                 continue;
             }
         }
-        if let Some(ref pred) = sel.where_eq {
-            let matches = doc
-                .metadata
-                .get(&pred.column)
-                .map(|v| v == &pred.value)
-                .unwrap_or(false);
-            if !matches {
+        if let Some(ref pred) = sel.where_clause {
+            if !metadata_matches(pred, &doc.metadata) {
                 continue;
             }
         }

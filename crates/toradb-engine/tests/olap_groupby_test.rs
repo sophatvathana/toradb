@@ -181,3 +181,88 @@ fn where_eq_filters_before_group_by() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn where_in_filters_groups() {
+    let dir = std::env::temp_dir().join("toradb_olap_in");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let mut dag = DagRunner::open(&dir).expect("open");
+    dag.add_documents(
+        "docs",
+        vec![
+            IngestDoc {
+                text: "a".into(),
+                metadata: [("tag".into(), "patent".into())].into(),
+                vector: None,
+            },
+            IngestDoc {
+                text: "b".into(),
+                metadata: [("tag".into(), "science".into())].into(),
+                vector: None,
+            },
+            IngestDoc {
+                text: "c".into(),
+                metadata: [("tag".into(), "other".into())].into(),
+                vector: None,
+            },
+        ],
+    )
+    .expect("add");
+
+    let stmts = parse(
+        "SELECT tag, COUNT(*) FROM docs WHERE tag IN ('patent', 'science') GROUP BY tag",
+    )
+    .unwrap();
+    let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+
+    let sql_exec::SqlSelectResult::Aggregate(out) = sql_exec::run_select(&mut dag, sel).unwrap()
+    else {
+        panic!("aggregate");
+    };
+    assert_eq!(out.group_keys.len(), 2);
+    assert!(!out.group_keys.contains(&"other".to_string()));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn where_gt_numeric_metadata() {
+    let dir = std::env::temp_dir().join("toradb_olap_gt");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let mut dag = DagRunner::open(&dir).expect("open");
+    dag.add_documents(
+        "docs",
+        vec![
+            IngestDoc {
+                text: "low".into(),
+                metadata: [("bucket".into(), "low".into()), ("score".into(), "5".into())].into(),
+                vector: None,
+            },
+            IngestDoc {
+                text: "high".into(),
+                metadata: [("bucket".into(), "high".into()), ("score".into(), "15".into())].into(),
+                vector: None,
+            },
+        ],
+    )
+    .expect("add");
+
+    let stmts =
+        parse("SELECT bucket, COUNT(*) FROM docs WHERE score > 10 GROUP BY bucket").unwrap();
+    let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+
+    let sql_exec::SqlSelectResult::Aggregate(out) = sql_exec::run_select(&mut dag, sel).unwrap()
+    else {
+        panic!("aggregate");
+    };
+    assert_eq!(out.group_keys, vec!["high".to_string()]);
+    assert_eq!(out.values, vec![1.0]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
