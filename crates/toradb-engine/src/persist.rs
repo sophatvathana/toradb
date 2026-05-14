@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use memmap2::MmapOptions;
+use toradb_index::sparse::bm25_codec;
 use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc};
 use toradb_storage::columnar::{
     read_segment, write_segment, ColumnarDoc, TableManifestFile,
@@ -22,30 +24,41 @@ fn indexes_dir(base: &Path, table: &str) -> PathBuf {
     base.join(table).join("indexes")
 }
 
-fn bm25_sidecar_path(base: &Path, table: &str) -> PathBuf {
+fn bm25_table_bin_path(base: &Path, table: &str) -> PathBuf {
+    indexes_dir(base, table).join("bm25.bin")
+}
+
+fn bm25_table_json_path(base: &Path, table: &str) -> PathBuf {
     indexes_dir(base, table).join("bm25.json")
 }
 
-fn segment_bm25_sidecar_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
+fn segment_bm25_bin_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
+    let stem = segment_parquet
+        .strip_suffix(".parquet")
+        .unwrap_or(segment_parquet);
+    indexes_dir(base, table).join(format!("{stem}.bm25.bin"))
+}
+
+fn segment_bm25_json_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
     let stem = segment_parquet
         .strip_suffix(".parquet")
         .unwrap_or(segment_parquet);
     indexes_dir(base, table).join(format!("{stem}.bm25.json"))
 }
 
-fn write_json_sidecar(path: &Path, data: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, data).map_err(|e| e.to_string())?;
-    std::fs::rename(tmp, path).map_err(|e| e.to_string())?;
-    Ok(())
+fn load_snapshot_mmap(path: &Path) -> Result<Bm25Snapshot, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mmap = unsafe { MmapOptions::new().map(&file).map_err(|e| e.to_string())? };
+    bm25_codec::decode_snapshot(&mmap)
+}
+
+fn load_snapshot_json(path: &Path) -> Result<Bm25Snapshot, String> {
+    let data = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&data).map_err(|e| e.to_string())
 }
 
 pub fn save_bm25_sidecar(base: &Path, table: &str, snap: &Bm25Snapshot) -> Result<(), String> {
-    let data = serde_json::to_string(snap).map_err(|e| e.to_string())?;
-    write_json_sidecar(&bm25_sidecar_path(base, table), &data)
+    bm25_codec::write_snapshot_file(&bm25_table_bin_path(base, table), snap)
 }
 
 pub fn save_segment_bm25_sidecar(
@@ -54,25 +67,38 @@ pub fn save_segment_bm25_sidecar(
     segment_parquet: &str,
     snap: &Bm25Snapshot,
 ) -> Result<(), String> {
-    let data = serde_json::to_string(snap).map_err(|e| e.to_string())?;
-    write_json_sidecar(
-        &segment_bm25_sidecar_path(base, table, segment_parquet),
-        &data,
+    bm25_codec::write_snapshot_file(
+        &segment_bm25_bin_path(base, table, segment_parquet),
+        snap,
     )
 }
 
 pub fn load_bm25_sidecar(base: &Path, table: &str) -> Result<Option<Bm25Snapshot>, String> {
-    let path = bm25_sidecar_path(base, table);
-    if !path.exists() {
-        return Ok(None);
+    let bin = bm25_table_bin_path(base, table);
+    if bin.exists() {
+        return load_snapshot_mmap(&bin).map(Some);
     }
-    let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&data).map_err(|e| e.to_string()).map(Some)
+    let json = bm25_table_json_path(base, table);
+    if json.exists() {
+        return load_snapshot_json(&json).map(Some);
+    }
+    Ok(None)
 }
 
-fn load_segment_bm25_sidecar(path: &Path) -> Result<Bm25Snapshot, String> {
-    let data = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&data).map_err(|e| e.to_string())
+fn load_segment_bm25_sidecar(
+    base: &Path,
+    table: &str,
+    segment_parquet: &str,
+) -> Result<Option<Bm25Snapshot>, String> {
+    let bin = segment_bm25_bin_path(base, table, segment_parquet);
+    if bin.exists() {
+        return load_snapshot_mmap(&bin).map(Some);
+    }
+    let json = segment_bm25_json_path(base, table, segment_parquet);
+    if json.exists() {
+        return load_snapshot_json(&json).map(Some);
+    }
+    Ok(None)
 }
 
 /// Merge all per-segment BM25 sidecars under `indexes/`.
@@ -80,25 +106,18 @@ pub fn load_merged_segment_bm25_sidecars(
     base: &Path,
     table: &str,
 ) -> Result<Option<Bm25Snapshot>, String> {
-    let dir = indexes_dir(base, table);
-    if !dir.exists() {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
         return Ok(None);
     }
+    let manifest = TableManifestFile::load(&manifest_path)?;
     let mut merged: Option<Bm25Snapshot> = None;
-    let mut names: Vec<String> = Vec::new();
-    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.ends_with(".bm25.json") && name != "bm25.json" {
-            names.push(name);
-        }
-    }
-    names.sort();
-    for name in names {
-        let snap = load_segment_bm25_sidecar(&dir.join(&name))?;
-        match merged {
-            None => merged = Some(snap),
-            Some(ref mut acc) => acc.merge(snap),
+    for seg in &manifest.segments {
+        if let Some(snap) = load_segment_bm25_sidecar(base, table, seg)? {
+            match merged {
+                None => merged = Some(snap),
+                Some(ref mut acc) => acc.merge(snap),
+            }
         }
     }
     Ok(merged)
@@ -175,16 +194,15 @@ fn restore_bm25_index(
 ) -> Result<(), String> {
     if let Some(snap) = load_merged_segment_bm25_sidecars(base, table)? {
         store.restore_bm25(table, snap);
-        return Ok(());
-    }
-    if let Some(snap) = load_bm25_sidecar(base, table)? {
+    } else if let Some(snap) = load_bm25_sidecar(base, table)? {
         store.restore_bm25(table, snap);
-        return Ok(());
+    } else {
+        store.rebuild_bm25(table);
+        if let Some(snap) = store.bm25_snapshot(table) {
+            save_bm25_sidecar(base, table, &snap)?;
+        }
     }
-    store.rebuild_bm25(table);
-    if let Some(snap) = store.bm25_snapshot(table) {
-        save_bm25_sidecar(base, table, &snap)?;
-    }
+    store.rebuild_hnsw(table);
     Ok(())
 }
 
