@@ -1,3 +1,4 @@
+mod arrow_ingest;
 mod database;
 mod table;
 

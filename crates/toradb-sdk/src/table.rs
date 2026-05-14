@@ -4,6 +4,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use toradb_core::{Batch, ExecCtx};
 use toradb_engine::tune_ctx;
+use pyo3_arrow::PyTable;
 use toradb_index::IngestDoc;
 
 use crate::database::Database;
@@ -84,6 +85,14 @@ impl Table {
         for item in docs.iter() {
             parsed.push(parse_ingest_doc(&item)?);
         }
+        let mut db = self.db.borrow_mut(py);
+        db.add_documents(&self.name, parsed)
+    }
+
+    /// Ingest a PyArrow Table via the Arrow PyCapsule interface (zero-copy column read in Rust).
+    fn add_arrow(&self, py: Python<'_>, table: PyTable) -> PyResult<usize> {
+        let parsed = crate::arrow_ingest::ingest_pytable(table)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
         let mut db = self.db.borrow_mut(py);
         db.add_documents(&self.name, parsed)
     }
