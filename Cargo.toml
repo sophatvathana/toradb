@@ -34,5 +34,5 @@ toradb-sql = { path = "crates/toradb-sql" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-arrow = { version = "54", default-features = false, features = ["ipc"] }
-parquet = { version = "54", default-features = false, features = ["arrow"] }
+arrow = { version = "58.3.0", default-features = false, features = ["ipc"] }
+parquet = { version = "58.3.0", default-features = false, features = ["arrow"] }
