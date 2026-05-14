@@ -26,16 +26,39 @@ fn bm25_sidecar_path(base: &Path, table: &str) -> PathBuf {
     indexes_dir(base, table).join("bm25.json")
 }
 
-pub fn save_bm25_sidecar(base: &Path, table: &str, snap: &Bm25Snapshot) -> Result<(), String> {
-    let path = bm25_sidecar_path(base, table);
+fn segment_bm25_sidecar_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
+    let stem = segment_parquet
+        .strip_suffix(".parquet")
+        .unwrap_or(segment_parquet);
+    indexes_dir(base, table).join(format!("{stem}.bm25.json"))
+}
+
+fn write_json_sidecar(path: &Path, data: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let data = serde_json::to_string(snap).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, data).map_err(|e| e.to_string())?;
     std::fs::rename(tmp, path).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub fn save_bm25_sidecar(base: &Path, table: &str, snap: &Bm25Snapshot) -> Result<(), String> {
+    let data = serde_json::to_string(snap).map_err(|e| e.to_string())?;
+    write_json_sidecar(&bm25_sidecar_path(base, table), &data)
+}
+
+pub fn save_segment_bm25_sidecar(
+    base: &Path,
+    table: &str,
+    segment_parquet: &str,
+    snap: &Bm25Snapshot,
+) -> Result<(), String> {
+    let data = serde_json::to_string(snap).map_err(|e| e.to_string())?;
+    write_json_sidecar(
+        &segment_bm25_sidecar_path(base, table, segment_parquet),
+        &data,
+    )
 }
 
 pub fn load_bm25_sidecar(base: &Path, table: &str) -> Result<Option<Bm25Snapshot>, String> {
@@ -45,6 +68,44 @@ pub fn load_bm25_sidecar(base: &Path, table: &str) -> Result<Option<Bm25Snapshot
     }
     let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     serde_json::from_str(&data).map_err(|e| e.to_string()).map(Some)
+}
+
+fn load_segment_bm25_sidecar(path: &Path) -> Result<Bm25Snapshot, String> {
+    let data = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&data).map_err(|e| e.to_string())
+}
+
+/// Merge all per-segment BM25 sidecars under `indexes/`.
+pub fn load_merged_segment_bm25_sidecars(
+    base: &Path,
+    table: &str,
+) -> Result<Option<Bm25Snapshot>, String> {
+    let dir = indexes_dir(base, table);
+    if !dir.exists() {
+        return Ok(None);
+    }
+    let mut merged: Option<Bm25Snapshot> = None;
+    let mut names: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.ends_with(".bm25.json") && name != "bm25.json" {
+            names.push(name);
+        }
+    }
+    names.sort();
+    for name in names {
+        let snap = load_segment_bm25_sidecar(&dir.join(&name))?;
+        match merged {
+            None => merged = Some(snap),
+            Some(ref mut acc) => acc.merge(snap),
+        }
+    }
+    Ok(merged)
+}
+
+fn snapshot_for_columnar_docs(docs: &[ColumnarDoc]) -> Bm25Snapshot {
+    Bm25Snapshot::from_documents(docs.iter().map(|d| (d.id, d.text.as_str())))
 }
 
 /// Read all documents for a table from on-disk Parquet segments.
@@ -107,6 +168,26 @@ pub fn load_all(base: &Path, store: &mut CorpusStore, segment_count: usize) -> R
     Ok(total)
 }
 
+fn restore_bm25_index(
+    base: &Path,
+    table: &str,
+    store: &mut CorpusStore,
+) -> Result<(), String> {
+    if let Some(snap) = load_merged_segment_bm25_sidecars(base, table)? {
+        store.restore_bm25(table, snap);
+        return Ok(());
+    }
+    if let Some(snap) = load_bm25_sidecar(base, table)? {
+        store.restore_bm25(table, snap);
+        return Ok(());
+    }
+    store.rebuild_bm25(table);
+    if let Some(snap) = store.bm25_snapshot(table) {
+        save_bm25_sidecar(base, table, &snap)?;
+    }
+    Ok(())
+}
+
 pub fn load_table(
     base: &Path,
     table: &str,
@@ -141,14 +222,7 @@ pub fn load_table(
         }
     }
     if n > 0 {
-        if let Some(snap) = load_bm25_sidecar(base, table)? {
-            store.restore_bm25(table, snap);
-        } else {
-            store.rebuild_bm25(table);
-            if let Some(snap) = store.bm25_snapshot(table) {
-                save_bm25_sidecar(base, table, &snap)?;
-            }
-        }
+        restore_bm25_index(base, table, store)?;
     }
     Ok(n)
 }
@@ -166,6 +240,8 @@ pub fn flush_batch(base: &Path, table: &str, docs: &[ColumnarDoc]) -> Result<(),
     let seg_name = format!("seg_{:05}.parquet", manifest.segments.len() + 1);
     let seg_path = TableManifestFile::segments_dir(base, table).join(&seg_name);
     write_segment(&seg_path, docs)?;
+    let seg_snap = snapshot_for_columnar_docs(docs);
+    save_segment_bm25_sidecar(base, table, &seg_name, &seg_snap)?;
     manifest.push_segment(seg_name);
     manifest.save(&manifest_path)?;
     Ok(())
