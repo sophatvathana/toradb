@@ -94,6 +94,35 @@ pub struct Bm25Snapshot {
     pub avg_dl: f32,
 }
 
+impl Bm25Snapshot {
+    /// Build a snapshot for a disjoint document set (e.g. one Parquet segment).
+    pub fn from_documents(docs: impl IntoIterator<Item = (DocId, impl AsRef<str>)>) -> Self {
+        let mut index = Bm25Index::default();
+        for (id, text) in docs {
+            index.add_document(id, text.as_ref());
+        }
+        index.snapshot()
+    }
+
+    /// Merge another snapshot whose document ids do not overlap with this one.
+    pub fn merge(&mut self, other: Bm25Snapshot) {
+        for (term, mut posts) in other.postings {
+            self.postings.entry(term).or_default().append(&mut posts);
+        }
+        self.doc_len.extend(other.doc_len);
+        for (term, df) in other.doc_freq {
+            *self.doc_freq.entry(term).or_default() += df;
+        }
+        self.num_docs += other.num_docs;
+        let total_len: u32 = self.doc_len.values().sum();
+        self.avg_dl = if self.num_docs > 0 {
+            total_len as f32 / self.num_docs as f32
+        } else {
+            0.0
+        };
+    }
+}
+
 fn is_khmer(c: char) -> bool {
     ('\u{1780}'..='\u{17ff}').contains(&c) || ('\u{19e0}'..='\u{19ff}').contains(&c)
 }
@@ -157,7 +186,7 @@ pub fn tokenize(text: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::tokenize;
+    use super::{tokenize, Bm25Index, Bm25Snapshot};
 
     #[test]
     fn tokenize_english_tesla_terms() {
@@ -171,5 +200,16 @@ mod tests {
     fn khmer_terms_stay_whole() {
         let terms = tokenize("ឯកសារ អំពី ភាសា");
         assert!(terms.contains(&"ឯកសារ".to_string()));
+    }
+
+    #[test]
+    fn merge_snapshots_combines_disjoint_docs() {
+        let a = Bm25Snapshot::from_documents([(0u64, "alpha beta")]);
+        let b = Bm25Snapshot::from_documents([(1u64, "gamma delta")]);
+        let mut merged = a;
+        merged.merge(b);
+        let index = Bm25Index::from_snapshot(merged);
+        assert!(!index.search("alpha", 1).is_empty());
+        assert!(!index.search("gamma", 1).is_empty());
     }
 }
