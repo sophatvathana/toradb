@@ -74,6 +74,7 @@ def test_add_arrow_ingest():
                     "Marie Curie radioactivity research",
                 ],
                 "tag": ["patent", "science"],
+                "score": [10, 5],
             }
         )
         from toradb.ingest import add_arrow
@@ -82,6 +83,8 @@ def test_add_arrow_ingest():
         assert n == 2
         frame = t.search("Nikola Tesla motor", top_k=3).to_pandas()
         assert len(frame["id"]) > 0
+        agg = db.sql("SELECT tag, SUM(score) FROM arrow GROUP BY tag").to_pandas()
+        assert dict(zip(agg["tag"], agg["sum_score"]))["patent"] == 10.0
     finally:
         shutil.rmtree(path, ignore_errors=True)
 
