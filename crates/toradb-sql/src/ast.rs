@@ -41,10 +41,27 @@ pub enum SelectExpr {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompareOp {
+    Eq,
+    Ne,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub struct WhereEq {
-    pub column: String,
-    pub value: String,
+pub enum WherePred {
+    Compare {
+        column: String,
+        op: CompareOp,
+        value: String,
+    },
+    In {
+        column: String,
+        values: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,5 +75,5 @@ pub struct SelectStmt {
     pub vector: bool,
     pub limit: u32,
     pub group_by: Option<String>,
-    pub where_eq: Option<WhereEq>,
+    pub where_clause: Option<WherePred>,
 }

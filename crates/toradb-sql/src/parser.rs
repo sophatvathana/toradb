@@ -83,29 +83,77 @@ fn parse_select_exprs(tokens: &[Token], i: &mut usize) -> Result<Vec<SelectExpr>
     Ok(items)
 }
 
-fn parse_where_eq(tokens: &[Token], i: &mut usize) -> Result<WhereEq, String> {
-    expect_ident(tokens, i, "WHERE")?;
-    let column = ident_at(tokens, *i).ok_or("WHERE requires column name")?;
-    *i += 1;
-    if !matches!(tokens.get(*i), Some(Token::Eq)) {
-        return Err("WHERE requires =".into());
-    }
-    *i += 1;
-    let value = match tokens.get(*i) {
+fn parse_literal(tokens: &[Token], i: &mut usize) -> Result<String, String> {
+    match tokens.get(*i) {
         Some(Token::String(s)) => {
             *i += 1;
-            s.clone()
+            Ok(s.clone())
         }
         Some(Token::Ident(s)) => {
             *i += 1;
-            s.to_lowercase()
+            Ok(s.to_lowercase())
         }
-        _ => return Err("WHERE requires string or identifier value".into()),
-    };
-    Ok(WhereEq {
-        column: column.to_lowercase(),
-        value,
-    })
+        Some(Token::Number(n)) => {
+            *i += 1;
+            Ok(n.to_string())
+        }
+        _ => Err("expected literal value".into()),
+    }
+}
+
+fn parse_compare_op(token: &Token) -> Option<CompareOp> {
+    match token {
+        Token::Eq => Some(CompareOp::Eq),
+        Token::Ne => Some(CompareOp::Ne),
+        Token::Lt => Some(CompareOp::Lt),
+        Token::Lte => Some(CompareOp::Lte),
+        Token::Gt => Some(CompareOp::Gt),
+        Token::Gte => Some(CompareOp::Gte),
+        _ => None,
+    }
+}
+
+fn parse_where_clause(tokens: &[Token], i: &mut usize) -> Result<WherePred, String> {
+    expect_ident(tokens, i, "WHERE")?;
+    let column = ident_at(tokens, *i).ok_or("WHERE requires column name")?.to_lowercase();
+    *i += 1;
+
+    if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "IN") {
+        *i += 1;
+        if !matches!(tokens.get(*i), Some(Token::LParen)) {
+            return Err("IN requires (".into());
+        }
+        *i += 1;
+        let mut values = Vec::new();
+        loop {
+            if matches!(tokens.get(*i), Some(Token::RParen)) {
+                *i += 1;
+                break;
+            }
+            values.push(parse_literal(tokens, i)?);
+            if matches!(tokens.get(*i), Some(Token::Comma)) {
+                *i += 1;
+                continue;
+            }
+            if matches!(tokens.get(*i), Some(Token::RParen)) {
+                *i += 1;
+                break;
+            }
+            return Err("expected , or ) in IN list".into());
+        }
+        if values.is_empty() {
+            return Err("IN requires at least one value".into());
+        }
+        return Ok(WherePred::In { column, values });
+    }
+
+    let op = tokens
+        .get(*i)
+        .and_then(parse_compare_op)
+        .ok_or("WHERE requires comparison operator")?;
+    *i += 1;
+    let value = parse_literal(tokens, i)?;
+    Ok(WherePred::Compare { column, op, value })
 }
 
 fn parse_sparse_search(tokens: &[Token], i: &mut usize) -> Result<(Option<String>, Option<String>), String> {
@@ -184,7 +232,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             let mut vector = false;
             let mut limit = 20;
             let mut group_by = None;
-            let mut where_eq = None;
+            let mut where_clause = None;
             while i < tokens.len() && !matches!(tokens.get(i), Some(Token::Eof)) {
                 match tokens.get(i) {
                     Some(Token::Ident(k)) if k == "SPARSE" => {
@@ -218,7 +266,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                         }
                     }
                     Some(Token::Ident(k)) if k == "WHERE" => {
-                        where_eq = Some(parse_where_eq(&tokens, &mut i)?);
+                        where_clause = Some(parse_where_clause(&tokens, &mut i)?);
                     }
                     Some(Token::Semi) | Some(Token::Eof) => break,
                     _ => i += 1,
@@ -232,7 +280,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 vector,
                 limit,
                 group_by,
-                where_eq,
+                where_clause,
             }));
             continue;
         }

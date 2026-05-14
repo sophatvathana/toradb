@@ -8,6 +8,11 @@ pub enum Token {
     Comma,
     Semi,
     Eq,
+    Ne,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
     Eof,
 }
 
@@ -64,6 +69,23 @@ pub fn tokenize(input: &str) -> Vec<Token> {
             b')' => tokens.push(Token::RParen),
             b',' => tokens.push(Token::Comma),
             b';' => tokens.push(Token::Semi),
+            b'!' if i + 1 < bytes.len() && bytes[i + 1] == b'=' => {
+                tokens.push(Token::Ne);
+                i += 2;
+                continue;
+            }
+            b'<' if i + 1 < bytes.len() && bytes[i + 1] == b'=' => {
+                tokens.push(Token::Lte);
+                i += 2;
+                continue;
+            }
+            b'>' if i + 1 < bytes.len() && bytes[i + 1] == b'=' => {
+                tokens.push(Token::Gte);
+                i += 2;
+                continue;
+            }
+            b'<' => tokens.push(Token::Lt),
+            b'>' => tokens.push(Token::Gt),
             b'=' => tokens.push(Token::Eq),
             _ => {}
         }
