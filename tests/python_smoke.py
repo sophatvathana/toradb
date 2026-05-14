@@ -169,6 +169,29 @@ def test_sql_sum_group_by_analytics():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_sql_where_in_group_by_analytics():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_in_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                {"text": "a", "tag": "patent"},
+                {"text": "b", "tag": "science"},
+                {"text": "c", "tag": "other"},
+            ]
+        )
+        frame = db.sql(
+            "SELECT tag, COUNT(*) FROM docs WHERE tag IN ('patent', 'science') GROUP BY tag"
+        ).to_pandas()
+        tags = set(frame["tag"])
+        assert tags == {"patent", "science"}
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_sql_group_by_analytics():
     import shutil
 
