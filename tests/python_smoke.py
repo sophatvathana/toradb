@@ -260,6 +260,12 @@ def test_persist_reload_search():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_cli_smoke_command():
+    from toradb.cli import cmd_smoke
+
+    assert cmd_smoke() == 0
+
+
 def test_langchain_adapter():
     import shutil
 
