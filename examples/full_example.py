@@ -166,29 +166,60 @@ def main() -> None:
         ),
     )
 
-    section("11. SQL analytics (GROUP BY)")
+    section("11. PyArrow ingest (zero-copy Rust path)")
+    try:
+        import pyarrow as pa
+        from toradb.ingest import add_arrow
+
+        batch = pa.table(
+            {
+                "text": ["Nikola Tesla wireless energy vision"],
+                "tag": ["vision"],
+                "score": [42],
+            }
+        )
+        n_arrow = add_arrow(articles, batch)
+        print(f"add_arrow ingested {n_arrow} rows")
+    except ImportError:
+        print("skip add_arrow (install pyarrow)")
+
+    section("12. SQL analytics (GROUP BY, WHERE, SUM)")
     analytics = db.sql(
         "SELECT tag, COUNT(*) FROM articles GROUP BY tag"
     ).to_pandas()
     print("GROUP BY tag:", dict(zip(analytics["tag"], analytics["count"])))
 
-    section("12. SQL retrieval + analytics")
+    where_only = db.sql(
+        "SELECT tag, COUNT(*) FROM articles WHERE tag = 'patent' GROUP BY tag"
+    ).to_pandas()
+    print("WHERE tag=patent:", dict(zip(where_only["tag"], where_only["count"])))
+
+    try:
+        sum_scores = db.sql(
+            "SELECT tag, SUM(score) FROM articles GROUP BY tag"
+        ).to_pandas()
+        if "sum_score" in sum_scores:
+            print("SUM(score) by tag:", dict(zip(sum_scores["tag"], sum_scores["sum_score"])))
+    except Exception as exc:
+        print(f"SUM(score) skipped: {exc}")
+
+    section("13. SQL retrieval + analytics")
     hybrid = db.sql(
         "SELECT tag, COUNT(*) FROM articles "
         "SPARSE SEARCH body BM25('Nikola Tesla') GROUP BY tag"
     ).to_pandas()
     print("Search then GROUP BY tag:", dict(zip(hybrid["tag"], hybrid["count"])))
 
-    section("13. SQL DDL")
+    section("14. SQL DDL")
     print(db.sql("CREATE TABLE logs USING text"))
     print(db.sql("SHOW TABLES"))
 
-    section("14. Export results (pandas-style dict)")
+    section("15. Export results (pandas-style dict)")
     results = articles.search("Nikola Tesla", top_k=3)
     print(results.to_pandas())
     print(results.to_polars())
 
-    section("15. LangChain adapter")
+    section("16. LangChain adapter")
     store = ToraDBVectorStore.from_table(articles)
     store.add_texts(
         ["Nikola Tesla envisioned worldwide wireless power distribution"]
@@ -196,7 +227,7 @@ def main() -> None:
     hits = store.similarity_search("wireless power Tesla", k=2)
     print("LangChain hits:", hits)
 
-    section("16. LlamaIndex-style adapter")
+    section("17. LlamaIndex-style adapter")
     li_store = ToraDBLlamaIndexStore.from_table(articles)
 
     class SimpleNode:
