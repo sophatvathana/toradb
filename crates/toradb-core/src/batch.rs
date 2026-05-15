@@ -1,6 +1,6 @@
 use crate::candidate::CandidateSet;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Batch {
     pub candidates: CandidateSet,
     /// Query text propagated through the DAG (SDK and SQL lowering).
@@ -11,6 +11,25 @@ pub struct Batch {
     pub graph_depth: u32,
     pub table: String,
     pub query_vector: Option<Vec<f32>>,
+    pub tier1_enable_sparse: bool,
+    pub tier1_enable_dense: bool,
+}
+
+impl Default for Batch {
+    fn default() -> Self {
+        Self {
+            candidates: CandidateSet::default(),
+            query: String::new(),
+            enable_hyde: false,
+            enable_crag: false,
+            graph_expand: false,
+            graph_depth: 0,
+            table: String::new(),
+            query_vector: None,
+            tier1_enable_sparse: true,
+            tier1_enable_dense: true,
+        }
+    }
 }
 
 impl Batch {
