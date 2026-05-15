@@ -5,7 +5,7 @@ use pyo3::types::{PyDict, PyList};
 use toradb_core::{Batch, ExecCtx};
 use toradb_engine::tune_ctx;
 use pyo3_arrow::PyTable;
-use toradb_index::IngestDoc;
+use toradb_index::{dense::query_embed::lexical_proxy_vector, IngestDoc};
 
 use crate::database::Database;
 
@@ -114,6 +114,14 @@ impl Table {
         batch.table = self.name.clone();
         batch.query = query.to_string();
         batch.query_vector = query_vector;
+        batch.tier1_enable_sparse =
+            !matches!(strategy, Some("dense") | Some("vector") | Some("hnsw"));
+        batch.tier1_enable_dense = !matches!(strategy, Some("sparse") | Some("bm25"));
+        if batch.tier1_enable_dense && batch.query_vector.is_none() {
+            if let Some(dim) = db.vector_dim(&self.name) {
+                batch.query_vector = Some(lexical_proxy_vector(query, dim));
+            }
+        }
         batch.enable_hyde = matches!(strategy, Some("hyde"));
         batch.enable_crag = matches!(strategy, Some("crag"));
         batch.graph_expand = graph_expand.unwrap_or(false)

@@ -75,6 +75,10 @@ impl Database {
             .add_documents(table, docs)
             .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))
     }
+
+    pub(crate) fn vector_dim(&self, table: &str) -> Option<usize> {
+        self.dag.vector_dim(table)
+    }
 }
 
 #[pymethods]
