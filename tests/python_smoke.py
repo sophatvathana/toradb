@@ -40,6 +40,36 @@ def test_hybrid_schema_builder():
     assert papers is not None
 
 
+def test_dense_vector_search():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_dense_"))
+    try:
+        db = toradb.local(str(path))
+        papers = db.create_table("papers", mode="hybrid")
+        papers.add(
+            [
+                {
+                    "text": "Nikola Tesla coil",
+                    "embedding": [1.0, 0.0, 0.0, 0.0],
+                },
+                {
+                    "text": "Marie Curie radiation",
+                    "embedding": [0.0, 1.0, 0.0, 0.0],
+                },
+            ]
+        )
+        frame = papers.search(
+            "query",
+            top_k=1,
+            strategy="dense",
+            query_vector=[0.95, 0.05, 0.0, 0.0],
+        ).to_pandas()
+        assert frame["id"][0] == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_search_with_strategy_and_explain():
     import re
     import shutil
