@@ -14,7 +14,15 @@ class ToraDBVectorStore:
 
     def similarity_search(self, query, k=4, **kwargs):
         _ = kwargs
-        results = self.table.search(query, top_k=k)
+        query_vector = None
+        strategy = None
+        if self.embedding is not None:
+            emb = self.embedding.embed_query(query)
+            query_vector = list(emb) if not isinstance(emb, list) else emb
+            strategy = "dense"
+        results = self.table.search(
+            query, top_k=k, strategy=strategy, query_vector=query_vector
+        )
         frame = results.to_pandas()
         return [{"id": i, "score": s} for i, s in zip(frame["id"], frame["score"])]
 
