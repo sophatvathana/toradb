@@ -1,6 +1,7 @@
 pub mod diskann;
 pub mod hnsw;
 pub mod hnsw_index;
+pub mod query_embed;
 pub mod ivf;
 pub mod matryoshka;
 pub mod muvera;

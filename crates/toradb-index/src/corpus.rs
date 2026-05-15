@@ -33,6 +33,10 @@ pub struct TableCorpus {
 }
 
 impl TableCorpus {
+    pub fn vector_dim(&self) -> Option<usize> {
+        self.vector_dim
+    }
+
     pub fn add(&mut self, doc: IngestDoc, num_segments: u32) -> DocId {
         let id = self.next_id;
         self.next_id += 1;
@@ -282,6 +286,10 @@ impl CorpusStore {
 
     pub fn table(&self, name: &str) -> Option<&TableCorpus> {
         self.tables.get(name)
+    }
+
+    pub fn vector_dim(&self, table: &str) -> Option<usize> {
+        self.table(table).and_then(TableCorpus::vector_dim)
     }
 
     pub fn next_id(&self, table: &str) -> DocId {

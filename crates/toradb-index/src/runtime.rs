@@ -35,15 +35,17 @@ impl RetrievalRuntime {
             }
         };
 
-        push_cap(
-            &mut merged,
-            self.store
-                .table(table)
-                .map(|t| t.bm25_search(q, cap))
-                .unwrap_or_default(),
-        );
+        if batch.tier1_enable_sparse {
+            push_cap(
+                &mut merged,
+                self.store
+                    .table(table)
+                    .map(|t| t.bm25_search(q, cap))
+                    .unwrap_or_default(),
+            );
+        }
 
-        if !query_vec.is_empty() {
+        if batch.tier1_enable_dense && !query_vec.is_empty() {
             push_cap(&mut merged, dense::hnsw::search(&self.store, table, query_vec, cap));
         }
 
