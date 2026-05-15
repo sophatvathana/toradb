@@ -72,7 +72,12 @@ pub struct SelectStmt {
     pub sparse: Option<String>,
     /// Query text from BM25('...') or SPARSE SEARCH clause.
     pub sparse_query: Option<String>,
+    /// True when a VECTOR SEARCH clause is present.
     pub vector: bool,
+    /// Literal query embedding from ANN([...]).
+    pub vector_query: Option<Vec<f32>>,
+    /// Text query for lexical proxy embedding from ANN('...').
+    pub vector_text: Option<String>,
     pub limit: u32,
     pub group_by: Option<String>,
     pub where_clause: Option<WherePred>,

@@ -2,9 +2,12 @@
 pub enum Token {
     Ident(String),
     Number(u32),
+    Float(f32),
     String(String),
     LParen,
     RParen,
+    LBracket,
+    RBracket,
     Comma,
     Semi,
     Eq,
@@ -50,6 +53,21 @@ pub fn tokenize(input: &str) -> Vec<Token> {
             tokens.push(Token::String(s));
             continue;
         }
+        if c.is_ascii_digit() {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                i += 1;
+            }
+            let word = &input[start..i];
+            if word.contains('.') {
+                if let Ok(f) = word.parse::<f32>() {
+                    tokens.push(Token::Float(f));
+                }
+            } else if let Ok(n) = word.parse::<u32>() {
+                tokens.push(Token::Number(n));
+            }
+            continue;
+        }
         if c.is_ascii_alphanumeric() || c == b'_' {
             let start = i;
             i += 1;
@@ -67,6 +85,8 @@ pub fn tokenize(input: &str) -> Vec<Token> {
         match c {
             b'(' => tokens.push(Token::LParen),
             b')' => tokens.push(Token::RParen),
+            b'[' => tokens.push(Token::LBracket),
+            b']' => tokens.push(Token::RBracket),
             b',' => tokens.push(Token::Comma),
             b';' => tokens.push(Token::Semi),
             b'!' if i + 1 < bytes.len() && bytes[i + 1] == b'=' => {

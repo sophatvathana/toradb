@@ -156,6 +156,75 @@ fn parse_where_clause(tokens: &[Token], i: &mut usize) -> Result<WherePred, Stri
     Ok(WherePred::Compare { column, op, value })
 }
 
+fn parse_float_list(tokens: &[Token], i: &mut usize) -> Result<Vec<f32>, String> {
+    if !matches!(tokens.get(*i), Some(Token::LBracket)) {
+        return Err("ANN vector literal requires [...]".into());
+    }
+    *i += 1;
+    let mut out = Vec::new();
+    loop {
+        match tokens.get(*i) {
+            Some(Token::RBracket) => {
+                *i += 1;
+                if out.is_empty() {
+                    return Err("empty vector literal".into());
+                }
+                return Ok(out);
+            }
+            Some(Token::Comma) => {
+                *i += 1;
+            }
+            Some(Token::Number(n)) => {
+                out.push(*n as f32);
+                *i += 1;
+            }
+            Some(Token::Float(f)) => {
+                out.push(*f);
+                *i += 1;
+            }
+            _ => return Err("expected number in vector literal".into()),
+        }
+    }
+}
+
+fn parse_vector_search(
+    tokens: &[Token],
+    i: &mut usize,
+) -> Result<(bool, Option<Vec<f32>>, Option<String>), String> {
+    expect_ident(tokens, i, "VECTOR")?;
+    expect_ident(tokens, i, "SEARCH")?;
+    if ident_at(tokens, *i).is_some() {
+        *i += 1;
+    }
+    if let Some(method) = ident_at(tokens, *i) {
+        let m = method.to_lowercase();
+        if m == "ann" || m == "dot" || m == "hnsw" {
+            *i += 1;
+        }
+    }
+    let mut vector_query = None;
+    let mut vector_text = None;
+    if matches!(tokens.get(*i), Some(Token::LParen)) {
+        *i += 1;
+        if matches!(tokens.get(*i), Some(Token::LBracket)) {
+            vector_query = Some(parse_float_list(tokens, i)?);
+        } else if let Some(Token::String(q)) = tokens.get(*i) {
+            if q.contains(',') {
+                let parsed: Result<Vec<f32>, _> =
+                    q.split(',').map(|s| s.trim().parse::<f32>()).collect();
+                vector_query = Some(parsed.map_err(|_| "invalid ANN vector string".to_string())?);
+            } else {
+                vector_text = Some(q.clone());
+            }
+            *i += 1;
+        }
+        if matches!(tokens.get(*i), Some(Token::RParen)) {
+            *i += 1;
+        }
+    }
+    Ok((true, vector_query, vector_text))
+}
+
 fn parse_sparse_search(tokens: &[Token], i: &mut usize) -> Result<(Option<String>, Option<String>), String> {
     // SPARSE SEARCH <col> BM25 ( 'query' )
     expect_ident(tokens, i, "SPARSE")?;
@@ -230,6 +299,8 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             let mut sparse = None;
             let mut sparse_query = None;
             let mut vector = false;
+            let mut vector_query = None;
+            let mut vector_text = None;
             let mut limit = 20;
             let mut group_by = None;
             let mut where_clause = None;
@@ -241,15 +312,10 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                         sparse_query = query;
                     }
                     Some(Token::Ident(k)) if k == "VECTOR" => {
-                        vector = true;
-                        if matches!(tokens.get(i + 1), Some(Token::Ident(k)) if k == "SEARCH") {
-                            i += 2;
-                            if ident_at(&tokens, i).is_some() {
-                                i += 1;
-                            }
-                        } else {
-                            i += 1;
-                        }
+                        let (v, vq, vt) = parse_vector_search(&tokens, &mut i)?;
+                        vector = v;
+                        vector_query = vq;
+                        vector_text = vt;
                     }
                     Some(Token::Ident(k)) if k == "LIMIT" => {
                         i += 1;
@@ -278,6 +344,8 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 sparse,
                 sparse_query,
                 vector,
+                vector_query,
+                vector_text,
                 limit,
                 group_by,
                 where_clause,
