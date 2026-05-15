@@ -154,8 +154,17 @@ def main() -> None:
         ]
     )
     show_results(
-        "Lexical: Tesla coil",
-        papers.search("Tesla coil resonant", top_k=2, strategy="dense"),
+        "Lexical (hybrid): Tesla coil",
+        papers.search("Tesla coil resonant", top_k=2, strategy="hybrid"),
+    )
+    show_results(
+        "Dense (query_vector): Tesla coil",
+        papers.search(
+            "Tesla coil resonant",
+            top_k=2,
+            strategy="dense",
+            query_vector=[0.9, 0.1, 0.0, 0.0],
+        ),
     )
 
     section("10. SQL retrieval")
