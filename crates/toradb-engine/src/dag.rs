@@ -73,6 +73,10 @@ impl DagRunner {
         self.retrieval.store.ensure_table(table);
     }
 
+    pub fn vector_dim(&self, table: &str) -> Option<usize> {
+        self.retrieval.store.vector_dim(table)
+    }
+
     pub fn db_path(&self) -> Option<&std::path::Path> {
         self.db_path.as_ref().map(|p| p.as_path())
     }
@@ -116,11 +120,14 @@ impl DagRunner {
             let table = batch.table.clone();
             let query = batch.query.clone();
             let scheduler = SegmentScheduler::new(4);
-            batch.candidates = scheduler.run_per_segment(&self.segments, |seg| {
+            let seg_merged = scheduler.run_per_segment(&self.segments, |seg| {
                 self.retrieval
                     .segment_candidates(&table, seg, &query, ctx)
             });
-            SegmentScheduler::local_top_k(&mut batch.candidates, ctx.tier2_budget as usize);
+            if !seg_merged.is_empty() {
+                batch.candidates = seg_merged;
+                SegmentScheduler::local_top_k(&mut batch.candidates, ctx.tier2_budget as usize);
+            }
         }
 
         let t3 = lower_tier3();
