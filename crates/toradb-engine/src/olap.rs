@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use toradb_sql::ast::{AggFunc, CompareOp, SelectExpr, SelectStmt, WherePred};
 
 use crate::dag::DagRunner;
-use crate::sql_exec::run_sparse_search;
+use crate::sql_exec::run_search;
 
 #[derive(Debug, Clone)]
 pub struct SqlAggregateResult {
@@ -147,8 +147,12 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
     let (agg_func, agg_col) = primary_aggregate(sel)?;
     let value_col = value_column_name(&agg_func, agg_col.as_deref());
 
-    let filter_ids: Option<HashSet<u64>> = if sel.sparse_query.is_some() {
-        let hits = run_sparse_search(dag, sel)?;
+    let filter_ids: Option<HashSet<u64>> = if sel.sparse_query.is_some()
+        || sel.vector
+        || sel.vector_query.is_some()
+        || sel.vector_text.is_some()
+    {
+        let hits = run_search(dag, sel)?;
         Some(hits.ids.into_iter().collect())
     } else {
         None
