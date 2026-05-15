@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use toradb_core::{CandidateSet, DocId};
 use toradb_simd::dot_f32;
 
+use crate::dense::hnsw_index::{should_use_hnsw, HnswIndex};
 use crate::graph::csr::CsrGraph;
 use crate::sparse::bm25::{Bm25Index, Bm25Snapshot, tokenize};
 
@@ -24,6 +25,7 @@ pub(crate) struct StoredDoc {
 #[derive(Debug, Default)]
 pub struct TableCorpus {
     bm25: Bm25Index,
+    hnsw: Option<HnswIndex>,
     pub(crate) docs: HashMap<DocId, StoredDoc>,
     graph: CsrGraph,
     next_id: DocId,
@@ -63,7 +65,26 @@ impl TableCorpus {
         self.bm25.search(query, k)
     }
 
+    pub fn rebuild_hnsw(&mut self) {
+        let mut ids: Vec<DocId> = self.docs.keys().copied().collect();
+        ids.sort_unstable();
+        let mut id_vecs = Vec::new();
+        let mut vectors = Vec::new();
+        for id in ids {
+            if let Some(v) = self.docs.get(&id).and_then(|d| d.vector.clone()) {
+                id_vecs.push(id);
+                vectors.push(v);
+            }
+        }
+        self.hnsw = HnswIndex::build(id_vecs, vectors);
+    }
+
     pub fn vector_search(&self, query: &[f32], k: usize) -> CandidateSet {
+        if let Some(ref h) = self.hnsw {
+            if should_use_hnsw(h.len()) {
+                return h.search(query, k);
+            }
+        }
         let mut scored = Vec::new();
         for (&id, doc) in &self.docs {
             let Some(ref v) = doc.vector else { continue };
@@ -213,6 +234,7 @@ impl TableCorpus {
             let text = self.docs.get(&id).map(|d| d.text.as_str()).unwrap_or("");
             self.bm25.add_document(id, text);
         }
+        self.rebuild_hnsw();
     }
 
     pub fn restore_bm25(&mut self, snap: Bm25Snapshot) {
@@ -273,7 +295,16 @@ impl CorpusStore {
             t.add(doc, num_segments);
             n += 1;
         }
+        if should_use_hnsw(t.docs.len()) {
+            t.rebuild_hnsw();
+        }
         n
+    }
+
+    pub fn rebuild_hnsw(&mut self, table: &str) {
+        if let Some(t) = self.tables.get_mut(table) {
+            t.rebuild_hnsw();
+        }
     }
 
     pub fn add_document_with_id(

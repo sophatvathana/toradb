@@ -44,7 +44,7 @@ impl RetrievalRuntime {
         );
 
         if !query_vec.is_empty() {
-            push_cap(&mut merged, dense::search::search(&self.store, table, query_vec, cap));
+            push_cap(&mut merged, dense::hnsw::search(&self.store, table, query_vec, cap));
         }
 
         if metadata::parse_field_filter(q).is_some() {
