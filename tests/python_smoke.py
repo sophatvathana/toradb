@@ -247,6 +247,28 @@ def test_sql_group_by_analytics():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_sql_vector_search():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_vec_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("papers", mode="hybrid")
+        t.add(
+            [
+                {"text": "Nikola Tesla coil", "embedding": [1.0, 0.0, 0.0, 0.0]},
+                {"text": "Marie Curie radiation", "embedding": [0.0, 1.0, 0.0, 0.0]},
+            ]
+        )
+        results = db.sql(
+            "SELECT id FROM papers VECTOR SEARCH embedding ANN([0.95, 0.05, 0.0, 0.0]) LIMIT 1"
+        )
+        frame = results.to_pandas()
+        assert frame["id"][0] == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_sql_sparse_search():
     import shutil
 
