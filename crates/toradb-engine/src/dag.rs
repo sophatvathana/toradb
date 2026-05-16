@@ -118,15 +118,22 @@ impl DagRunner {
 
         if !batch.table.is_empty() {
             let table = batch.table.clone();
-            let query = batch.query.clone();
-            let scheduler = SegmentScheduler::new(4);
-            let seg_merged = scheduler.run_per_segment(&self.segments, |seg| {
-                self.retrieval
-                    .segment_candidates(&table, seg, &query, ctx)
-            });
-            if !seg_merged.is_empty() {
-                batch.candidates = seg_merged;
-                SegmentScheduler::local_top_k(&mut batch.candidates, ctx.tier2_budget as usize);
+            let run_segments = self
+                .db_path
+                .as_ref()
+                .and_then(|p| persist::table_has_segment_bm25_sidecars(p.as_path(), &table).ok())
+                .unwrap_or(false);
+            if run_segments {
+                let query = batch.query.clone();
+                let scheduler = SegmentScheduler::new(4);
+                let seg_merged = scheduler.run_per_segment(&self.segments, |seg| {
+                    self.retrieval
+                        .segment_candidates(&table, seg, &query, ctx)
+                });
+                if !seg_merged.is_empty() {
+                    batch.candidates = seg_merged;
+                    SegmentScheduler::local_top_k(&mut batch.candidates, ctx.tier2_budget as usize);
+                }
             }
         }
 

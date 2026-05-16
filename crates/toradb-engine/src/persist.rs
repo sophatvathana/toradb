@@ -101,6 +101,23 @@ fn load_segment_bm25_sidecar(
     Ok(None)
 }
 
+/// True when at least one on-disk segment has a BM25 sidecar (bin or json).
+pub fn table_has_segment_bm25_sidecars(base: &Path, table: &str) -> Result<bool, String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(false);
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    for seg in &manifest.segments {
+        if segment_bm25_bin_path(base, table, seg).exists()
+            || segment_bm25_json_path(base, table, seg).exists()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Merge all per-segment BM25 sidecars under `indexes/`.
 pub fn load_merged_segment_bm25_sidecars(
     base: &Path,
