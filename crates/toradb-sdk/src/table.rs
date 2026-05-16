@@ -21,9 +21,15 @@ impl Table {
     }
 }
 
-fn exec_ctx(top_k: Option<u32>) -> ExecCtx {
+fn exec_ctx(top_k: Option<u32>, offset: Option<u32>) -> ExecCtx {
     let k = top_k.unwrap_or(20);
-    ExecCtx::new(k.saturating_mul(50).min(1000), k.saturating_mul(5).min(100), k)
+    let off = offset.unwrap_or(0);
+    let fetch = off.saturating_add(k).min(1000);
+    ExecCtx::new(
+        fetch.saturating_mul(50).min(1000),
+        fetch.saturating_mul(5).min(100),
+        fetch,
+    )
 }
 
 fn parse_ingest_doc(item: &Bound<'_, PyAny>) -> PyResult<IngestDoc> {
@@ -97,12 +103,13 @@ impl Table {
         db.add_documents(&self.name, parsed)
     }
 
-    #[pyo3(signature = (query, top_k=None, strategy=None, explain=None, graph_expand=None, depth=None, query_vector=None))]
+    #[pyo3(signature = (query, top_k=None, offset=None, strategy=None, explain=None, graph_expand=None, depth=None, query_vector=None))]
     fn search(
         &self,
         py: Python<'_>,
         query: &str,
         top_k: Option<u32>,
+        offset: Option<u32>,
         strategy: Option<&str>,
         explain: Option<bool>,
         graph_expand: Option<bool>,
@@ -127,8 +134,11 @@ impl Table {
         batch.graph_expand = graph_expand.unwrap_or(false)
             || matches!(strategy, Some("graph") | Some("hybrid"));
         batch.graph_depth = depth.unwrap_or(2);
-        let ctx = tune_ctx(exec_ctx(top_k), query, strategy);
+        let ctx = tune_ctx(exec_ctx(top_k, offset), query, strategy);
         let metrics = db.run_retrieval(&mut batch, &ctx);
+        let page = batch
+            .candidates
+            .slice_range(offset.unwrap_or(0) as usize, top_k.unwrap_or(20) as usize);
         let explain_text = if explain.unwrap_or(false) {
             Some(format!(
                 "table={} strategy={:?} graph_expand={} depth={} hyde={} crag={} tier1={} tier2={} tier3={}",
@@ -146,8 +156,8 @@ impl Table {
             None
         };
         Ok(SearchResults {
-            ids: batch.candidates.ids,
-            scores: batch.candidates.scores,
+            ids: page.ids,
+            scores: page.scores,
             metrics,
             explain_text,
         })
