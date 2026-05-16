@@ -174,6 +174,13 @@ def main() -> None:
             "SELECT id FROM articles SPARSE SEARCH body BM25('Nikola Tesla alternating current') LIMIT 3"
         ),
     )
+    show_results(
+        "SQL VECTOR SEARCH",
+        db.sql(
+            "SELECT id FROM papers VECTOR SEARCH embedding "
+            "ANN([0.9, 0.1, 0.0, 0.0]) LIMIT 2"
+        ),
+    )
 
     section("11. PyArrow ingest (zero-copy Rust path)")
     try:
