@@ -32,4 +32,15 @@ impl CandidateSet {
         self.ids.truncate(max);
         self.scores.truncate(max);
     }
+
+    pub fn slice_range(&self, offset: usize, limit: usize) -> Self {
+        if offset >= self.len() {
+            return Self::default();
+        }
+        let end = (offset + limit).min(self.len());
+        Self {
+            ids: self.ids[offset..end].to_vec(),
+            scores: self.scores[offset..end].to_vec(),
+        }
+    }
 }
