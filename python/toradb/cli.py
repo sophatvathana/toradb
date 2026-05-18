@@ -16,10 +16,12 @@ def _print_usage() -> None:
 Commands:
   smoke              Quick ingest + search sanity check
   query PATH TABLE Q Run BM25 search and print ranked ids
+  sql PATH QUERY     Run a SQL statement (search or analytics)
 
 Examples:
   toradb smoke
   toradb query ./my_db docs "Nikola Tesla motor"
+  toradb sql ./my_db "SELECT tag, COUNT(*) FROM docs GROUP BY tag"
 """
     )
 
@@ -72,6 +74,30 @@ def cmd_query(db_path: str, table: str, query: str, top_k: int) -> int:
     return 0
 
 
+def _join_positional_tail(args, rest: list[str]) -> str:
+    """Join extra positionals (sql/query text may land in table, query, or rest)."""
+    parts = [p for p in (args.table, args.query) if p]
+    parts.extend(rest)
+    return " ".join(parts).strip()
+
+
+def cmd_sql(db_path: str, query: str) -> int:
+    import toradb
+
+    db = toradb.local(db_path)
+    out = db.sql(query)
+    frame = out.to_pandas()
+    if not frame:
+        print("(empty)")
+        return 0
+    cols = list(frame.keys())
+    print("\t".join(cols))
+    n = len(frame[cols[0]])
+    for i in range(n):
+        print("\t".join(str(frame[c][i]) for c in cols))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="toradb", add_help=False)
     parser.add_argument("command", nargs="?", default="help")
@@ -93,11 +119,21 @@ def main(argv: list[str] | None = None) -> int:
         if not args.path or not args.table:
             _print_usage()
             return 2
-        q = args.query or " ".join(rest)
+        q = (args.query or " ".join(rest)).strip()
         if not q:
             print("toradb query requires a query string", file=sys.stderr)
             return 2
         return cmd_query(args.path, args.table, q, args.top_k)
+
+    if args.command == "sql":
+        if not args.path:
+            _print_usage()
+            return 2
+        q = _join_positional_tail(args, rest)
+        if not q:
+            print("toradb sql requires a SQL string", file=sys.stderr)
+            return 2
+        return cmd_sql(args.path, q)
 
     _print_usage()
     return 2
