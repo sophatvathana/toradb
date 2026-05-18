@@ -9,7 +9,15 @@ class ToraDBVectorStore:
         self.embedding = embedding
 
     def add_texts(self, texts, metadatas=None, **kwargs):
-        _ = (metadatas, kwargs)
+        _ = kwargs
+        if metadatas:
+            docs = []
+            for text, meta in zip(texts, metadatas):
+                doc = {"text": text}
+                if meta:
+                    doc.update(meta)
+                docs.append(doc)
+            return self.table.add(docs)
         return self.table.add(list(texts))
 
     def similarity_search(self, query, k=4, **kwargs):
