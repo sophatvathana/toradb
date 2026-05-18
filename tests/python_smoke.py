@@ -347,6 +347,35 @@ def test_cli_smoke_command():
     assert cmd_smoke() == 0
 
 
+def test_llamaindex_adapter_hybrid():
+    import shutil
+
+    from toradb.integrations import ToraDBLlamaIndexStore
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_li_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("papers", mode="hybrid")
+
+        class Node:
+            def __init__(self, text, metadata=None):
+                self.text = text
+                self.metadata = metadata or {}
+
+        store = ToraDBLlamaIndexStore.from_table(t)
+        store.add(
+            [
+                Node("Nikola Tesla coil", {"tag": "patent", "embedding": [1.0, 0.0]}),
+                Node("Marie Curie radiation", {"tag": "science", "embedding": [0.0, 1.0]}),
+            ]
+        )
+        result = store.query("coil", similarity_top_k=1)
+        frame = result.to_pandas()
+        assert frame["id"][0] == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_langchain_adapter():
     import shutil
 
