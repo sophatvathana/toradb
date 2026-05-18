@@ -17,3 +17,6 @@ toradb-storage = { workspace = true }
 pyo3 = { version = "0.28", features = ["extension-module"] }
 pyo3-arrow = { version = "0.17", default-features = false }
 arrow = { workspace = true, default-features = false }
+
+[dev-dependencies]
+arrow = { workspace = true, default-features = false, features = ["ipc"] }

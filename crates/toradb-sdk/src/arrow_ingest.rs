@@ -157,3 +157,64 @@ fn extract_vector(batch: &RecordBatch, col: usize, row: usize) -> Option<Vec<f32
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::array::{Float32Array, Int64Array, ListArray, StringArray};
+    use arrow::buffer::OffsetBuffer;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+
+    use super::ingest_record_batch;
+
+    #[test]
+    fn ingests_text_and_numeric_metadata() {
+        let schema = Schema::new(vec![
+            Field::new("text", DataType::Utf8, false),
+            Field::new("tag", DataType::Int64, true),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(StringArray::from(vec!["Nikola Tesla coil"])),
+                Arc::new(Int64Array::from(vec![42])),
+            ],
+        )
+        .expect("batch");
+        let docs = ingest_record_batch(&batch).expect("ingest");
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].metadata.get("tag").map(|s| s.as_str()), Some("42"));
+        assert!(docs[0].vector.is_none());
+    }
+
+    #[test]
+    fn ingests_float_list_embeddings() {
+        let schema = Schema::new(vec![
+            Field::new("text", DataType::Utf8, false),
+            Field::new(
+                "embedding",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Float32, true))),
+                true,
+            ),
+        ]);
+        let values = Arc::new(Float32Array::from(vec![1.0_f32, 0.0]));
+        let list = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Float32, true)),
+            OffsetBuffer::from_lengths([2]),
+            values,
+            None,
+        );
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(StringArray::from(vec!["Nikola Tesla coil"])),
+                Arc::new(list),
+            ],
+        )
+        .expect("batch");
+        let docs = ingest_record_batch(&batch).expect("ingest");
+        assert_eq!(docs[0].vector.as_deref(), Some([1.0_f32, 0.0].as_slice()));
+    }
+}
