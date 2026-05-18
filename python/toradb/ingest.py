@@ -45,7 +45,7 @@ def _arrow_value_at(column, row_index):
 
 
 def add_file(table, path, chunk_by="paragraph"):
-    """Ingest a UTF-8 text file as document chunks (stub tokenizer)."""
+    """Ingest a UTF-8 text file as document chunks (paragraph or line splits)."""
     with open(path, encoding="utf-8") as f:
         text = f.read()
     if chunk_by == "line":
