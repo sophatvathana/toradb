@@ -347,6 +347,37 @@ def test_cli_smoke_command():
     assert cmd_smoke() == 0
 
 
+def test_cli_sql_command():
+    import shutil
+
+    from toradb.cli import cmd_sql
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_cli_sql_"))
+    try:
+        import toradb
+
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                {"text": "Nikola Tesla motor", "tag": "patent"},
+                {"text": "Marie Curie radiation", "tag": "science"},
+            ]
+        )
+        sql = "SELECT tag, COUNT(*) FROM docs GROUP BY tag"
+        assert cmd_sql(str(path), sql) == 0
+        # argv-style: quoted SQL is parsed into the `table` slot by argparse
+        import sys
+        from toradb.cli import main
+
+        assert (
+            main(["sql", str(path), sql])
+            == 0
+        )
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_llamaindex_adapter_hybrid():
     import shutil
 

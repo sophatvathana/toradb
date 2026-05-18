@@ -24,4 +24,5 @@ CLI after install:
 ```bash
 toradb smoke
 toradb query ./examples/_demo_db articles "Nikola Tesla motor"
+toradb sql ./examples/_demo_db "SELECT tag, COUNT(*) FROM articles GROUP BY tag"
 ```
