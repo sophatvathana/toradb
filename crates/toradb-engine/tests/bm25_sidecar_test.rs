@@ -1,4 +1,4 @@
-use toradb_engine::DagRunner;
+use toradb_engine::{persist, DagRunner};
 use toradb_index::IngestDoc;
 
 #[test]
@@ -34,6 +34,30 @@ fn bm25_sidecar_written_on_flush_and_used_on_reload() {
     let ctx = toradb_core::ExecCtx::new(10, 10, 5);
     dag2.retrieval.run_tier1(&mut batch, &ctx);
     assert!(!batch.candidates.is_empty());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn table_has_segment_bm25_sidecars_after_flush() {
+    let dir = std::env::temp_dir().join("toradb_seg_sidecar_flag");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    {
+        let mut dag = DagRunner::open(&dir).expect("open");
+        dag.add_documents(
+            "docs",
+            vec![IngestDoc {
+                text: "Nikola Tesla coil".into(),
+                metadata: Default::default(),
+                vector: None,
+            }],
+        )
+        .expect("add");
+    }
+
+    assert!(persist::table_has_segment_bm25_sidecars(&dir, "docs").expect("check"));
+    assert!(!persist::table_has_segment_bm25_sidecars(&dir, "missing").expect("check"));
 
     let _ = std::fs::remove_dir_all(&dir);
 }

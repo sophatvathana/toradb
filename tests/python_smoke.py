@@ -40,6 +40,35 @@ def test_hybrid_schema_builder():
     assert papers is not None
 
 
+def test_stream_search_pagination():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_stream_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                "Nikola Tesla alternating current motor",
+                "Nikola Tesla wireless power",
+                "Nikola Tesla coil invention",
+                "Marie Curie radioactivity",
+                "Marie Curie Nobel prize",
+            ]
+        )
+        from toradb.table import stream_search
+
+        batches = list(stream_search(t, "Nikola Tesla", batch_size=2))
+        assert len(batches) >= 2
+        ids = []
+        for batch in batches:
+            ids.extend(list(batch.to_pandas()["id"]))
+        assert len(ids) >= 3
+        assert len(ids) == len(set(ids))
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_dense_vector_search():
     import shutil
 

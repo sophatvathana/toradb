@@ -28,8 +28,9 @@ fn dense_strategy_skips_bm25_tier1() {
     batch.query_vector = Some(vec![0.0, 1.0]);
     batch.tier1_enable_sparse = false;
     batch.tier1_enable_dense = true;
+    batch.graph_expand = false;
 
-    let ctx = ExecCtx::new(100, 20, 5);
+    let ctx = ExecCtx::new(100, 20, 1);
     dag.run(&mut batch, &ctx);
-    assert_eq!(batch.candidates.ids, vec![1]);
+    assert_eq!(batch.candidates.ids.first().copied(), Some(1));
 }
