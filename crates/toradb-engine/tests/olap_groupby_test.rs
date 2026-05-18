@@ -135,6 +135,56 @@ fn vector_search_then_group_by_filters_docs() {
 }
 
 #[test]
+fn hybrid_sparse_vector_search_then_group_by() {
+    let dir = std::env::temp_dir().join("toradb_olap_hybrid_groupby");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let mut dag = DagRunner::open(&dir).expect("open");
+    dag.add_documents(
+        "docs",
+        vec![
+            IngestDoc {
+                text: "Nikola Tesla alternating current motor".into(),
+                metadata: [("tag".into(), "patent".into())].into(),
+                vector: Some(vec![1.0, 0.0]),
+            },
+            IngestDoc {
+                text: "Nikola Tesla wireless power transmission".into(),
+                metadata: [("tag".into(), "patent".into())].into(),
+                vector: Some(vec![0.95, 0.05]),
+            },
+            IngestDoc {
+                text: "Marie Curie radioactivity".into(),
+                metadata: [("tag".into(), "science".into())].into(),
+                vector: Some(vec![0.0, 1.0]),
+            },
+        ],
+    )
+    .expect("add");
+
+    let stmts = parse(
+        "SELECT tag, COUNT(*) FROM docs \
+         SPARSE SEARCH body BM25('Nikola Tesla') \
+         VECTOR SEARCH emb ANN([1.0, 0.0]) \
+         GROUP BY tag LIMIT 10",
+    )
+    .unwrap();
+    let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+
+    let sql_exec::SqlSelectResult::Aggregate(out) = sql_exec::run_select(&mut dag, sel).unwrap()
+    else {
+        panic!("aggregate");
+    };
+    assert_eq!(out.group_keys.len(), 1);
+    assert_eq!(out.group_keys[0], "patent");
+    assert!(out.values[0] >= 1.0);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn sum_aggregate_on_numeric_metadata() {
     let dir = std::env::temp_dir().join("toradb_olap_sum");
     let _ = std::fs::remove_dir_all(&dir);
