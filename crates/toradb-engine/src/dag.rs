@@ -58,7 +58,7 @@ impl DagRunner {
         }
         self.ensure_table(table);
         let since_id = self.retrieval.store.next_id(table);
-        let n = self.segments.len() as u32;
+        let n = self.segment_parallelism(table);
         let added = self
             .retrieval
             .store
@@ -75,6 +75,16 @@ impl DagRunner {
 
     pub fn vector_dim(&self, table: &str) -> Option<usize> {
         self.retrieval.store.vector_dim(table)
+    }
+
+    fn segment_parallelism(&self, table: &str) -> u32 {
+        if let Some(ref path) = self.db_path {
+            persist::table_segment_count(path.as_path(), table)
+                .unwrap_or(persist::DEFAULT_SEGMENT_PARALLELISM)
+        } else {
+            self.segments.len() as u32
+        }
+        .max(1)
     }
 
     pub fn db_path(&self) -> Option<&std::path::Path> {
@@ -125,8 +135,9 @@ impl DagRunner {
                 .unwrap_or(false);
             if run_segments {
                 let query = batch.query.clone();
-                let scheduler = SegmentScheduler::new(4);
-                let seg_merged = scheduler.run_per_segment(&self.segments, |seg| {
+                let num_segments = self.segment_parallelism(&table);
+                let scheduler = SegmentScheduler::new(num_segments as usize);
+                let seg_merged = scheduler.run_for_segments(num_segments, |seg| {
                     self.retrieval
                         .segment_candidates(&table, seg, &query, ctx)
                 });

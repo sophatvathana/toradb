@@ -58,6 +58,7 @@ fn table_has_segment_bm25_sidecars_after_flush() {
 
     assert!(persist::table_has_segment_bm25_sidecars(&dir, "docs").expect("check"));
     assert!(!persist::table_has_segment_bm25_sidecars(&dir, "missing").expect("check"));
+    assert!(persist::table_segment_count(&dir, "docs").expect("count") >= 1);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

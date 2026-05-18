@@ -7,8 +7,20 @@ use toradb_storage::columnar::{
     read_segment, write_segment, ColumnarDoc, TableManifestFile,
 };
 
+pub const DEFAULT_SEGMENT_PARALLELISM: u32 = 4;
+
 fn num_segments_hint(segments_len: usize) -> u32 {
-    (segments_len.max(4)) as u32
+    segments_len.max(DEFAULT_SEGMENT_PARALLELISM as usize) as u32
+}
+
+/// Segment-parallel fan-out for a table (manifest segment count, minimum 4).
+pub fn table_segment_count(base: &Path, table: &str) -> Result<u32, String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(DEFAULT_SEGMENT_PARALLELISM);
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    Ok(num_segments_hint(manifest.segments.len()))
 }
 
 fn ingest_to_columnar(id: u64, doc: &IngestDoc) -> ColumnarDoc {

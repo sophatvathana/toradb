@@ -12,18 +12,25 @@ impl SegmentScheduler {
         Self { workers: workers.max(1) }
     }
 
-    pub fn run_per_segment<F>(&self, segments: &SegmentManager, mut f: F) -> CandidateSet
+    pub fn run_for_segments<F>(&self, num_segments: u32, mut f: F) -> CandidateSet
     where
         F: FnMut(u32) -> CandidateSet,
     {
         let mut merged = CandidateSet::with_capacity(1024);
-        for seg in 0..segments.len() as u32 {
+        for seg in 0..num_segments.max(1) {
             let local = f(seg);
             for (i, id) in local.ids.iter().enumerate() {
                 merged.push(*id, local.scores[i]);
             }
         }
         merged
+    }
+
+    pub fn run_per_segment<F>(&self, segments: &SegmentManager, f: F) -> CandidateSet
+    where
+        F: FnMut(u32) -> CandidateSet,
+    {
+        self.run_for_segments(segments.len() as u32, f)
     }
 
     pub fn local_top_k(candidates: &mut CandidateSet, k: usize) {
