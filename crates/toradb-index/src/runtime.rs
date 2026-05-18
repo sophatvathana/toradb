@@ -77,12 +77,12 @@ impl RetrievalRuntime {
         if table.is_empty() {
             return;
         }
-        let depth = if batch.graph_expand {
-            batch.graph_depth.max(1)
+        let expanded = if batch.graph_expand {
+            let depth = batch.graph_depth.max(1);
+            graph_expand::expand(&self.store, table, &batch.candidates, depth)
         } else {
-            1
+            CandidateSet::default()
         };
-        let expanded = graph_expand::expand(&self.store, table, &batch.candidates, depth);
         let refined = acorn::refine(
             &self.store,
             table,
