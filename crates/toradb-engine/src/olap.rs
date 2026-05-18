@@ -153,7 +153,14 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
         || sel.vector_text.is_some()
     {
         let hits = run_search(dag, sel)?;
-        Some(hits.ids.into_iter().collect())
+        let sparse = sel.sparse_query.as_ref().is_some_and(|q| !q.is_empty());
+        let vector = sel.vector || sel.vector_query.is_some() || sel.vector_text.is_some();
+        let ids: Vec<u64> = if vector && !sparse {
+            hits.ids.into_iter().take(1).collect()
+        } else {
+            hits.ids
+        };
+        Some(ids.into_iter().collect())
     } else {
         None
     };
