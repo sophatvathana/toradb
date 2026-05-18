@@ -376,6 +376,55 @@ def test_llamaindex_adapter_hybrid():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_add_arrow_hybrid_embeddings():
+    pa = pytest.importorskip("pyarrow")
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_arrow_hybrid_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("hybrid", mode="hybrid")
+        table = pa.table(
+            {
+                "text": ["Nikola Tesla coil", "Marie Curie radiation"],
+                "embedding": [[1.0, 0.0], [0.0, 1.0]],
+                "tag": ["patent", "science"],
+            }
+        )
+        from toradb.ingest import add_arrow
+
+        assert add_arrow(t, table) == 2
+        frame = t.search(
+            "query",
+            top_k=1,
+            strategy="dense",
+            query_vector=[0.95, 0.05],
+        ).to_pandas()
+        assert frame["id"][0] == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_langchain_metadata():
+    import shutil
+
+    from toradb.integrations import ToraDBVectorStore
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_lc_meta_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("lc", mode="text")
+        store = ToraDBVectorStore.from_table(t)
+        store.add_texts(
+            ["Nikola Tesla motors"],
+            metadatas=[{"tag": "patent"}],
+        )
+        agg = db.sql("SELECT tag, COUNT(*) FROM lc GROUP BY tag").to_pandas()
+        assert dict(zip(agg["tag"], agg["count"]))["patent"] == 1.0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_langchain_adapter():
     import shutil
 

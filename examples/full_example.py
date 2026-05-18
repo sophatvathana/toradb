@@ -225,6 +225,19 @@ def main() -> None:
         "SPARSE SEARCH body BM25('Nikola Tesla') GROUP BY tag"
     ).to_pandas()
     print("Search then GROUP BY tag:", dict(zip(hybrid["tag"], hybrid["count"])))
+    try:
+        hybrid_vec = db.sql(
+            "SELECT tag, COUNT(*) FROM papers "
+            "SPARSE SEARCH title BM25('Tesla coil') "
+            "VECTOR SEARCH embedding ANN([0.9, 0.1, 0.0, 0.0]) "
+            "GROUP BY tag"
+        ).to_pandas()
+        print(
+            "Hybrid sparse+vector GROUP BY:",
+            dict(zip(hybrid_vec["tag"], hybrid_vec["count"])),
+        )
+    except Exception as exc:
+        print(f"Hybrid SQL analytics skipped: {exc}")
 
     section("14. SQL DDL")
     print(db.sql("CREATE TABLE logs USING text"))
