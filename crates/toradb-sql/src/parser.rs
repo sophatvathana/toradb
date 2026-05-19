@@ -282,6 +282,18 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             out.push(Stmt::ShowTables);
             continue;
         }
+        if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "DESCRIBE" || k == "DESC") {
+            i += 1;
+            let name = match tokens.get(i) {
+                Some(Token::Ident(n)) => {
+                    i += 1;
+                    n.to_lowercase()
+                }
+                _ => return Err("table name after DESCRIBE".into()),
+            };
+            out.push(Stmt::Describe { name });
+            continue;
+        }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "SELECT") {
             i += 1;
             let select_items = parse_select_exprs(&tokens, &mut i)?;
