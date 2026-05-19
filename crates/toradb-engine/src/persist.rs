@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use memmap2::MmapOptions;
+use toradb_index::dense::vector_codec;
 use toradb_index::sparse::bm25_codec;
-use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc};
+use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
 use toradb_storage::columnar::{
     read_segment, write_segment, ColumnarDoc, TableManifestFile,
 };
@@ -58,10 +60,27 @@ fn segment_bm25_json_path(base: &Path, table: &str, segment_parquet: &str) -> Pa
     indexes_dir(base, table).join(format!("{stem}.bm25.json"))
 }
 
+fn table_vectors_bin_path(base: &Path, table: &str) -> PathBuf {
+    indexes_dir(base, table).join("vectors.bin")
+}
+
+fn segment_vectors_bin_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
+    let stem = segment_parquet
+        .strip_suffix(".parquet")
+        .unwrap_or(segment_parquet);
+    indexes_dir(base, table).join(format!("{stem}.vectors.bin"))
+}
+
 fn load_snapshot_mmap(path: &Path) -> Result<Bm25Snapshot, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mmap = unsafe { MmapOptions::new().map(&file).map_err(|e| e.to_string())? };
     bm25_codec::decode_snapshot(&mmap)
+}
+
+fn load_vector_snapshot_mmap(path: &Path) -> Result<VectorSnapshot, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mmap = unsafe { MmapOptions::new().map(&file).map_err(|e| e.to_string())? };
+    vector_codec::decode_snapshot(&mmap)
 }
 
 fn load_snapshot_json(path: &Path) -> Result<Bm25Snapshot, String> {
@@ -83,6 +102,79 @@ pub fn save_segment_bm25_sidecar(
         &segment_bm25_bin_path(base, table, segment_parquet),
         snap,
     )
+}
+
+pub fn save_table_vector_sidecar(
+    base: &Path,
+    table: &str,
+    snap: &VectorSnapshot,
+) -> Result<(), String> {
+    vector_codec::write_snapshot_file(&table_vectors_bin_path(base, table), snap)
+}
+
+pub fn save_segment_vector_sidecar(
+    base: &Path,
+    table: &str,
+    segment_parquet: &str,
+    snap: &VectorSnapshot,
+) -> Result<(), String> {
+    vector_codec::write_snapshot_file(
+        &segment_vectors_bin_path(base, table, segment_parquet),
+        snap,
+    )
+}
+
+pub fn load_table_vector_sidecar(base: &Path, table: &str) -> Result<Option<VectorSnapshot>, String> {
+    let bin = table_vectors_bin_path(base, table);
+    if bin.exists() {
+        return load_vector_snapshot_mmap(&bin).map(Some);
+    }
+    Ok(None)
+}
+
+fn load_segment_vector_sidecar(
+    base: &Path,
+    table: &str,
+    segment_parquet: &str,
+) -> Result<Option<VectorSnapshot>, String> {
+    let bin = segment_vectors_bin_path(base, table, segment_parquet);
+    if bin.exists() {
+        return load_vector_snapshot_mmap(&bin).map(Some);
+    }
+    Ok(None)
+}
+
+/// True when at least one on-disk segment has a vector sidecar.
+pub fn table_has_segment_vector_sidecars(base: &Path, table: &str) -> Result<bool, String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(false);
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    for seg in &manifest.segments {
+        if segment_vectors_bin_path(base, table, seg).exists() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn load_merged_segment_vector_map(
+    base: &Path,
+    table: &str,
+) -> Result<HashMap<u64, Vec<f32>>, String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(HashMap::new());
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    let mut merged = HashMap::new();
+    for seg in &manifest.segments {
+        if let Some(snap) = load_segment_vector_sidecar(base, table, seg)? {
+            merged.extend(snap.to_map());
+        }
+    }
+    Ok(merged)
 }
 
 pub fn load_bm25_sidecar(base: &Path, table: &str) -> Result<Option<Bm25Snapshot>, String> {
@@ -156,6 +248,40 @@ fn snapshot_for_columnar_docs(docs: &[ColumnarDoc]) -> Bm25Snapshot {
     Bm25Snapshot::from_documents(docs.iter().map(|d| (d.id, d.text.as_str())))
 }
 
+fn snapshot_for_columnar_vectors(docs: &[ColumnarDoc]) -> Option<VectorSnapshot> {
+    let mut pairs = Vec::new();
+    let mut dim = None;
+    for doc in docs {
+        let Some(emb) = doc.embedding.as_ref() else {
+            continue;
+        };
+        let d = *dim.get_or_insert(emb.len());
+        if d != emb.len() {
+            return None;
+        }
+        pairs.push((doc.id, emb.clone()));
+    }
+    let dim = dim?;
+    VectorSnapshot::from_pairs(dim as u32, &pairs).ok()
+}
+
+fn vector_snapshot_from_store(store: &CorpusStore, table: &str) -> Option<VectorSnapshot> {
+    let mut pairs = Vec::new();
+    let mut dim = None;
+    for (id, doc) in store.all_documents(table) {
+        let Some(emb) = doc.vector else {
+            continue;
+        };
+        let d = *dim.get_or_insert(emb.len());
+        if d != emb.len() {
+            return None;
+        }
+        pairs.push((id, emb));
+    }
+    let dim = dim?;
+    VectorSnapshot::from_pairs(dim as u32, &pairs).ok()
+}
+
 /// Read all documents for a table from on-disk Parquet segments.
 pub fn read_table_documents(base: &Path, table: &str) -> Result<Vec<(u64, IngestDoc)>, String> {
     let manifest_path = TableManifestFile::path_for_table(base, table);
@@ -198,6 +324,15 @@ pub fn table_documents(
         return read_table_documents(base, table);
     }
     Ok(Vec::new())
+}
+
+/// Remove a table directory from disk.
+pub fn drop_table(base: &Path, table: &str) -> Result<(), String> {
+    let dir = base.join(table);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Table names under a database path (directories with a manifest.json).
@@ -268,20 +403,36 @@ pub fn load_table(
     let manifest = TableManifestFile::load(&manifest_path)?;
     let seg_dir = TableManifestFile::segments_dir(base, table);
     let num_segments = num_segments_hint(segment_count.max(manifest.segments.len()));
+    let merged_vectors = load_merged_segment_vector_map(base, table)?;
+    let table_vectors = if merged_vectors.is_empty() {
+        load_table_vector_sidecar(base, table)?
+            .map(|s| s.to_map())
+            .unwrap_or_default()
+    } else {
+        merged_vectors
+    };
     let mut n = 0usize;
     for seg in &manifest.segments {
         let path = seg_dir.join(seg);
         if !path.exists() {
             continue;
         }
+        let seg_vectors = load_segment_vector_sidecar(base, table, seg)?
+            .map(|s| s.to_map())
+            .unwrap_or_default();
         for doc in read_segment(&path)? {
+            let embedding = seg_vectors
+                .get(&doc.id)
+                .or_else(|| table_vectors.get(&doc.id))
+                .cloned()
+                .or(doc.embedding);
             store.insert_stored(
                 table,
                 doc.id,
                 IngestDoc {
                     text: doc.text,
                     metadata: doc.metadata,
-                    vector: doc.embedding,
+                    vector: embedding,
                 },
                 num_segments,
             );
@@ -309,6 +460,9 @@ pub fn flush_batch(base: &Path, table: &str, docs: &[ColumnarDoc]) -> Result<(),
     write_segment(&seg_path, docs)?;
     let seg_snap = snapshot_for_columnar_docs(docs);
     save_segment_bm25_sidecar(base, table, &seg_name, &seg_snap)?;
+    if let Some(vec_snap) = snapshot_for_columnar_vectors(docs) {
+        save_segment_vector_sidecar(base, table, &seg_name, &vec_snap)?;
+    }
     manifest.push_segment(seg_name);
     manifest.save(&manifest_path)?;
     Ok(())
@@ -328,6 +482,9 @@ pub fn flush_new_docs(
     flush_batch(base, table, &columnar)?;
     if let Some(snap) = store.bm25_snapshot(table) {
         save_bm25_sidecar(base, table, &snap)?;
+    }
+    if let Some(snap) = vector_snapshot_from_store(store, table) {
+        save_table_vector_sidecar(base, table, &snap)?;
     }
     Ok(())
 }
