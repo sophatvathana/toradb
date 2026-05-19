@@ -79,6 +79,12 @@ impl Database {
     pub(crate) fn vector_dim(&self, table: &str) -> Option<usize> {
         self.dag.vector_dim(table)
     }
+
+    fn list_table_names(&self) -> PyResult<Vec<String>> {
+        self.dag
+            .list_tables()
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))
+    }
 }
 
 #[pymethods]
@@ -126,6 +132,17 @@ impl Database {
         slf.ensure_table(name);
         let db = slf.into_pyobject(py)?.unbind();
         Ok(super::table::Table::new(name.to_string(), db))
+    }
+
+    /// Open an existing table (loaded on `Database.open`); does not run CREATE TABLE DDL.
+    fn table(mut slf: PyRefMut<'_, Self>, py: Python<'_>, name: &str) -> PyResult<super::table::Table> {
+        slf.ensure_table(name);
+        let db = slf.into_pyobject(py)?.unbind();
+        Ok(super::table::Table::new(name.to_string(), db))
+    }
+
+    fn list_tables(slf: PyRef<'_, Self>) -> PyResult<Vec<String>> {
+        slf.list_table_names()
     }
 
     fn __repr__(&self) -> String {
