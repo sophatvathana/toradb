@@ -284,6 +284,10 @@ impl CorpusStore {
         self.tables.entry(name.to_string()).or_default()
     }
 
+    pub fn remove_table(&mut self, name: &str) {
+        self.tables.remove(name);
+    }
+
     pub fn table(&self, name: &str) -> Option<&TableCorpus> {
         self.tables.get(name)
     }

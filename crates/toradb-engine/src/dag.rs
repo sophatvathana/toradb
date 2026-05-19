@@ -73,6 +73,14 @@ impl DagRunner {
         self.retrieval.store.ensure_table(table);
     }
 
+    pub fn drop_table(&mut self, table: &str) -> Result<(), String> {
+        self.retrieval.store.remove_table(table);
+        if let Some(ref path) = self.db_path {
+            persist::drop_table(path.as_path(), table)?;
+        }
+        Ok(())
+    }
+
     pub fn vector_dim(&self, table: &str) -> Option<usize> {
         self.retrieval.store.vector_dim(table)
     }
