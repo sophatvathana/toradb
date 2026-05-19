@@ -17,11 +17,13 @@ Commands:
   smoke              Quick ingest + search sanity check
   query PATH TABLE Q Run BM25 search and print ranked ids
   sql PATH QUERY     Run a SQL statement (search or analytics)
+  tables PATH        List tables with on-disk manifests
 
 Examples:
   toradb smoke
   toradb query ./my_db docs "Nikola Tesla motor"
-  toradb sql ./my_db "SELECT tag, COUNT(*) FROM docs GROUP BY tag"
+  toradb sql ./my_db "SELECT tag, COUNT(*) FROM articles GROUP BY tag"
+  toradb tables ./examples/_demo_db
 """
     )
 
@@ -64,7 +66,7 @@ def cmd_query(db_path: str, table: str, query: str, top_k: int) -> int:
     import toradb
 
     db = toradb.local(db_path)
-    results = db.create_table(table, mode="text").search(query, top_k=top_k)
+    results = db.table(table).search(query, top_k=top_k)
     frame = results.to_pandas()
     if len(frame["id"]) == 0:
         print("no results")
@@ -124,6 +126,16 @@ def main(argv: list[str] | None = None) -> int:
             print("toradb query requires a query string", file=sys.stderr)
             return 2
         return cmd_query(args.path, args.table, q, args.top_k)
+
+    if args.command == "tables":
+        if not args.path:
+            _print_usage()
+            return 2
+        import toradb
+
+        for name in toradb.local(args.path).list_tables():
+            print(name)
+        return 0
 
     if args.command == "sql":
         if not args.path:
