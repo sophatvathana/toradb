@@ -338,6 +338,38 @@ def test_list_tables_and_table_accessor():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_sql_describe_table():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_describe_"))
+    try:
+        db = toradb.local(str(path))
+        db.create_table("docs", mode="text").add(["one", "two"])
+        out = db.sql("DESCRIBE docs")
+        assert isinstance(out, str)
+        assert "table: docs" in out
+        assert "rows: 2" in out
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_sql_show_tables():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_show_tables_"))
+    try:
+        db = toradb.local(str(path))
+        db.create_table("alpha", mode="text").add(["one"])
+        db.create_table("beta", mode="text").add(["two", "three"])
+        frame = db.sql("SHOW TABLES").to_pandas()
+        assert set(frame["table"]) == {"alpha", "beta"}
+        rows = dict(zip(frame["table"], frame["rows"]))
+        assert rows["alpha"] == 1.0
+        assert rows["beta"] == 2.0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_persist_reload_search():
     import shutil
 
