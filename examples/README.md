@@ -25,4 +25,7 @@ CLI after install:
 toradb smoke
 toradb query ./examples/_demo_db articles "Nikola Tesla motor"
 toradb sql ./examples/_demo_db "SELECT tag, COUNT(*) FROM articles GROUP BY tag"
+toradb tables ./examples/_demo_db
 ```
+
+Use `db.table("articles")` (not `create_table`) to query tables already on disk.

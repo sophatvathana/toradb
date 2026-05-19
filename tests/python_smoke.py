@@ -321,6 +321,23 @@ def test_sql_sparse_search():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_list_tables_and_table_accessor():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_tables_"))
+    try:
+        db = toradb.local(str(path))
+        db.create_table("docs", mode="text").add(["Nikola Tesla motor"])
+        assert "docs" in db.list_tables()
+
+        del db
+        db2 = toradb.local(str(path))
+        frame = db2.table("docs").search("Nikola Tesla", top_k=3).to_pandas()
+        assert len(frame["id"]) > 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_persist_reload_search():
     import shutil
 
@@ -332,8 +349,7 @@ def test_persist_reload_search():
         del db
 
         db2 = toradb.local(str(path))
-        t2 = db2.create_table("docs", mode="text")
-        results = t2.search("Nikola Tesla alternating current", top_k=5)
+        results = db2.table("docs").search("Nikola Tesla alternating current", top_k=5)
         frame = results.to_pandas()
         assert len(frame["id"]) > 0
         assert frame["id"][0] == 0
