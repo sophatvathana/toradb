@@ -7,6 +7,15 @@ fn parses_show_tables() {
 }
 
 #[test]
+fn parses_drop_table() {
+    let stmts = parse("DROP TABLE articles").unwrap();
+    assert!(matches!(
+        stmts.as_slice(),
+        [Stmt::DropTable { name }] if name == "articles"
+    ));
+}
+
+#[test]
 fn parses_describe_table() {
     let stmts = parse("DESCRIBE articles").unwrap();
     assert!(matches!(

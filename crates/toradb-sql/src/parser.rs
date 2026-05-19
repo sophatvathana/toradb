@@ -277,6 +277,20 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 continue;
             }
         }
+        if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "DROP") {
+            if matches!(tokens.get(i + 1), Some(Token::Ident(k)) if k == "TABLE") {
+                i += 2;
+                let name = match tokens.get(i) {
+                    Some(Token::Ident(n)) => {
+                        i += 1;
+                        n.to_lowercase()
+                    }
+                    _ => return Err("table name after DROP TABLE".into()),
+                };
+                out.push(Stmt::DropTable { name });
+                continue;
+            }
+        }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "SHOW") {
             i += 2;
             out.push(Stmt::ShowTables);
