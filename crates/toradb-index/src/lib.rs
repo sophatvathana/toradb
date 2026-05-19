@@ -8,5 +8,6 @@ pub mod runtime;
 pub mod sparse;
 
 pub use corpus::{CorpusStore, IngestDoc};
+pub use dense::vector_codec::VectorSnapshot;
 pub use sparse::bm25::Bm25Snapshot;
 pub use runtime::RetrievalRuntime;
