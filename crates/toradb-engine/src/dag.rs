@@ -91,6 +91,13 @@ impl DagRunner {
         self.db_path.as_ref().map(|p| p.as_path())
     }
 
+    pub fn list_tables(&self) -> Result<Vec<String>, String> {
+        match self.db_path.as_ref() {
+            Some(p) => persist::list_tables(p.as_path()),
+            None => Ok(Vec::new()),
+        }
+    }
+
     pub fn table_documents(
         &self,
         table: &str,

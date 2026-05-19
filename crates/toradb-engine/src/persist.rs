@@ -200,6 +200,26 @@ pub fn table_documents(
     Ok(Vec::new())
 }
 
+/// Table names under a database path (directories with a manifest.json).
+pub fn list_tables(base: &Path) -> Result<Vec<String>, String> {
+    if !base.exists() {
+        return Ok(Vec::new());
+    }
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(base).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if TableManifestFile::path_for_table(base, &name).exists() {
+            names.push(name);
+        }
+    }
+    names.sort_unstable();
+    Ok(names)
+}
+
 pub fn load_all(base: &Path, store: &mut CorpusStore, segment_count: usize) -> Result<usize, String> {
     if !base.exists() {
         return Ok(0);
