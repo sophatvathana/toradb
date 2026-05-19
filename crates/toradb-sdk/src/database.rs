@@ -61,6 +61,13 @@ impl Database {
                     self.ensure_table(&table);
                     return Ok(SqlOutcome::Message(format!("ok: created table {table}")));
                 }
+                Stmt::DropTable { name } => {
+                    let table = name.to_lowercase();
+                    self.dag
+                        .drop_table(&table)
+                        .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))?;
+                    return Ok(SqlOutcome::Message(format!("ok: dropped table {table}")));
+                }
                 Stmt::Describe { name } => {
                     let table = name.to_lowercase();
                     let row_count = self
