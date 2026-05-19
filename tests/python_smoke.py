@@ -353,6 +353,22 @@ def test_sql_describe_table():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_sql_drop_table():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_drop_table_"))
+    try:
+        db = toradb.local(str(path))
+        db.create_table("gone", mode="text").add(["bye"])
+        assert "gone" in db.list_tables()
+        msg = db.sql("DROP TABLE gone")
+        assert isinstance(msg, str)
+        assert "dropped table gone" in msg
+        assert "gone" not in db.list_tables()
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_sql_show_tables():
     import shutil
 
