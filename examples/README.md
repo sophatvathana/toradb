@@ -28,4 +28,11 @@ toradb sql ./examples/_demo_db "SELECT tag, COUNT(*) FROM articles GROUP BY tag"
 toradb tables ./examples/_demo_db
 ```
 
+SQL catalog helpers (return analytics dict or text):
+
+```bash
+toradb sql ./examples/_demo_db "SHOW TABLES"
+toradb sql ./examples/_demo_db "DESCRIBE articles"
+```
+
 Use `db.table("articles")` (not `create_table`) to query tables already on disk.
