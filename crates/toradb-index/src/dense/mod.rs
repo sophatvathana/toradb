@@ -1,5 +1,6 @@
 pub mod diskann;
 pub mod hnsw;
+pub mod hnsw_codec;
 pub mod hnsw_index;
 pub mod query_embed;
 pub mod vector_codec;

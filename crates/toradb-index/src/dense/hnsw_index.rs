@@ -9,7 +9,7 @@ const M: usize = 16;
 const EF_SEARCH: usize = 64;
 const HNSW_MIN_DOCS: usize = 32;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct HnswIndex {
     dim: usize,
     ids: Vec<DocId>,
