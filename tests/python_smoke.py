@@ -353,6 +353,21 @@ def test_sql_describe_table():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_sql_create_index():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_create_index_"))
+    try:
+        db = toradb.local(str(path))
+        db.create_table("papers", mode="text").add(["Nikola Tesla motor patents"])
+        msg = db.sql("CREATE INDEX text_idx ON papers (text) USING BM25")
+        assert isinstance(msg, str)
+        assert "created index TEXT_IDX" in msg
+        assert "USING BM25" in msg
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_sql_drop_table():
     import shutil
 
