@@ -34,6 +34,7 @@ SQL catalog helpers (return analytics dict or text):
 toradb sql ./examples/_demo_db "SHOW TABLES"
 toradb sql ./examples/_demo_db "DESCRIBE articles"
 toradb sql ./examples/_demo_db "DROP TABLE logs"
+toradb sql ./examples/_demo_db "CREATE INDEX text_idx ON articles (text) USING BM25"
 ```
 
 Use `db.table("articles")` (not `create_table`) to query tables already on disk.
