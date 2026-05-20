@@ -105,7 +105,12 @@ impl DagRunner {
             other => return Err(format!("unsupported index type {other}")),
         }
         if let Some(ref path) = self.db_path {
-            persist::save_table_indexes(path.as_path(), table, &self.retrieval.store)?;
+            let base = path.as_path();
+            persist::save_table_indexes(base, table, &self.retrieval.store)?;
+            let kind = using.to_uppercase();
+            let sparse = matches!(kind.as_str(), "BM25" | "SPARSE" | "TEXT" | "HYBRID");
+            let vectors = matches!(kind.as_str(), "HNSW" | "VECTOR" | "DENSE" | "ANN" | "HYBRID");
+            persist::rebuild_segment_sidecars(base, table, sparse, vectors)?;
         }
         Ok(())
     }

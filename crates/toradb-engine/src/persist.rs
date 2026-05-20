@@ -529,6 +529,41 @@ pub fn flush_new_docs(
     Ok(())
 }
 
+/// Rebuild per-segment BM25 and/or vector sidecars from on-disk Parquet segments.
+pub fn rebuild_segment_sidecars(
+    base: &Path,
+    table: &str,
+    sparse: bool,
+    vectors: bool,
+) -> Result<(), String> {
+    if !sparse && !vectors {
+        return Ok(());
+    }
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(());
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    let seg_dir = TableManifestFile::segments_dir(base, table);
+    for seg in &manifest.segments {
+        let path = seg_dir.join(seg);
+        if !path.exists() {
+            continue;
+        }
+        let docs = read_segment(&path)?;
+        if sparse {
+            let snap = snapshot_for_columnar_docs(&docs);
+            save_segment_bm25_sidecar(base, table, seg, &snap)?;
+        }
+        if vectors {
+            if let Some(snap) = snapshot_for_columnar_vectors(&docs) {
+                save_segment_vector_sidecar(base, table, seg, &snap)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Write table-level BM25, vector, and HNSW sidecars from the in-memory corpus.
 pub fn save_table_indexes(base: &Path, table: &str, store: &CorpusStore) -> Result<(), String> {
     if let Some(snap) = store.bm25_snapshot(table) {

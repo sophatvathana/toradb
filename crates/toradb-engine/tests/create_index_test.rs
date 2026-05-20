@@ -1,4 +1,4 @@
-use toradb_engine::DagRunner;
+use toradb_engine::{persist, DagRunner};
 use toradb_index::IngestDoc;
 
 #[test]
@@ -26,6 +26,10 @@ fn create_index_hnsw_persists_sidecar() {
     }
 
     assert!(dir.join("papers/indexes/hnsw.bin").exists());
+    assert!(
+        dir.join("papers/indexes/seg_00001.vectors.bin").exists(),
+        "CREATE INDEX HNSW should rebuild per-segment vector sidecars"
+    );
 
     let dag2 = DagRunner::open(&dir).expect("reopen");
     let mut batch = toradb_core::Batch::new();
@@ -67,6 +71,11 @@ fn create_index_bm25_rebuilds_sparse() {
     }
 
     assert!(dir.join("docs/indexes/bm25.bin").exists());
+    assert!(
+        dir.join("docs/indexes/seg_00001.bm25.bin").exists(),
+        "CREATE INDEX BM25 should rebuild per-segment sidecars"
+    );
+    assert!(persist::table_has_segment_bm25_sidecars(&dir, "docs").expect("check"));
 
     let dag2 = DagRunner::open(&dir).expect("reopen");
     let mut batch = toradb_core::Batch::new();
