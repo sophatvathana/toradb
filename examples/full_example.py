@@ -242,6 +242,8 @@ def main() -> None:
     section("14. SQL DDL")
     print(db.sql("CREATE TABLE logs USING text"))
     print(db.sql("SHOW TABLES"))
+    print(db.sql("DESCRIBE articles"))
+    db.sql("DROP TABLE logs")
 
     section("15. Export results (pandas-style dict)")
     results = articles.search("Nikola Tesla", top_k=3)
