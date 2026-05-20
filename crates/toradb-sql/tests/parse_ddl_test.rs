@@ -7,6 +7,24 @@ fn parses_show_tables() {
 }
 
 #[test]
+fn parses_create_index() {
+    let stmts = parse("CREATE INDEX emb_idx ON papers (embedding) USING HNSW").unwrap();
+    assert!(matches!(
+        stmts.as_slice(),
+        [Stmt::CreateIndex(idx)]
+            if idx.name == "EMB_IDX"
+                && idx.table == "papers"
+                && idx.column == "EMBEDDING"
+                && idx.using == "HNSW"
+    ));
+    let stmts = parse("CREATE INDEX text_idx ON docs (body) USING BM25").unwrap();
+    assert!(matches!(
+        stmts.as_slice(),
+        [Stmt::CreateIndex(idx)] if idx.using == "BM25"
+    ));
+}
+
+#[test]
 fn parses_drop_table() {
     let stmts = parse("DROP TABLE articles").unwrap();
     assert!(matches!(

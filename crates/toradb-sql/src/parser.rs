@@ -276,6 +276,57 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 out.push(Stmt::CreateTable(CreateTableStmt { name, mode, columns }));
                 continue;
             }
+            if matches!(tokens.get(i + 1), Some(Token::Ident(k)) if k == "INDEX") {
+                i += 2;
+                let name = match tokens.get(i) {
+                    Some(Token::Ident(n)) => {
+                        i += 1;
+                        n.clone()
+                    }
+                    _ => return Err("index name after CREATE INDEX".into()),
+                };
+                if !matches!(tokens.get(i), Some(Token::Ident(k)) if k == "ON") {
+                    return Err("CREATE INDEX requires ON table".into());
+                }
+                i += 1;
+                let table = match tokens.get(i) {
+                    Some(Token::Ident(n)) => {
+                        i += 1;
+                        n.to_lowercase()
+                    }
+                    _ => return Err("table name after ON".into()),
+                };
+                if !matches!(tokens.get(i), Some(Token::LParen)) {
+                    return Err("CREATE INDEX requires (column)".into());
+                }
+                i += 1;
+                let column = match tokens.get(i) {
+                    Some(Token::Ident(n)) => {
+                        i += 1;
+                        n.clone()
+                    }
+                    _ => return Err("column name in CREATE INDEX".into()),
+                };
+                if !matches!(tokens.get(i), Some(Token::RParen)) {
+                    return Err("CREATE INDEX missing closing paren".into());
+                }
+                i += 1;
+                let mut using = "HNSW".into();
+                if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "USING") {
+                    i += 1;
+                    if let Some(Token::Ident(m)) = tokens.get(i) {
+                        using = m.clone();
+                        i += 1;
+                    }
+                }
+                out.push(Stmt::CreateIndex(CreateIndexStmt {
+                    name,
+                    table,
+                    column,
+                    using,
+                }));
+                continue;
+            }
         }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "DROP") {
             if matches!(tokens.get(i + 1), Some(Token::Ident(k)) if k == "TABLE") {
