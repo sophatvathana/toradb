@@ -83,6 +83,19 @@ impl TableCorpus {
         self.hnsw = HnswIndex::build(id_vecs, vectors);
     }
 
+    pub fn restore_hnsw(&mut self, index: HnswIndex) {
+        if should_use_hnsw(index.len()) {
+            self.hnsw = Some(index);
+        }
+    }
+
+    pub fn hnsw_snapshot(&self) -> Option<HnswIndex> {
+        self.hnsw
+            .as_ref()
+            .filter(|h| should_use_hnsw(h.len()))
+            .cloned()
+    }
+
     pub fn vector_search(&self, query: &[f32], k: usize) -> CandidateSet {
         if let Some(ref h) = self.hnsw {
             if should_use_hnsw(h.len()) {
@@ -317,6 +330,14 @@ impl CorpusStore {
         if let Some(t) = self.tables.get_mut(table) {
             t.rebuild_hnsw();
         }
+    }
+
+    pub fn restore_hnsw(&mut self, table: &str, index: HnswIndex) {
+        self.ensure_table(table).restore_hnsw(index);
+    }
+
+    pub fn hnsw_snapshot(&self, table: &str) -> Option<HnswIndex> {
+        self.table(table).and_then(|t| t.hnsw_snapshot())
     }
 
     pub fn add_document_with_id(
