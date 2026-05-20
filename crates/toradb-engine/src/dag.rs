@@ -81,6 +81,35 @@ impl DagRunner {
         Ok(())
     }
 
+    pub fn create_index(&mut self, table: &str, using: &str) -> Result<(), String> {
+        let doc_count = self
+            .retrieval
+            .store
+            .table(table)
+            .map(|t| t.len())
+            .unwrap_or(0);
+        if doc_count == 0 {
+            return Err(format!("table {table} not found or has no documents"));
+        }
+        match using.to_uppercase().as_str() {
+            "BM25" | "SPARSE" | "TEXT" => {
+                self.retrieval.store.rebuild_bm25(table);
+            }
+            "HNSW" | "VECTOR" | "DENSE" | "ANN" => {
+                self.retrieval.store.rebuild_hnsw(table);
+            }
+            "HYBRID" => {
+                self.retrieval.store.rebuild_bm25(table);
+                self.retrieval.store.rebuild_hnsw(table);
+            }
+            other => return Err(format!("unsupported index type {other}")),
+        }
+        if let Some(ref path) = self.db_path {
+            persist::save_table_indexes(path.as_path(), table, &self.retrieval.store)?;
+        }
+        Ok(())
+    }
+
     pub fn vector_dim(&self, table: &str) -> Option<usize> {
         self.retrieval.store.vector_dim(table)
     }

@@ -525,6 +525,12 @@ pub fn flush_new_docs(
         .map(|(id, doc)| ingest_to_columnar(id, &doc))
         .collect();
     flush_batch(base, table, &columnar)?;
+    save_table_indexes(base, table, store)?;
+    Ok(())
+}
+
+/// Write table-level BM25, vector, and HNSW sidecars from the in-memory corpus.
+pub fn save_table_indexes(base: &Path, table: &str, store: &CorpusStore) -> Result<(), String> {
     if let Some(snap) = store.bm25_snapshot(table) {
         save_bm25_sidecar(base, table, &snap)?;
     }
