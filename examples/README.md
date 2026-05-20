@@ -33,6 +33,7 @@ SQL catalog helpers (return analytics dict or text):
 ```bash
 toradb sql ./examples/_demo_db "SHOW TABLES"
 toradb sql ./examples/_demo_db "DESCRIBE articles"
+toradb sql ./examples/_demo_db "DROP TABLE logs"
 ```
 
 Use `db.table("articles")` (not `create_table`) to query tables already on disk.
