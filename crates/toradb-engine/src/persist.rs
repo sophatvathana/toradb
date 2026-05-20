@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use memmap2::MmapOptions;
-use toradb_index::dense::vector_codec;
+use toradb_index::dense::{hnsw_codec, vector_codec};
 use toradb_index::sparse::bm25_codec;
 use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
 use toradb_storage::columnar::{
@@ -64,6 +64,10 @@ fn table_vectors_bin_path(base: &Path, table: &str) -> PathBuf {
     indexes_dir(base, table).join("vectors.bin")
 }
 
+fn table_hnsw_bin_path(base: &Path, table: &str) -> PathBuf {
+    indexes_dir(base, table).join("hnsw.bin")
+}
+
 fn segment_vectors_bin_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
     let stem = segment_parquet
         .strip_suffix(".parquet")
@@ -81,6 +85,31 @@ fn load_vector_snapshot_mmap(path: &Path) -> Result<VectorSnapshot, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mmap = unsafe { MmapOptions::new().map(&file).map_err(|e| e.to_string())? };
     vector_codec::decode_snapshot(&mmap)
+}
+
+fn load_hnsw_index_mmap(path: &Path) -> Result<toradb_index::dense::hnsw_index::HnswIndex, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mmap = unsafe { MmapOptions::new().map(&file).map_err(|e| e.to_string())? };
+    hnsw_codec::decode_index(&mmap)
+}
+
+pub fn save_table_hnsw_sidecar(
+    base: &Path,
+    table: &str,
+    index: &toradb_index::dense::hnsw_index::HnswIndex,
+) -> Result<(), String> {
+    hnsw_codec::write_index_file(&table_hnsw_bin_path(base, table), index)
+}
+
+pub fn load_table_hnsw_sidecar(
+    base: &Path,
+    table: &str,
+) -> Result<Option<toradb_index::dense::hnsw_index::HnswIndex>, String> {
+    let bin = table_hnsw_bin_path(base, table);
+    if bin.exists() {
+        return load_hnsw_index_mmap(&bin).map(Some);
+    }
+    Ok(None)
 }
 
 fn load_snapshot_json(path: &Path) -> Result<Bm25Snapshot, String> {
@@ -386,7 +415,23 @@ fn restore_bm25_index(
             save_bm25_sidecar(base, table, &snap)?;
         }
     }
-    store.rebuild_hnsw(table);
+    restore_hnsw_index(base, table, store)?;
+    Ok(())
+}
+
+fn restore_hnsw_index(
+    base: &Path,
+    table: &str,
+    store: &mut CorpusStore,
+) -> Result<(), String> {
+    if let Some(index) = load_table_hnsw_sidecar(base, table)? {
+        store.restore_hnsw(table, index);
+    } else {
+        store.rebuild_hnsw(table);
+        if let Some(index) = store.hnsw_snapshot(table) {
+            save_table_hnsw_sidecar(base, table, &index)?;
+        }
+    }
     Ok(())
 }
 
@@ -485,6 +530,9 @@ pub fn flush_new_docs(
     }
     if let Some(snap) = vector_snapshot_from_store(store, table) {
         save_table_vector_sidecar(base, table, &snap)?;
+    }
+    if let Some(index) = store.hnsw_snapshot(table) {
+        save_table_hnsw_sidecar(base, table, &index)?;
     }
     Ok(())
 }
