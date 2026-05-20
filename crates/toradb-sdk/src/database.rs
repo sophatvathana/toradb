@@ -61,6 +61,16 @@ impl Database {
                     self.ensure_table(&table);
                     return Ok(SqlOutcome::Message(format!("ok: created table {table}")));
                 }
+                Stmt::CreateIndex(idx) => {
+                    let table = idx.table.to_lowercase();
+                    self.dag
+                        .create_index(&table, &idx.using)
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                    return Ok(SqlOutcome::Message(format!(
+                        "ok: created index {} on {table} ({}) USING {}",
+                        idx.name, idx.column, idx.using
+                    )));
+                }
                 Stmt::DropTable { name } => {
                     let table = name.to_lowercase();
                     self.dag
@@ -107,7 +117,6 @@ impl Database {
                         )),
                     };
                 }
-                _ => {}
             }
         }
         self.binder
