@@ -243,6 +243,7 @@ def main() -> None:
     print(db.sql("CREATE TABLE logs USING text"))
     print(db.sql("SHOW TABLES"))
     print(db.sql("DESCRIBE articles"))
+    print(db.sql("CREATE INDEX text_idx ON articles (text) USING BM25"))
     db.sql("DROP TABLE logs")
 
     section("15. Export results (pandas-style dict)")
