@@ -30,6 +30,26 @@ impl Binder {
                         segments: vec![],
                     });
                 }
+                Stmt::CreateIndex(idx) => {
+                    let table_key = idx.table.to_uppercase();
+                    let Some(manifest) = self.catalog.get_mut(&table_key) else {
+                        continue;
+                    };
+                    match idx.using.as_str() {
+                        "BM25" | "SPARSE" | "TEXT" => {
+                            manifest.sparse_enabled = true;
+                            manifest.index_mode = IndexMode::Text;
+                        }
+                        "HNSW" | "VECTOR" | "DENSE" | "ANN" => {
+                            manifest.index_mode = IndexMode::Vector;
+                        }
+                        "HYBRID" => {
+                            manifest.sparse_enabled = true;
+                            manifest.index_mode = IndexMode::Hybrid;
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
         }
