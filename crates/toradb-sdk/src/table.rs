@@ -122,8 +122,12 @@ impl Table {
         batch.query = query.to_string();
         batch.query_vector = query_vector;
         batch.tier1_enable_sparse =
-            !matches!(strategy, Some("dense") | Some("vector") | Some("hnsw"));
-        batch.tier1_enable_dense = !matches!(strategy, Some("sparse") | Some("bm25"));
+            !matches!(
+                strategy,
+                Some("dense") | Some("vector") | Some("hnsw") | Some("diskann") | Some("ann")
+            );
+        batch.tier1_enable_dense =
+            !matches!(strategy, Some("sparse") | Some("bm25") | Some("text"));
         if batch.tier1_enable_dense && batch.query_vector.is_none() {
             if let Some(dim) = db.vector_dim(&self.name) {
                 batch.query_vector = Some(lexical_proxy_vector(query, dim));

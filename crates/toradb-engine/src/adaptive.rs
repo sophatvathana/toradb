@@ -10,7 +10,7 @@ pub fn tune_ctx(base: ExecCtx, query: &str, strategy: Option<&str>) -> ExecCtx {
         Some("sparse") | Some("bm25") => {
             ctx.tier2_budget = ctx.tier2_budget.saturating_mul(3) / 4;
         }
-        Some("dense") | Some("vector") | Some("hnsw") => {
+        Some("dense") | Some("vector") | Some("hnsw") | Some("diskann") | Some("ann") => {
             ctx.tier1_budget = ctx.tier1_budget.saturating_mul(2).min(2000);
         }
         Some("graph") | Some("hybrid") => {
