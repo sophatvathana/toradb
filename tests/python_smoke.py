@@ -436,6 +436,21 @@ def test_cli_sql_show_tables_prints_text():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_database_reindex():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_db_reindex_"))
+    try:
+        db = toradb.local(str(path))
+        db.create_table("docs", mode="text").add(["Nikola Tesla motor"])
+        msg = db.reindex("docs", using="BM25", column="text")
+        assert "reindex" in msg.lower() or "created index" in msg.lower()
+        frame = db.table("docs").search("Nikola Tesla", top_k=3).to_pandas()
+        assert len(frame["id"]) > 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_cli_reindex_command():
     import shutil
 
