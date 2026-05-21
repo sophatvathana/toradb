@@ -8,6 +8,7 @@ use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
 use toradb_storage::columnar::{
     read_segment, write_segment, ColumnarDoc, TableManifestFile,
 };
+use toradb_storage::wal;
 
 pub const DEFAULT_SEGMENT_PARALLELISM: u32 = 4;
 
@@ -490,9 +491,9 @@ pub fn load_table(
     Ok(n)
 }
 
-pub fn flush_batch(base: &Path, table: &str, docs: &[ColumnarDoc]) -> Result<(), String> {
+pub fn flush_batch(base: &Path, table: &str, docs: &[ColumnarDoc]) -> Result<String, String> {
     if docs.is_empty() {
-        return Ok(());
+        return Err("flush_batch: empty docs".into());
     }
     let manifest_path = TableManifestFile::path_for_table(base, table);
     let mut manifest = if manifest_path.exists() {
@@ -508,9 +509,10 @@ pub fn flush_batch(base: &Path, table: &str, docs: &[ColumnarDoc]) -> Result<(),
     if let Some(vec_snap) = snapshot_for_columnar_vectors(docs) {
         save_segment_vector_sidecar(base, table, &seg_name, &vec_snap)?;
     }
+    let seg_name_clone = seg_name.clone();
     manifest.push_segment(seg_name);
     manifest.save(&manifest_path)?;
-    Ok(())
+    Ok(seg_name_clone)
 }
 
 pub fn flush_new_docs(
@@ -524,7 +526,11 @@ pub fn flush_new_docs(
         .into_iter()
         .map(|(id, doc)| ingest_to_columnar(id, &doc))
         .collect();
-    flush_batch(base, table, &columnar)?;
+    if columnar.is_empty() {
+        return Ok(());
+    }
+    let segment = flush_batch(base, table, &columnar)?;
+    wal::append_flush(base, table, &segment, since_id, columnar.len())?;
     save_table_indexes(base, table, store)?;
     Ok(())
 }
