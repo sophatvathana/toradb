@@ -18,6 +18,7 @@ Commands:
   query PATH TABLE Q Run BM25 search and print ranked ids
   sql PATH QUERY     Run a SQL statement (search or analytics)
   tables PATH        List tables with on-disk manifests
+  reindex PATH TABLE Rebuild indexes (CREATE INDEX)
 
 Examples:
   toradb smoke
@@ -88,6 +89,9 @@ def cmd_sql(db_path: str, query: str) -> int:
 
     db = toradb.local(db_path)
     out = db.sql(query)
+    if isinstance(out, str):
+        print(out)
+        return 0
     frame = out.to_pandas()
     if not frame:
         print("(empty)")
@@ -100,6 +104,16 @@ def cmd_sql(db_path: str, query: str) -> int:
     return 0
 
 
+def cmd_reindex(db_path: str, table: str, using: str, column: str) -> int:
+    import toradb
+
+    db = toradb.local(db_path)
+    sql = f"CREATE INDEX cli_reindex ON {table} ({column}) USING {using}"
+    out = db.sql(sql)
+    print(out if isinstance(out, str) else "ok")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="toradb", add_help=False)
     parser.add_argument("command", nargs="?", default="help")
@@ -107,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("table", nargs="?")
     parser.add_argument("query", nargs="?", default="")
     parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--using", default="BM25")
+    parser.add_argument("--column", default="text")
     parser.add_argument("-h", "--help", action="store_true")
     args, rest = parser.parse_known_args(argv)
 
@@ -146,6 +162,12 @@ def main(argv: list[str] | None = None) -> int:
             print("toradb sql requires a SQL string", file=sys.stderr)
             return 2
         return cmd_sql(args.path, q)
+
+    if args.command == "reindex":
+        if not args.path or not args.table:
+            _print_usage()
+            return 2
+        return cmd_reindex(args.path, args.table, args.using, args.column)
 
     _print_usage()
     return 2
