@@ -31,6 +31,10 @@ impl Catalog {
         self.tables.get(name)
     }
 
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut TableManifest> {
+        self.tables.get_mut(name)
+    }
+
     pub fn list_tables(&self) -> Vec<&str> {
         self.tables.keys().map(|s| s.as_str()).collect()
     }
