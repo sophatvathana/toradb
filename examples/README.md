@@ -39,3 +39,5 @@ toradb sql ./examples/_demo_db "CREATE INDEX text_idx ON articles (text) USING B
 ```
 
 Use `db.table("articles")` (not `create_table`) to query tables already on disk.
+
+Rebuild indexes from Python: `db.reindex("articles", using="BM25")`.
