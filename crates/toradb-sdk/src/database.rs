@@ -66,6 +66,9 @@ impl Database {
                     self.dag
                         .create_index(&table, &idx.using)
                         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                    self.binder
+                        .bind(&stmts)
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
                     return Ok(SqlOutcome::Message(format!(
                         "ok: created index {} on {table} ({}) USING {}",
                         idx.name, idx.column, idx.using
