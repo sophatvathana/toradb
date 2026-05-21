@@ -68,3 +68,12 @@ pub fn read_flushes(base: &Path, table: &str) -> Result<Vec<WalFlushRecord>, Str
     }
     Ok(out)
 }
+
+/// Remove the flush log when all records are reflected in the manifest.
+pub fn truncate_flushes(base: &Path, table: &str) -> Result<(), String> {
+    let path = flush_log_path(base, table);
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
