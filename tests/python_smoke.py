@@ -420,6 +420,40 @@ def test_persist_reload_search():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_cli_sql_show_tables_prints_text():
+    import shutil
+
+    from toradb.cli import cmd_sql
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_cli_show_"))
+    try:
+        import toradb
+
+        db = toradb.local(str(path))
+        db.create_table("docs", mode="text").add(["hello"])
+        assert cmd_sql(str(path), "SHOW TABLES") == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_cli_reindex_command():
+    import shutil
+
+    from toradb.cli import cmd_reindex
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_cli_reindex_"))
+    try:
+        import toradb
+
+        db = toradb.local(str(path))
+        db.create_table("docs", mode="text").add(["Nikola Tesla motor"])
+        assert cmd_reindex(str(path), "docs", "BM25", "text") == 0
+        results = db.table("docs").search("Nikola Tesla", top_k=3)
+        assert len(results.to_pandas()["id"]) > 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_cli_smoke_command():
     from toradb.cli import cmd_smoke
 
