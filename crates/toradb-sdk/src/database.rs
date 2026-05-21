@@ -215,6 +215,22 @@ impl Database {
         slf.list_table_names()
     }
 
+    #[pyo3(signature = (table, using=None, column=None))]
+    fn reindex(
+        &mut self,
+        table: &str,
+        using: Option<&str>,
+        column: Option<&str>,
+    ) -> PyResult<String> {
+        let using = using.unwrap_or("BM25");
+        let column = column.unwrap_or("text");
+        let sql = format!("CREATE INDEX sdk_reindex ON {table} ({column}) USING {using}");
+        match self.execute_sql(&sql)? {
+            SqlOutcome::Message(s) => Ok(s),
+            _ => Ok(format!("ok: reindexed {table} USING {using}")),
+        }
+    }
+
     fn __repr__(&self) -> String {
         format!("Database({})", self.path)
     }
