@@ -26,6 +26,7 @@ toradb smoke
 toradb query ./examples/_demo_db articles "Nikola Tesla motor"
 toradb sql ./examples/_demo_db "SELECT tag, COUNT(*) FROM articles GROUP BY tag"
 toradb tables ./examples/_demo_db
+toradb reindex ./examples/_demo_db articles --using BM25
 ```
 
 SQL catalog helpers (return analytics dict or text):
