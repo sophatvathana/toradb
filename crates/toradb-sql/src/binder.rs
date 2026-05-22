@@ -40,7 +40,7 @@ impl Binder {
                             manifest.sparse_enabled = true;
                             manifest.index_mode = IndexMode::Text;
                         }
-                        "HNSW" | "VECTOR" | "DENSE" | "ANN" => {
+                        "HNSW" | "VECTOR" | "DENSE" | "ANN" | "DISKANN" => {
                             manifest.index_mode = IndexMode::Vector;
                         }
                         "HYBRID" => {
