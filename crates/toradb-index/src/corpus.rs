@@ -26,6 +26,7 @@ pub(crate) struct StoredDoc {
 pub struct TableCorpus {
     bm25: Bm25Index,
     hnsw: Option<HnswIndex>,
+    diskann: Option<HnswIndex>,
     segment_hnsw: HashMap<u32, HnswIndex>,
     pub(crate) docs: HashMap<DocId, StoredDoc>,
     graph: CsrGraph,
@@ -88,6 +89,42 @@ impl TableCorpus {
         if should_use_hnsw(index.len()) {
             self.hnsw = Some(index);
         }
+    }
+
+    pub fn rebuild_diskann(&mut self) {
+        let mut ids: Vec<DocId> = self.docs.keys().copied().collect();
+        ids.sort_unstable();
+        let mut id_vecs = Vec::new();
+        let mut vectors = Vec::new();
+        for id in ids {
+            if let Some(v) = self.docs.get(&id).and_then(|d| d.vector.clone()) {
+                id_vecs.push(id);
+                vectors.push(v);
+            }
+        }
+        self.diskann = HnswIndex::build(id_vecs, vectors);
+    }
+
+    pub fn restore_diskann(&mut self, index: HnswIndex) {
+        if should_use_hnsw(index.len()) {
+            self.diskann = Some(index);
+        }
+    }
+
+    pub fn diskann_snapshot(&self) -> Option<HnswIndex> {
+        self.diskann
+            .as_ref()
+            .filter(|h| should_use_hnsw(h.len()))
+            .cloned()
+    }
+
+    pub fn diskann_vector_search(&self, query: &[f32], k: usize) -> CandidateSet {
+        if let Some(ref d) = self.diskann {
+            if should_use_hnsw(d.len()) {
+                return d.search(query, k);
+            }
+        }
+        self.vector_search(query, k)
     }
 
     pub fn hnsw_snapshot(&self) -> Option<HnswIndex> {
@@ -402,6 +439,7 @@ impl CorpusStore {
         }
         if should_use_hnsw(t.docs.len()) {
             t.rebuild_hnsw();
+            t.rebuild_diskann();
         }
         t.rebuild_segment_hnsw(num_segments);
         n
@@ -421,6 +459,20 @@ impl CorpusStore {
 
     pub fn restore_hnsw(&mut self, table: &str, index: HnswIndex) {
         self.ensure_table(table).restore_hnsw(index);
+    }
+
+    pub fn rebuild_diskann(&mut self, table: &str) {
+        if let Some(t) = self.tables.get_mut(table) {
+            t.rebuild_diskann();
+        }
+    }
+
+    pub fn restore_diskann(&mut self, table: &str, index: HnswIndex) {
+        self.ensure_table(table).restore_diskann(index);
+    }
+
+    pub fn diskann_snapshot(&self, table: &str) -> Option<HnswIndex> {
+        self.table(table).and_then(|t| t.diskann_snapshot())
     }
 
     pub fn restore_segment_hnsw(&mut self, table: &str, segment: u32, index: HnswIndex) {

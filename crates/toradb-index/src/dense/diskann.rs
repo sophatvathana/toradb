@@ -1,8 +1,10 @@
 use toradb_core::CandidateSet;
 
 use crate::corpus::CorpusStore;
-use crate::dense::search;
 
 pub fn search(store: &CorpusStore, table: &str, query: &[f32], k: usize) -> CandidateSet {
-    search::search(store, table, query, k)
+    store
+        .table(table)
+        .map(|t| t.diskann_vector_search(query, k))
+        .unwrap_or_default()
 }

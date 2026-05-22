@@ -46,7 +46,12 @@ impl RetrievalRuntime {
         }
 
         if batch.tier1_enable_dense && !query_vec.is_empty() {
-            push_cap(&mut merged, dense::hnsw::search(&self.store, table, query_vec, cap));
+            let dense = if batch.tier1_use_diskann {
+                dense::diskann::search(&self.store, table, query_vec, cap)
+            } else {
+                dense::hnsw::search(&self.store, table, query_vec, cap)
+            };
+            push_cap(&mut merged, dense);
         }
 
         if metadata::parse_field_filter(q).is_some() {

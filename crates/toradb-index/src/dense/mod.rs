@@ -1,4 +1,5 @@
 pub mod diskann;
+pub mod diskann_codec;
 pub mod hnsw;
 pub mod hnsw_codec;
 pub mod hnsw_index;
