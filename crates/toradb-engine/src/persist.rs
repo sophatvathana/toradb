@@ -436,12 +436,61 @@ fn restore_hnsw_index(
     Ok(())
 }
 
+/// Apply WAL flush records whose Parquet segments exist but are not yet in the manifest.
+pub fn replay_flush_wal(base: &Path, table: &str) -> Result<usize, String> {
+    let records = wal::read_flushes(base, table)?;
+    if records.is_empty() {
+        return Ok(0);
+    }
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    let mut manifest = if manifest_path.exists() {
+        TableManifestFile::load(&manifest_path)?
+    } else {
+        TableManifestFile::default()
+    };
+    let seg_dir = TableManifestFile::segments_dir(base, table);
+    let mut recovered = 0usize;
+    for record in &records {
+        if manifest.segments.contains(&record.segment) {
+            continue;
+        }
+        let path = seg_dir.join(&record.segment);
+        if !path.exists() {
+            continue;
+        }
+        let docs = read_segment(&path)?;
+        if !segment_bm25_bin_path(base, table, &record.segment).exists() {
+            let snap = snapshot_for_columnar_docs(&docs);
+            save_segment_bm25_sidecar(base, table, &record.segment, &snap)?;
+        }
+        if let Some(vec_snap) = snapshot_for_columnar_vectors(&docs) {
+            let vec_path = segment_vectors_bin_path(base, table, &record.segment);
+            if !vec_path.exists() {
+                save_segment_vector_sidecar(base, table, &record.segment, &vec_snap)?;
+            }
+        }
+        manifest.push_segment(record.segment.clone());
+        recovered += 1;
+    }
+    if recovered > 0 {
+        manifest.save(&manifest_path)?;
+    }
+    let all_reconciled = records.iter().all(|r| {
+        manifest.segments.contains(&r.segment) && seg_dir.join(&r.segment).exists()
+    });
+    if all_reconciled && !records.is_empty() {
+        wal::truncate_flushes(base, table)?;
+    }
+    Ok(recovered)
+}
+
 pub fn load_table(
     base: &Path,
     table: &str,
     store: &mut CorpusStore,
     segment_count: usize,
 ) -> Result<usize, String> {
+    replay_flush_wal(base, table)?;
     let manifest_path = TableManifestFile::path_for_table(base, table);
     if !manifest_path.exists() {
         return Ok(0);
@@ -491,12 +540,17 @@ pub fn load_table(
     Ok(n)
 }
 
-pub fn flush_batch(base: &Path, table: &str, docs: &[ColumnarDoc]) -> Result<String, String> {
+pub fn flush_batch(
+    base: &Path,
+    table: &str,
+    docs: &[ColumnarDoc],
+    since_id: u64,
+) -> Result<String, String> {
     if docs.is_empty() {
         return Err("flush_batch: empty docs".into());
     }
     let manifest_path = TableManifestFile::path_for_table(base, table);
-    let mut manifest = if manifest_path.exists() {
+    let manifest = if manifest_path.exists() {
         TableManifestFile::load(&manifest_path)?
     } else {
         TableManifestFile::default()
@@ -509,6 +563,8 @@ pub fn flush_batch(base: &Path, table: &str, docs: &[ColumnarDoc]) -> Result<Str
     if let Some(vec_snap) = snapshot_for_columnar_vectors(docs) {
         save_segment_vector_sidecar(base, table, &seg_name, &vec_snap)?;
     }
+    wal::append_flush(base, table, &seg_name, since_id, docs.len())?;
+    let mut manifest = manifest;
     let seg_name_clone = seg_name.clone();
     manifest.push_segment(seg_name);
     manifest.save(&manifest_path)?;
@@ -529,8 +585,7 @@ pub fn flush_new_docs(
     if columnar.is_empty() {
         return Ok(());
     }
-    let segment = flush_batch(base, table, &columnar)?;
-    wal::append_flush(base, table, &segment, since_id, columnar.len())?;
+    let _segment = flush_batch(base, table, &columnar, since_id)?;
     save_table_indexes(base, table, store)?;
     Ok(())
 }
