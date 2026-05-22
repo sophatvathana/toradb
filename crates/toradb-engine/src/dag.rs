@@ -64,7 +64,13 @@ impl DagRunner {
             .store
             .add_documents(table, docs, n.max(1));
         if let Some(ref path) = self.db_path {
-            persist::flush_new_docs(path.as_path(), table, &self.retrieval.store, since_id)?;
+            persist::flush_new_docs(
+                path.as_path(),
+                table,
+                &mut self.retrieval.store,
+                since_id,
+                n.max(1),
+            )?;
         }
         Ok(added)
     }
@@ -97,16 +103,23 @@ impl DagRunner {
             }
             "HNSW" | "VECTOR" | "DENSE" | "ANN" => {
                 self.retrieval.store.rebuild_hnsw(table);
+                self.retrieval
+                    .store
+                    .rebuild_segment_hnsw(table, self.segment_parallelism(table));
             }
             "HYBRID" => {
                 self.retrieval.store.rebuild_bm25(table);
                 self.retrieval.store.rebuild_hnsw(table);
+                self.retrieval
+                    .store
+                    .rebuild_segment_hnsw(table, self.segment_parallelism(table));
             }
             other => return Err(format!("unsupported index type {other}")),
         }
         if let Some(ref path) = self.db_path {
             let base = path.as_path();
-            persist::save_table_indexes(base, table, &self.retrieval.store)?;
+            let n = self.segment_parallelism(table);
+            persist::save_table_indexes(base, table, &mut self.retrieval.store, n)?;
             let kind = using.to_uppercase();
             let sparse = matches!(kind.as_str(), "BM25" | "SPARSE" | "TEXT" | "HYBRID");
             let vectors = matches!(kind.as_str(), "HNSW" | "VECTOR" | "DENSE" | "ANN" | "HYBRID");
@@ -193,6 +206,37 @@ impl DagRunner {
                 if !seg_merged.is_empty() {
                     batch.candidates = seg_merged;
                     SegmentScheduler::local_top_k(&mut batch.candidates, ctx.tier2_budget as usize);
+                }
+            } else if batch.tier1_enable_dense {
+                if let Some(ref path) = self.db_path {
+                    let run_dense_shards = persist::table_has_segment_hnsw_sidecars(
+                        path.as_path(),
+                        &table,
+                    )
+                    .unwrap_or(false);
+                    if run_dense_shards {
+                        let query_vec = batch.query_vector.clone().unwrap_or_default();
+                        if !query_vec.is_empty() {
+                            let num_segments = self.segment_parallelism(&table);
+                            let scheduler = SegmentScheduler::new(num_segments as usize);
+                            let k = ctx.tier2_budget as usize;
+                            let seg_merged = scheduler.run_for_segments(num_segments, |seg| {
+                                self.retrieval.segment_dense_candidates(
+                                    &table,
+                                    seg,
+                                    &query_vec,
+                                    k,
+                                )
+                            });
+                            if !seg_merged.is_empty() {
+                                batch.candidates = seg_merged;
+                                SegmentScheduler::local_top_k(
+                                    &mut batch.candidates,
+                                    ctx.tier2_budget as usize,
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
