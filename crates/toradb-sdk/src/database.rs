@@ -99,8 +99,18 @@ impl Database {
                         .and_then(|p| persist::table_segment_count(p, &table).ok())
                         .map(|n| n.to_string())
                         .unwrap_or_else(|| "n/a".to_string());
+                    let indexes = self
+                        .dag
+                        .table_index_sidecars(&table)
+                        .unwrap_or_default()
+                        .join(", ");
+                    let indexes_line = if indexes.is_empty() {
+                        "none".to_string()
+                    } else {
+                        indexes
+                    };
                     return Ok(SqlOutcome::Message(format!(
-                        "table: {table}\nrows: {row_count}\nvector_dim: {vector_dim}\nsegments: {segments}"
+                        "table: {table}\nrows: {row_count}\nvector_dim: {vector_dim}\nsegments: {segments}\nindexes: {indexes_line}"
                     )));
                 }
                 Stmt::Select(sel) => {
