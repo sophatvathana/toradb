@@ -72,6 +72,16 @@ impl RetrievalRuntime {
             .unwrap_or_default()
     }
 
+    pub fn segment_dense_candidates(
+        &self,
+        table: &str,
+        seg: u32,
+        query: &[f32],
+        k: usize,
+    ) -> CandidateSet {
+        self.store.segment_vector_search(table, query, seg, k)
+    }
+
     pub fn run_tier2(&self, batch: &mut Batch, ctx: &ExecCtx) {
         let table = &batch.table;
         if table.is_empty() {

@@ -8,6 +8,8 @@ use toradb_simd::dot_f32;
 const M: usize = 16;
 const EF_SEARCH: usize = 64;
 const HNSW_MIN_DOCS: usize = 32;
+/// Minimum vectors per logical segment shard before building a segment-local graph.
+pub const SEGMENT_HNSW_MIN_DOCS: usize = 8;
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct HnswIndex {
@@ -114,4 +116,8 @@ impl HnswIndex {
 
 pub fn should_use_hnsw(doc_count: usize) -> bool {
     doc_count >= HNSW_MIN_DOCS
+}
+
+pub fn should_use_segment_hnsw(doc_count: usize) -> bool {
+    doc_count >= SEGMENT_HNSW_MIN_DOCS
 }

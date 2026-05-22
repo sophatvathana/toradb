@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use toradb_core::{CandidateSet, DocId};
 use toradb_simd::dot_f32;
 
-use crate::dense::hnsw_index::{should_use_hnsw, HnswIndex};
+use crate::dense::hnsw_index::{should_use_hnsw, should_use_segment_hnsw, HnswIndex};
 use crate::graph::csr::CsrGraph;
 use crate::sparse::bm25::{Bm25Index, Bm25Snapshot, tokenize};
 
@@ -26,6 +26,7 @@ pub(crate) struct StoredDoc {
 pub struct TableCorpus {
     bm25: Bm25Index,
     hnsw: Option<HnswIndex>,
+    segment_hnsw: HashMap<u32, HnswIndex>,
     pub(crate) docs: HashMap<DocId, StoredDoc>,
     graph: CsrGraph,
     next_id: DocId,
@@ -96,11 +97,90 @@ impl TableCorpus {
             .cloned()
     }
 
+    pub fn rebuild_segment_hnsw(&mut self, num_segments: u32) {
+        self.segment_hnsw.clear();
+        for seg in 0..num_segments {
+            let mut ids = Vec::new();
+            let mut vectors = Vec::new();
+            for (&id, doc) in &self.docs {
+                if doc.segment != seg {
+                    continue;
+                }
+                let Some(ref v) = doc.vector else {
+                    continue;
+                };
+                ids.push(id);
+                vectors.push(v.clone());
+            }
+            if let Some(index) = HnswIndex::build(ids, vectors) {
+                if should_use_segment_hnsw(index.len()) {
+                    self.segment_hnsw.insert(seg, index);
+                }
+            }
+        }
+    }
+
+    pub fn restore_segment_hnsw(&mut self, segment: u32, index: HnswIndex) {
+        if should_use_segment_hnsw(index.len()) {
+            self.segment_hnsw.insert(segment, index);
+        }
+    }
+
+    pub fn segment_hnsw_snapshot(&self) -> HashMap<u32, HnswIndex> {
+        self.segment_hnsw.clone()
+    }
+
+    pub fn has_segment_hnsw(&self) -> bool {
+        !self.segment_hnsw.is_empty()
+    }
+
+    pub fn segment_vector_search(&self, query: &[f32], segment: u32, k: usize) -> CandidateSet {
+        if let Some(h) = self.segment_hnsw.get(&segment) {
+            return h.search(query, k);
+        }
+        let mut scored = Vec::new();
+        for (&id, doc) in &self.docs {
+            if doc.segment != segment {
+                continue;
+            }
+            let Some(ref v) = doc.vector else {
+                continue;
+            };
+            if v.len() != query.len() {
+                continue;
+            }
+            scored.push((id, dot_f32(v, query)));
+        }
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+        let mut out = CandidateSet::with_capacity(scored.len());
+        for (id, score) in scored {
+            out.push(id, score);
+        }
+        out
+    }
+
     pub fn vector_search(&self, query: &[f32], k: usize) -> CandidateSet {
         if let Some(ref h) = self.hnsw {
             if should_use_hnsw(h.len()) {
                 return h.search(query, k);
             }
+        }
+        if self.has_segment_hnsw() {
+            let mut merged = Vec::new();
+            for seg in self.segment_hnsw.keys() {
+                let c = self.segment_vector_search(query, *seg, k);
+                for (i, id) in c.ids.iter().enumerate() {
+                    merged.push((*id, c.scores[i]));
+                }
+            }
+            merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            merged.truncate(k);
+            let mut out = CandidateSet::with_capacity(merged.len());
+            for (id, score) in merged {
+                out.push(id, score);
+            }
+            return out;
         }
         let mut scored = Vec::new();
         for (&id, doc) in &self.docs {
@@ -323,6 +403,7 @@ impl CorpusStore {
         if should_use_hnsw(t.docs.len()) {
             t.rebuild_hnsw();
         }
+        t.rebuild_segment_hnsw(num_segments);
         n
     }
 
@@ -332,12 +413,44 @@ impl CorpusStore {
         }
     }
 
+    pub fn rebuild_segment_hnsw(&mut self, table: &str, num_segments: u32) {
+        if let Some(t) = self.tables.get_mut(table) {
+            t.rebuild_segment_hnsw(num_segments);
+        }
+    }
+
     pub fn restore_hnsw(&mut self, table: &str, index: HnswIndex) {
         self.ensure_table(table).restore_hnsw(index);
     }
 
+    pub fn restore_segment_hnsw(&mut self, table: &str, segment: u32, index: HnswIndex) {
+        self.ensure_table(table).restore_segment_hnsw(segment, index);
+    }
+
     pub fn hnsw_snapshot(&self, table: &str) -> Option<HnswIndex> {
         self.table(table).and_then(|t| t.hnsw_snapshot())
+    }
+
+    pub fn segment_hnsw_snapshot(&self, table: &str) -> HashMap<u32, HnswIndex> {
+        self.table(table)
+            .map(|t| t.segment_hnsw_snapshot())
+            .unwrap_or_default()
+    }
+
+    pub fn has_segment_hnsw(&self, table: &str) -> bool {
+        self.table(table).map(|t| t.has_segment_hnsw()).unwrap_or(false)
+    }
+
+    pub fn segment_vector_search(
+        &self,
+        table: &str,
+        query: &[f32],
+        segment: u32,
+        k: usize,
+    ) -> CandidateSet {
+        self.table(table)
+            .map(|t| t.segment_vector_search(query, segment, k))
+            .unwrap_or_default()
     }
 
     pub fn add_document_with_id(
