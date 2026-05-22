@@ -128,6 +128,7 @@ impl Table {
             );
         batch.tier1_enable_dense =
             !matches!(strategy, Some("sparse") | Some("bm25") | Some("text"));
+        batch.tier1_use_diskann = matches!(strategy, Some("diskann"));
         if batch.tier1_enable_dense && batch.query_vector.is_none() {
             if let Some(dim) = db.vector_dim(&self.name) {
                 batch.query_vector = Some(lexical_proxy_vector(query, dim));
