@@ -13,6 +13,8 @@ pub struct Batch {
     pub query_vector: Option<Vec<f32>>,
     pub tier1_enable_sparse: bool,
     pub tier1_enable_dense: bool,
+    /// When true, tier-1 dense retrieval uses the on-disk DiskANN graph sidecar.
+    pub tier1_use_diskann: bool,
 }
 
 impl Default for Batch {
@@ -28,6 +30,7 @@ impl Default for Batch {
             query_vector: None,
             tier1_enable_sparse: true,
             tier1_enable_dense: true,
+            tier1_use_diskann: false,
         }
     }
 }
