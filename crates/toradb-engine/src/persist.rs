@@ -69,6 +69,10 @@ fn table_hnsw_bin_path(base: &Path, table: &str) -> PathBuf {
     indexes_dir(base, table).join("hnsw.bin")
 }
 
+fn segment_hnsw_shard_path(base: &Path, table: &str, segment: u32) -> PathBuf {
+    indexes_dir(base, table).join(format!("shard_{segment:02}.hnsw.bin"))
+}
+
 fn segment_vectors_bin_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
     let stem = segment_parquet
         .strip_suffix(".parquet")
@@ -111,6 +115,48 @@ pub fn load_table_hnsw_sidecar(
         return load_hnsw_index_mmap(&bin).map(Some);
     }
     Ok(None)
+}
+
+pub fn save_segment_hnsw_shards(
+    base: &Path,
+    table: &str,
+    shards: &std::collections::HashMap<u32, toradb_index::dense::hnsw_index::HnswIndex>,
+) -> Result<(), String> {
+    for (seg, index) in shards {
+        hnsw_codec::write_index_file(&segment_hnsw_shard_path(base, table, *seg), index)?;
+    }
+    Ok(())
+}
+
+pub fn load_segment_hnsw_shards(
+    base: &Path,
+    table: &str,
+    num_segments: u32,
+) -> Result<std::collections::HashMap<u32, toradb_index::dense::hnsw_index::HnswIndex>, String> {
+    let mut out = std::collections::HashMap::new();
+    for seg in 0..num_segments {
+        let path = segment_hnsw_shard_path(base, table, seg);
+        if path.exists() {
+            out.insert(seg, load_hnsw_index_mmap(&path)?);
+        }
+    }
+    Ok(out)
+}
+
+/// True when at least one per-segment HNSW shard exists on disk.
+pub fn table_has_segment_hnsw_sidecars(base: &Path, table: &str) -> Result<bool, String> {
+    let dir = indexes_dir(base, table);
+    if !dir.exists() {
+        return Ok(false);
+    }
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with("shard_") && name.ends_with(".hnsw.bin") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn load_snapshot_json(path: &Path) -> Result<Bm25Snapshot, String> {
@@ -405,6 +451,7 @@ fn restore_bm25_index(
     base: &Path,
     table: &str,
     store: &mut CorpusStore,
+    num_segments: u32,
 ) -> Result<(), String> {
     if let Some(snap) = load_merged_segment_bm25_sidecars(base, table)? {
         store.restore_bm25(table, snap);
@@ -416,7 +463,7 @@ fn restore_bm25_index(
             save_bm25_sidecar(base, table, &snap)?;
         }
     }
-    restore_hnsw_index(base, table, store)?;
+    restore_hnsw_index(base, table, store, num_segments)?;
     Ok(())
 }
 
@@ -424,13 +471,25 @@ fn restore_hnsw_index(
     base: &Path,
     table: &str,
     store: &mut CorpusStore,
+    num_segments: u32,
 ) -> Result<(), String> {
+    let shards = load_segment_hnsw_shards(base, table, num_segments)?;
+    for (seg, index) in shards {
+        store.restore_segment_hnsw(table, seg, index);
+    }
     if let Some(index) = load_table_hnsw_sidecar(base, table)? {
         store.restore_hnsw(table, index);
-    } else {
+    } else if !store.has_segment_hnsw(table) {
         store.rebuild_hnsw(table);
         if let Some(index) = store.hnsw_snapshot(table) {
             save_table_hnsw_sidecar(base, table, &index)?;
+        }
+    }
+    if !store.has_segment_hnsw(table) {
+        store.rebuild_segment_hnsw(table, num_segments);
+        let snap = store.segment_hnsw_snapshot(table);
+        if !snap.is_empty() {
+            save_segment_hnsw_shards(base, table, &snap)?;
         }
     }
     Ok(())
@@ -535,7 +594,7 @@ pub fn load_table(
         }
     }
     if n > 0 {
-        restore_bm25_index(base, table, store)?;
+        restore_bm25_index(base, table, store, num_segments)?;
     }
     Ok(n)
 }
@@ -574,8 +633,9 @@ pub fn flush_batch(
 pub fn flush_new_docs(
     base: &Path,
     table: &str,
-    store: &CorpusStore,
+    store: &mut CorpusStore,
     since_id: u64,
+    num_segments: u32,
 ) -> Result<(), String> {
     let columnar: Vec<ColumnarDoc> = store
         .docs_with_ids_since(table, since_id)
@@ -586,7 +646,7 @@ pub fn flush_new_docs(
         return Ok(());
     }
     let _segment = flush_batch(base, table, &columnar, since_id)?;
-    save_table_indexes(base, table, store)?;
+    save_table_indexes(base, table, store, num_segments)?;
     Ok(())
 }
 
@@ -626,12 +686,22 @@ pub fn rebuild_segment_sidecars(
 }
 
 /// Write table-level BM25, vector, and HNSW sidecars from the in-memory corpus.
-pub fn save_table_indexes(base: &Path, table: &str, store: &CorpusStore) -> Result<(), String> {
+pub fn save_table_indexes(
+    base: &Path,
+    table: &str,
+    store: &mut CorpusStore,
+    num_segments: u32,
+) -> Result<(), String> {
     if let Some(snap) = store.bm25_snapshot(table) {
         save_bm25_sidecar(base, table, &snap)?;
     }
     if let Some(snap) = vector_snapshot_from_store(store, table) {
         save_table_vector_sidecar(base, table, &snap)?;
+    }
+    store.rebuild_segment_hnsw(table, num_segments);
+    let segment_snap = store.segment_hnsw_snapshot(table);
+    if !segment_snap.is_empty() {
+        save_segment_hnsw_shards(base, table, &segment_snap)?;
     }
     if let Some(index) = store.hnsw_snapshot(table) {
         save_table_hnsw_sidecar(base, table, &index)?;
