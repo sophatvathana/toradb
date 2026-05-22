@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use memmap2::MmapOptions;
-use toradb_index::dense::{hnsw_codec, vector_codec};
+use toradb_index::dense::{diskann_codec, hnsw_codec, vector_codec};
 use toradb_index::sparse::bm25_codec;
 use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
 use toradb_storage::columnar::{
@@ -69,6 +69,10 @@ fn table_hnsw_bin_path(base: &Path, table: &str) -> PathBuf {
     indexes_dir(base, table).join("hnsw.bin")
 }
 
+fn table_diskann_bin_path(base: &Path, table: &str) -> PathBuf {
+    indexes_dir(base, table).join("diskann.bin")
+}
+
 fn segment_hnsw_shard_path(base: &Path, table: &str, segment: u32) -> PathBuf {
     indexes_dir(base, table).join(format!("shard_{segment:02}.hnsw.bin"))
 }
@@ -113,6 +117,31 @@ pub fn load_table_hnsw_sidecar(
     let bin = table_hnsw_bin_path(base, table);
     if bin.exists() {
         return load_hnsw_index_mmap(&bin).map(Some);
+    }
+    Ok(None)
+}
+
+fn load_diskann_index_mmap(path: &Path) -> Result<toradb_index::dense::hnsw_index::HnswIndex, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mmap = unsafe { MmapOptions::new().map(&file).map_err(|e| e.to_string())? };
+    diskann_codec::decode_index(&mmap)
+}
+
+pub fn save_table_diskann_sidecar(
+    base: &Path,
+    table: &str,
+    index: &toradb_index::dense::hnsw_index::HnswIndex,
+) -> Result<(), String> {
+    diskann_codec::write_index_file(&table_diskann_bin_path(base, table), index)
+}
+
+pub fn load_table_diskann_sidecar(
+    base: &Path,
+    table: &str,
+) -> Result<Option<toradb_index::dense::hnsw_index::HnswIndex>, String> {
+    let bin = table_diskann_bin_path(base, table);
+    if bin.exists() {
+        return load_diskann_index_mmap(&bin).map(Some);
     }
     Ok(None)
 }
@@ -464,6 +493,26 @@ fn restore_bm25_index(
         }
     }
     restore_hnsw_index(base, table, store, num_segments)?;
+    restore_diskann_index(base, table, store)?;
+    Ok(())
+}
+
+fn restore_diskann_index(base: &Path, table: &str, store: &mut CorpusStore) -> Result<(), String> {
+    if let Some(index) = load_table_diskann_sidecar(base, table)? {
+        store.restore_diskann(table, index);
+        return Ok(());
+    }
+    if let Some(snap) = load_table_vector_sidecar(base, table)? {
+        if let Some(index) = diskann_codec::build_index_from_snapshot(&snap) {
+            save_table_diskann_sidecar(base, table, &index)?;
+            store.restore_diskann(table, index);
+        }
+    } else if store.table(table).map(|t| t.len()).unwrap_or(0) > 0 {
+        store.rebuild_diskann(table);
+        if let Some(index) = store.diskann_snapshot(table) {
+            save_table_diskann_sidecar(base, table, &index)?;
+        }
+    }
     Ok(())
 }
 
@@ -705,6 +754,10 @@ pub fn save_table_indexes(
     }
     if let Some(index) = store.hnsw_snapshot(table) {
         save_table_hnsw_sidecar(base, table, &index)?;
+    }
+    store.rebuild_diskann(table);
+    if let Some(index) = store.diskann_snapshot(table) {
+        save_table_diskann_sidecar(base, table, &index)?;
     }
     Ok(())
 }

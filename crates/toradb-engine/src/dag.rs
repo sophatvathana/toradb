@@ -107,12 +107,16 @@ impl DagRunner {
                     .store
                     .rebuild_segment_hnsw(table, self.segment_parallelism(table));
             }
+            "DISKANN" => {
+                self.retrieval.store.rebuild_diskann(table);
+            }
             "HYBRID" => {
                 self.retrieval.store.rebuild_bm25(table);
                 self.retrieval.store.rebuild_hnsw(table);
                 self.retrieval
                     .store
                     .rebuild_segment_hnsw(table, self.segment_parallelism(table));
+                self.retrieval.store.rebuild_diskann(table);
             }
             other => return Err(format!("unsupported index type {other}")),
         }
@@ -122,7 +126,10 @@ impl DagRunner {
             persist::save_table_indexes(base, table, &mut self.retrieval.store, n)?;
             let kind = using.to_uppercase();
             let sparse = matches!(kind.as_str(), "BM25" | "SPARSE" | "TEXT" | "HYBRID");
-            let vectors = matches!(kind.as_str(), "HNSW" | "VECTOR" | "DENSE" | "ANN" | "HYBRID");
+            let vectors = matches!(
+                kind.as_str(),
+                "HNSW" | "VECTOR" | "DENSE" | "ANN" | "DISKANN" | "HYBRID"
+            );
             persist::rebuild_segment_sidecars(base, table, sparse, vectors)?;
         }
         Ok(())
