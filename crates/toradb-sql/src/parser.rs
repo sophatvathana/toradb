@@ -326,12 +326,17 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
     let mut offset = 0u32;
     let mut order_by_score_desc = None;
     let mut distributed = false;
+    let mut stream = false;
     let mut group_by = None;
     let mut where_clause = None;
     while *i < tokens.len() && !matches!(tokens.get(*i), Some(Token::Eof)) {
         match tokens.get(*i) {
             Some(Token::Ident(k)) if k == "DISTRIBUTED" => {
                 distributed = true;
+                *i += 1;
+            }
+            Some(Token::Ident(k)) if k == "STREAM" => {
+                stream = true;
                 *i += 1;
             }
             Some(Token::Ident(k)) if k == "SPARSE" => {
@@ -389,6 +394,7 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
         offset,
         order_by_score_desc,
         distributed,
+        stream,
         group_by,
         where_clause,
     })
@@ -506,6 +512,17 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             }
         }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "DROP") {
+            if matches!(tokens.get(i + 1), Some(Token::Ident(k)) if k == "MATERIALIZED")
+                && matches!(tokens.get(i + 2), Some(Token::Ident(k)) if k == "VIEW")
+            {
+                i += 3;
+                let name = ident_at(&tokens, i)
+                    .ok_or("materialized view name after DROP MATERIALIZED VIEW")?
+                    .to_lowercase();
+                i += 1;
+                out.push(Stmt::DropMaterializedView { name });
+                continue;
+            }
             if matches!(tokens.get(i + 1), Some(Token::Ident(k)) if k == "TABLE") {
                 i += 2;
                 let name = match tokens.get(i) {
@@ -547,10 +564,19 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             out.push(Stmt::Describe { name });
             continue;
         }
+        let stream_prefix =
+            matches!(tokens.get(i), Some(Token::Ident(k)) if k == "STREAM") && {
+                i += 1;
+                true
+            };
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "SELECT") {
-            let select = parse_select_stmt(&tokens, &mut i)?;
+            let mut select = parse_select_stmt(&tokens, &mut i)?;
+            select.stream |= stream_prefix;
             out.push(Stmt::Select(select));
             continue;
+        }
+        if stream_prefix {
+            return Err("STREAM requires a SELECT statement".into());
         }
         i += 1;
     }

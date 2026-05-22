@@ -68,11 +68,11 @@ pub fn load_view_row_count(base: &Path, name: &str) -> Result<usize, String> {
 }
 
 pub fn drop_materialized_view(base: &Path, name: &str) -> Result<(), String> {
-    let dir = views_root(base).join(name.to_lowercase());
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    if !is_materialized_view(base, name) {
+        return Err(format!("materialized view {name} does not exist"));
     }
-    Ok(())
+    let dir = views_root(base).join(name.to_lowercase());
+    std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())
 }
 
 pub fn create_materialized_view(

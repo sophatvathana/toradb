@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 use toradb_core::{Batch, ExecCtx, QueryMetrics};
 use toradb_engine::{materialized, persist, sql_exec, DagRunner};
 use toradb_sql::{ast::Stmt, binder::Binder, parse};
@@ -102,6 +102,22 @@ impl Database {
                     return Ok(SqlOutcome::Message(format!(
                         "ok: refreshed materialized view {} ({} rows)",
                         name, rows
+                    )));
+                }
+                Stmt::DropMaterializedView { name } => {
+                    let base = self
+                        .dag
+                        .db_path()
+                        .ok_or_else(|| {
+                            pyo3::exceptions::PyValueError::new_err(
+                                "materialized views require a local on-disk database",
+                            )
+                        })?
+                        .to_path_buf();
+                    materialized::drop_materialized_view(base.as_path(), &name)
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                    return Ok(SqlOutcome::Message(format!(
+                        "ok: dropped materialized view {name}"
                     )));
                 }
                 Stmt::CreateIndex(idx) => {
@@ -236,6 +252,56 @@ impl Database {
             SqlOutcome::Search(results) => Ok(results.into_pyobject(py)?.into_any()),
             SqlOutcome::Aggregate(results) => Ok(results.into_pyobject(py)?.into_any()),
         }
+    }
+
+    /// Run a retrieval `SELECT` in pages (uses `LIMIT` / `OFFSET` under the hood).
+    #[pyo3(signature = (query, batch_size=128))]
+    fn sql_stream<'py>(
+        &mut self,
+        py: Python<'py>,
+        query: &str,
+        batch_size: usize,
+    ) -> PyResult<Bound<'py, PyList>> {
+        let stmts = parse(query).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        let Stmt::Select(mut sel) = stmts
+            .into_iter()
+            .next()
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("expected a single SELECT"))?
+        else {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "sql_stream requires a retrieval SELECT",
+            ));
+        };
+        if sel.group_by.is_some() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "sql_stream does not support GROUP BY",
+            ));
+        }
+        let page_size = batch_size.max(1) as u32;
+        let mut offset = sel.offset;
+        let list = PyList::empty(py);
+        loop {
+            sel.limit = page_size;
+            sel.offset = offset;
+            let out = sql_exec::run_select(&mut self.dag, &sel)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+            let sql_exec::SqlSelectResult::Search(page) = out else {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "sql_stream requires a retrieval SELECT",
+                ));
+            };
+            let n = page.ids.len();
+            if n == 0 {
+                break;
+            }
+            let results = SearchResults::from_sql(page.ids, page.scores, page.metrics);
+            list.append(results.into_pyobject(py)?)?;
+            offset += n as u32;
+            if n < page_size as usize {
+                break;
+            }
+        }
+        Ok(list)
     }
 
     #[pyo3(signature = (name, mode=None, schema=None))]

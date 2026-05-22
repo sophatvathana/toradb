@@ -23,3 +23,12 @@ fn parses_refresh_materialized_view() {
     };
     assert_eq!(name, "top_docs");
 }
+
+#[test]
+fn parses_drop_materialized_view() {
+    let stmts = parse("DROP MATERIALIZED VIEW top_docs").unwrap();
+    let Stmt::DropMaterializedView { name } = &stmts[0] else {
+        panic!("drop mv");
+    };
+    assert_eq!(name, "top_docs");
+}

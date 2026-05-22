@@ -4,6 +4,7 @@ pub enum Stmt {
     CreateIndex(CreateIndexStmt),
     CreateMaterializedView(CreateMaterializedViewStmt),
     RefreshMaterializedView { name: String },
+    DropMaterializedView { name: String },
     DropTable { name: String },
     ShowTables,
     Describe { name: String },
@@ -100,6 +101,8 @@ pub struct SelectStmt {
     pub order_by_score_desc: Option<bool>,
     /// When true, scan segment shards in parallel (single-node distributed execution).
     pub distributed: bool,
+    /// When true, clients should page results (see `Database.sql_stream`).
+    pub stream: bool,
     pub group_by: Option<String>,
     pub where_clause: Option<WherePred>,
 }

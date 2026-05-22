@@ -547,6 +547,35 @@ def test_sql_materialized_view():
         t.add(["Nikola Tesla high voltage coil"])
         refresh = db.sql("REFRESH MATERIALIZED VIEW top_docs")
         assert "refreshed materialized view" in str(refresh)
+        drop = db.sql("DROP MATERIALIZED VIEW top_docs")
+        assert "dropped materialized view" in str(drop)
+        tables = db.list_tables()
+        assert "top_docs" not in tables
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_sql_stream_search_pagination():
+    import shutil
+
+    from toradb.sql import sql_stream
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_stream_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        for i in range(6):
+            t.add([f"Nikola Tesla item {i} motor"])
+        pages = list(
+            sql_stream(
+                db,
+                "STREAM SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 2",
+                batch_size=2,
+            )
+        )
+        assert len(pages) >= 2
+        total = sum(len(p.to_pandas()["id"]) for p in pages)
+        assert total >= 2
     finally:
         shutil.rmtree(path, ignore_errors=True)
 
