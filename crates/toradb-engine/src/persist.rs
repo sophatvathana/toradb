@@ -172,6 +172,45 @@ pub fn load_segment_hnsw_shards(
     Ok(out)
 }
 
+/// Names of on-disk index sidecars present for a table (for DESCRIBE / diagnostics).
+pub fn table_index_sidecars(base: &Path, table: &str) -> Result<Vec<String>, String> {
+    let mut names = Vec::new();
+    let dir = indexes_dir(base, table);
+    if bm25_table_bin_path(base, table).exists() {
+        names.push("bm25".into());
+    }
+    if table_vectors_bin_path(base, table).exists() {
+        names.push("vectors".into());
+    }
+    if table_hnsw_bin_path(base, table).exists() {
+        names.push("hnsw".into());
+    }
+    if table_diskann_bin_path(base, table).exists() {
+        names.push("diskann".into());
+    }
+    if table_has_segment_bm25_sidecars(base, table)? {
+        names.push("segment_bm25".into());
+    }
+    if table_has_segment_vector_sidecars(base, table)? {
+        names.push("segment_vectors".into());
+    }
+    if table_has_segment_hnsw_sidecars(base, table)? {
+        names.push("segment_hnsw".into());
+    }
+    if dir.exists() {
+        for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".bm25.json") && !names.iter().any(|n| n == "segment_bm25") {
+                names.push("segment_bm25".into());
+            }
+        }
+    }
+    names.sort_unstable();
+    names.dedup();
+    Ok(names)
+}
+
 /// True when at least one per-segment HNSW shard exists on disk.
 pub fn table_has_segment_hnsw_sidecars(base: &Path, table: &str) -> Result<bool, String> {
     let dir = indexes_dir(base, table);

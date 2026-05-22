@@ -139,6 +139,13 @@ impl DagRunner {
         self.retrieval.store.vector_dim(table)
     }
 
+    pub fn table_index_sidecars(&self, table: &str) -> Result<Vec<String>, String> {
+        let Some(ref path) = self.db_path else {
+            return Ok(Vec::new());
+        };
+        persist::table_index_sidecars(path.as_path(), table)
+    }
+
     fn segment_parallelism(&self, table: &str) -> u32 {
         if let Some(ref path) = self.db_path {
             persist::table_segment_count(path.as_path(), table)
