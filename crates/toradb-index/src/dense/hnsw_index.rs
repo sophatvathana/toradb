@@ -11,7 +11,16 @@ const HNSW_MIN_DOCS: usize = 32;
 /// Minimum vectors per logical segment shard before building a segment-local graph.
 pub const SEGMENT_HNSW_MIN_DOCS: usize = 8;
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub struct HnswIndex {
     dim: usize,
     ids: Vec<DocId>,

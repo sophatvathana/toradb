@@ -1,13 +1,23 @@
-//! Compact on-disk embedding snapshot (magic `TVM1` + bincode payload).
+//! Compact on-disk embedding snapshot (magic `TVM1` + rkyv payload).
 
 use std::collections::HashMap;
+
+use crate::index_blob;
 
 use toradb_core::DocId;
 
 pub const VECTOR_MAGIC: &[u8; 4] = b"TVM1";
-pub const VECTOR_VERSION: u8 = 1;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub struct VectorSnapshot {
     pub dim: u32,
     pub ids: Vec<DocId>,
@@ -46,25 +56,11 @@ impl VectorSnapshot {
 }
 
 pub fn encode_snapshot(snap: &VectorSnapshot) -> Result<Vec<u8>, String> {
-    let payload = bincode::serialize(snap).map_err(|e| e.to_string())?;
-    let mut out = Vec::with_capacity(5 + payload.len());
-    out.extend_from_slice(VECTOR_MAGIC);
-    out.push(VECTOR_VERSION);
-    out.extend_from_slice(&payload);
-    Ok(out)
+    index_blob::encode(VECTOR_MAGIC, snap)
 }
 
 pub fn decode_snapshot(bytes: &[u8]) -> Result<VectorSnapshot, String> {
-    if bytes.len() < 5 {
-        return Err("vector sidecar too short".into());
-    }
-    if &bytes[..4] != VECTOR_MAGIC {
-        return Err("invalid vector sidecar magic".into());
-    }
-    if bytes[4] != VECTOR_VERSION {
-        return Err(format!("unsupported vector sidecar version {}", bytes[4]));
-    }
-    bincode::deserialize(&bytes[5..]).map_err(|e| e.to_string())
+    index_blob::decode(VECTOR_MAGIC, bytes)
 }
 
 pub fn write_snapshot_file(path: &std::path::Path, snap: &VectorSnapshot) -> Result<(), String> {

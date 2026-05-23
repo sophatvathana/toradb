@@ -85,7 +85,7 @@ impl Bm25Index {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Bm25Snapshot {
     pub postings: HashMap<String, Vec<(DocId, u32)>>,
     pub doc_len: HashMap<DocId, u32>,

@@ -1,31 +1,17 @@
-//! On-disk DiskANN graph snapshot (magic `TDA1` + bincode HNSW-style graph payload).
+//! On-disk DiskANN graph snapshot (magic `TDA1` + rkyv HNSW-style graph payload).
 
+use crate::index_blob;
 use super::hnsw_index::{should_use_hnsw, HnswIndex};
 use super::vector_codec::VectorSnapshot;
 
 pub const DISKANN_MAGIC: &[u8; 4] = b"TDA1";
-pub const DISKANN_VERSION: u8 = 1;
 
 pub fn encode_index(index: &HnswIndex) -> Result<Vec<u8>, String> {
-    let payload = bincode::serialize(index).map_err(|e| e.to_string())?;
-    let mut out = Vec::with_capacity(5 + payload.len());
-    out.extend_from_slice(DISKANN_MAGIC);
-    out.push(DISKANN_VERSION);
-    out.extend_from_slice(&payload);
-    Ok(out)
+    index_blob::encode(DISKANN_MAGIC, index)
 }
 
 pub fn decode_index(bytes: &[u8]) -> Result<HnswIndex, String> {
-    if bytes.len() < 5 {
-        return Err("diskann sidecar too short".into());
-    }
-    if &bytes[..4] != DISKANN_MAGIC {
-        return Err("invalid diskann sidecar magic".into());
-    }
-    if bytes[4] != DISKANN_VERSION {
-        return Err(format!("unsupported diskann sidecar version {}", bytes[4]));
-    }
-    bincode::deserialize(&bytes[5..]).map_err(|e| e.to_string())
+    index_blob::decode(DISKANN_MAGIC, bytes)
 }
 
 pub fn write_index_file(path: &std::path::Path, index: &HnswIndex) -> Result<(), String> {

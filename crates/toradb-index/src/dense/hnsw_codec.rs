@@ -1,30 +1,16 @@
-//! Compact on-disk HNSW graph snapshot (magic `THM1` + bincode payload).
+//! Compact on-disk HNSW graph snapshot (magic `THM1` + rkyv payload).
 
+use crate::index_blob;
 use super::hnsw_index::HnswIndex;
 
 pub const HNSW_MAGIC: &[u8; 4] = b"THM1";
-pub const HNSW_VERSION: u8 = 1;
 
 pub fn encode_index(index: &HnswIndex) -> Result<Vec<u8>, String> {
-    let payload = bincode::serialize(index).map_err(|e| e.to_string())?;
-    let mut out = Vec::with_capacity(5 + payload.len());
-    out.extend_from_slice(HNSW_MAGIC);
-    out.push(HNSW_VERSION);
-    out.extend_from_slice(&payload);
-    Ok(out)
+    index_blob::encode(HNSW_MAGIC, index)
 }
 
 pub fn decode_index(bytes: &[u8]) -> Result<HnswIndex, String> {
-    if bytes.len() < 5 {
-        return Err("hnsw sidecar too short".into());
-    }
-    if &bytes[..4] != HNSW_MAGIC {
-        return Err("invalid hnsw sidecar magic".into());
-    }
-    if bytes[4] != HNSW_VERSION {
-        return Err(format!("unsupported hnsw sidecar version {}", bytes[4]));
-    }
-    bincode::deserialize(&bytes[5..]).map_err(|e| e.to_string())
+    index_blob::decode(HNSW_MAGIC, bytes)
 }
 
 pub fn write_index_file(path: &std::path::Path, index: &HnswIndex) -> Result<(), String> {
