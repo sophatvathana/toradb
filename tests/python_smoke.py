@@ -208,6 +208,73 @@ def test_dense_vector_search():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_dense_strategy_uses_diskann_when_sidecar_present():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_dense_diskann_auto_"))
+    try:
+        db = toradb.local(str(path))
+        emb = db.create_table("emb", mode="hybrid")
+        emb.add(
+            [
+                {"text": f"doc {i}", "embedding": _unit_vector(i)}
+                for i in range(40)
+            ]
+        )
+        r = emb.search(
+            "query",
+            top_k=5,
+            strategy="dense",
+            query_vector=_unit_vector(39),
+            explain=True,
+        )
+        assert "dense_backend=diskann" in r.explain()
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_search_explain_reports_dense_backend_diskann():
+    import re
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_explain_diskann_"))
+    try:
+        db = toradb.local(str(path))
+        emb = db.create_table("emb", mode="hybrid")
+        emb.add(
+            [
+                {"text": f"doc {i}", "embedding": _unit_vector(i)}
+                for i in range(40)
+            ]
+        )
+        r = emb.search(
+            "query",
+            top_k=3,
+            strategy="diskann",
+            query_vector=_unit_vector(39),
+            explain=True,
+        )
+        assert re.search(r"dense_backend=diskann", r.explain())
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_cli_tables_prints_describe():
+    import shutil
+
+    from toradb.cli import cmd_tables
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_cli_tables_"))
+    try:
+        import toradb
+
+        db = toradb.local(str(path))
+        db.create_table("docs", mode="text").add(["hello"])
+        assert cmd_tables(str(path)) == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_search_with_strategy_and_explain():
     import re
     import shutil
@@ -403,6 +470,34 @@ def test_sql_vector_search():
         )
         frame = results.to_pandas()
         assert frame["id"][0] == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_sql_vector_search_prefers_diskann_sidecar():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_vec_diskann_"))
+    try:
+        db = toradb.local(str(path))
+        emb = db.create_table("emb", mode="hybrid")
+        emb.add(
+            [
+                {"text": f"doc {i}", "embedding": _unit_vector(i)}
+                for i in range(40)
+            ]
+        )
+        (path / "emb" / "indexes" / "hnsw.bin").unlink(missing_ok=True)
+        del db
+
+        db2 = toradb.local(str(path))
+        q = _unit_vector(39)
+        ann = "[" + ", ".join(f"{x:.1f}" for x in q) + "]"
+        frame = db2.sql(
+            f"SELECT id FROM emb VECTOR SEARCH embedding ANN({ann}) LIMIT 5"
+        ).to_pandas()
+        assert len(frame["id"]) > 0
+        assert 39 in list(frame["id"][:5])
     finally:
         shutil.rmtree(path, ignore_errors=True)
 
