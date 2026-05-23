@@ -4,6 +4,7 @@ use toradb_sql::ast::SelectStmt;
 
 use crate::dag::DagRunner;
 use crate::join::apply_metadata_join;
+use crate::materialized;
 use crate::olap::{run_aggregate, SqlAggregateResult};
 
 pub struct SqlSearchResult {
@@ -18,6 +19,13 @@ pub enum SqlSelectResult {
 }
 
 pub fn run_select(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSelectResult, String> {
+    if let Some(base) = dag.db_path() {
+        if materialized::is_materialized_view(base, &sel.table) {
+            return Ok(SqlSelectResult::Search(materialized::query_materialized_view(
+                base, &sel.table, sel,
+            )?));
+        }
+    }
     if sel.group_by.is_some() {
         return Ok(SqlSelectResult::Aggregate(run_aggregate(dag, sel)?));
     }

@@ -476,6 +476,9 @@ pub fn table_documents(
 
 /// Remove a table directory from disk.
 pub fn drop_table(base: &Path, table: &str) -> Result<(), String> {
+    if crate::materialized::is_materialized_view(base, table) {
+        return crate::materialized::drop_materialized_view(base, table);
+    }
     let dir = base.join(table);
     if dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;

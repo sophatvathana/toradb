@@ -2,10 +2,18 @@
 pub enum Stmt {
     CreateTable(CreateTableStmt),
     CreateIndex(CreateIndexStmt),
+    CreateMaterializedView(CreateMaterializedViewStmt),
+    RefreshMaterializedView { name: String },
     DropTable { name: String },
     ShowTables,
     Describe { name: String },
     Select(SelectStmt),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateMaterializedViewStmt {
+    pub name: String,
+    pub select: SelectStmt,
 }
 
 #[derive(Debug, Clone, PartialEq)]

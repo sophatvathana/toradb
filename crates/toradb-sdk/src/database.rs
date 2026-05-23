@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use toradb_core::{Batch, ExecCtx, QueryMetrics};
-use toradb_engine::{persist, sql_exec, DagRunner};
+use toradb_engine::{materialized, persist, sql_exec, DagRunner};
 use toradb_sql::{ast::Stmt, binder::Binder, parse};
 
 use crate::table::{AnalyticsResults, SearchResults};
@@ -61,6 +61,49 @@ impl Database {
                     self.ensure_table(&table);
                     return Ok(SqlOutcome::Message(format!("ok: created table {table}")));
                 }
+                Stmt::CreateMaterializedView(mv) => {
+                    let base = self
+                        .dag
+                        .db_path()
+                        .ok_or_else(|| {
+                            pyo3::exceptions::PyValueError::new_err(
+                                "materialized views require a local on-disk database",
+                            )
+                        })?
+                        .to_path_buf();
+                    let rows = materialized::create_materialized_view(
+                        &mut self.dag,
+                        base.as_path(),
+                        &mv.name,
+                        &mv.select,
+                    )
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                    return Ok(SqlOutcome::Message(format!(
+                        "ok: created materialized view {} ({} rows)",
+                        mv.name, rows
+                    )));
+                }
+                Stmt::RefreshMaterializedView { name } => {
+                    let base = self
+                        .dag
+                        .db_path()
+                        .ok_or_else(|| {
+                            pyo3::exceptions::PyValueError::new_err(
+                                "materialized views require a local on-disk database",
+                            )
+                        })?
+                        .to_path_buf();
+                    let rows = materialized::refresh_materialized_view(
+                        &mut self.dag,
+                        base.as_path(),
+                        &name,
+                    )
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                    return Ok(SqlOutcome::Message(format!(
+                        "ok: refreshed materialized view {} ({} rows)",
+                        name, rows
+                    )));
+                }
                 Stmt::CreateIndex(idx) => {
                     let table = idx.table.to_lowercase();
                     self.dag
@@ -83,6 +126,15 @@ impl Database {
                 }
                 Stmt::Describe { name } => {
                     let table = name.to_lowercase();
+                    if let Some(base) = self.dag.db_path() {
+                        if materialized::is_materialized_view(base, &table) {
+                            let rows = materialized::load_view_row_count(base, &table)
+                                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                            return Ok(SqlOutcome::Message(format!(
+                                "materialized_view: {table}\nrows: {rows}\nsource: cached search results"
+                            )));
+                        }
+                    }
                     let row_count = self
                         .dag
                         .table_documents(&table)

@@ -502,6 +502,33 @@ def test_sql_vector_search_prefers_diskann_sidecar():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_sql_materialized_view():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_mv_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                "Nikola Tesla alternating current motor",
+                "Marie Curie studied radioactivity",
+            ]
+        )
+        msg = db.sql(
+            "CREATE MATERIALIZED VIEW top_docs AS "
+            "SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 5"
+        )
+        assert "created materialized view" in str(msg)
+        cached = db.sql("SELECT id FROM top_docs LIMIT 10").to_pandas()["id"]
+        assert len(cached) >= 1
+        t.add(["Nikola Tesla high voltage coil"])
+        refresh = db.sql("REFRESH MATERIALIZED VIEW top_docs")
+        assert "refreshed materialized view" in str(refresh)
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_sql_search_join_metadata():
     import shutil
 

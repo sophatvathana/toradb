@@ -309,6 +309,85 @@ fn parse_from_clause(
     ))
 }
 
+pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, String> {
+    expect_ident(tokens, i, "SELECT")?;
+    let select_items = parse_select_exprs(tokens, i)?;
+    if !matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "FROM") {
+        return Err("SELECT requires FROM".into());
+    }
+    *i += 1;
+    let (table, join) = parse_from_clause(tokens, i)?;
+    let mut sparse = None;
+    let mut sparse_query = None;
+    let mut vector = false;
+    let mut vector_query = None;
+    let mut vector_text = None;
+    let mut limit = 20;
+    let mut offset = 0u32;
+    let mut order_by_score_desc = None;
+    let mut group_by = None;
+    let mut where_clause = None;
+    while *i < tokens.len() && !matches!(tokens.get(*i), Some(Token::Eof)) {
+        match tokens.get(*i) {
+            Some(Token::Ident(k)) if k == "SPARSE" => {
+                let (method, query) = parse_sparse_search(tokens, i)?;
+                sparse = method.or(Some("bm25".into()));
+                sparse_query = query;
+            }
+            Some(Token::Ident(k)) if k == "VECTOR" => {
+                let (v, vq, vt) = parse_vector_search(tokens, i)?;
+                vector = v;
+                vector_query = vq;
+                vector_text = vt;
+            }
+            Some(Token::Ident(k)) if k == "LIMIT" => {
+                *i += 1;
+                if let Some(Token::Number(n)) = tokens.get(*i) {
+                    limit = *n;
+                    *i += 1;
+                }
+            }
+            Some(Token::Ident(k)) if k == "OFFSET" => {
+                *i += 1;
+                if let Some(Token::Number(n)) = tokens.get(*i) {
+                    offset = *n;
+                    *i += 1;
+                }
+            }
+            Some(Token::Ident(k)) if k == "ORDER" => {
+                order_by_score_desc = Some(parse_order_by_score(tokens, i)?);
+            }
+            Some(Token::Ident(k)) if k == "GROUP" => {
+                *i += 2;
+                if let Some(Token::Ident(g)) = tokens.get(*i) {
+                    group_by = Some(g.to_lowercase());
+                    *i += 1;
+                }
+            }
+            Some(Token::Ident(k)) if k == "WHERE" => {
+                where_clause = Some(parse_where_clause(tokens, i)?);
+            }
+            Some(Token::Semi) | Some(Token::Eof) => break,
+            _ => *i += 1,
+        }
+    }
+    Ok(SelectStmt {
+        table,
+        join,
+        select_items,
+        sparse,
+        sparse_query,
+        vector,
+        vector_query,
+        vector_text,
+        limit,
+        offset,
+        order_by_score_desc,
+        group_by,
+        where_clause,
+    })
+}
+
 fn parse_order_by_score(tokens: &[Token], i: &mut usize) -> Result<bool, String> {
     expect_ident(tokens, i, "ORDER")?;
     expect_ident(tokens, i, "BY")?;
@@ -332,6 +411,22 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
     let mut out = Vec::new();
     while !matches!(tokens.get(i), Some(Token::Eof) | None) {
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "CREATE") {
+            if matches!(tokens.get(i + 1), Some(Token::Ident(k)) if k == "MATERIALIZED")
+                && matches!(tokens.get(i + 2), Some(Token::Ident(k)) if k == "VIEW")
+            {
+                i += 3;
+                let name = ident_at(&tokens, i)
+                    .ok_or("materialized view name")?
+                    .to_lowercase();
+                i += 1;
+                expect_ident(&tokens, &mut i, "AS")?;
+                let select = parse_select_stmt(&tokens, &mut i)?;
+                out.push(Stmt::CreateMaterializedView(CreateMaterializedViewStmt {
+                    name,
+                    select,
+                }));
+                continue;
+            }
             if matches!(tokens.get(i + 1), Some(Token::Ident(k)) if k == "TABLE") {
                 i += 2;
                 let name = match tokens.get(i) {
@@ -423,6 +518,17 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             out.push(Stmt::ShowTables);
             continue;
         }
+        if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "REFRESH") {
+            i += 1;
+            expect_ident(&tokens, &mut i, "MATERIALIZED")?;
+            expect_ident(&tokens, &mut i, "VIEW")?;
+            let name = ident_at(&tokens, i)
+                .ok_or("materialized view name after REFRESH")?
+                .to_lowercase();
+            i += 1;
+            out.push(Stmt::RefreshMaterializedView { name });
+            continue;
+        }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "DESCRIBE" || k == "DESC") {
             i += 1;
             let name = match tokens.get(i) {
@@ -436,82 +542,8 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             continue;
         }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "SELECT") {
-            i += 1;
-            let select_items = parse_select_exprs(&tokens, &mut i)?;
-            if !matches!(tokens.get(i), Some(Token::Ident(k)) if k == "FROM") {
-                return Err("SELECT requires FROM".into());
-            }
-            i += 1;
-            let (table, join) = parse_from_clause(&tokens, &mut i)?;
-            let mut sparse = None;
-            let mut sparse_query = None;
-            let mut vector = false;
-            let mut vector_query = None;
-            let mut vector_text = None;
-            let mut limit = 20;
-            let mut offset = 0u32;
-            let mut order_by_score_desc = None;
-            let mut group_by = None;
-            let mut where_clause = None;
-            while i < tokens.len() && !matches!(tokens.get(i), Some(Token::Eof)) {
-                match tokens.get(i) {
-                    Some(Token::Ident(k)) if k == "SPARSE" => {
-                        let (method, query) = parse_sparse_search(&tokens, &mut i)?;
-                        sparse = method.or(Some("bm25".into()));
-                        sparse_query = query;
-                    }
-                    Some(Token::Ident(k)) if k == "VECTOR" => {
-                        let (v, vq, vt) = parse_vector_search(&tokens, &mut i)?;
-                        vector = v;
-                        vector_query = vq;
-                        vector_text = vt;
-                    }
-                    Some(Token::Ident(k)) if k == "LIMIT" => {
-                        i += 1;
-                        if let Some(Token::Number(n)) = tokens.get(i) {
-                            limit = *n;
-                            i += 1;
-                        }
-                    }
-                    Some(Token::Ident(k)) if k == "OFFSET" => {
-                        i += 1;
-                        if let Some(Token::Number(n)) = tokens.get(i) {
-                            offset = *n;
-                            i += 1;
-                        }
-                    }
-                    Some(Token::Ident(k)) if k == "ORDER" => {
-                        order_by_score_desc = Some(parse_order_by_score(&tokens, &mut i)?);
-                    }
-                    Some(Token::Ident(k)) if k == "GROUP" => {
-                        i += 2;
-                        if let Some(Token::Ident(g)) = tokens.get(i) {
-                            group_by = Some(g.to_lowercase());
-                            i += 1;
-                        }
-                    }
-                    Some(Token::Ident(k)) if k == "WHERE" => {
-                        where_clause = Some(parse_where_clause(&tokens, &mut i)?);
-                    }
-                    Some(Token::Semi) | Some(Token::Eof) => break,
-                    _ => i += 1,
-                }
-            }
-            out.push(Stmt::Select(SelectStmt {
-                table,
-                join,
-                select_items,
-                sparse,
-                sparse_query,
-                vector,
-                vector_query,
-                vector_text,
-                limit,
-                offset,
-                order_by_score_desc,
-                group_by,
-                where_clause,
-            }));
+            let select = parse_select_stmt(&tokens, &mut i)?;
+            out.push(Stmt::Select(select));
             continue;
         }
         i += 1;
