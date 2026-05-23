@@ -1,10 +1,10 @@
 use toradb_engine::DagRunner;
 use toradb_index::IngestDoc;
-use toradb_storage::wal::read_flushes;
+use toradb_storage::wal::{read_checkpoint, read_flushes};
 
 #[test]
-fn ingest_appends_wal_flush_record() {
-    let dir = std::env::temp_dir().join("toradb_engine_wal");
+fn flush_batch_checkpoints_wal_after_manifest() {
+    let dir = std::env::temp_dir().join("toradb_wal_checkpoint_flush");
     let _ = std::fs::remove_dir_all(&dir);
 
     {
@@ -20,11 +20,8 @@ fn ingest_appends_wal_flush_record() {
         .expect("add");
     }
 
-    let records = read_flushes(&dir, "docs").expect("read wal");
-    assert!(
-        records.is_empty(),
-        "WAL flush log should be checkpointed after manifest commit"
-    );
+    assert!(read_flushes(&dir, "docs").expect("read").is_empty());
+    assert!(read_checkpoint(&dir, "docs").expect("cp").is_some());
 
     let _ = std::fs::remove_dir_all(&dir);
 }

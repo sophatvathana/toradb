@@ -499,7 +499,10 @@ pub fn list_tables(base: &Path) -> Result<Vec<String>, String> {
             names.push(name);
         }
     }
+    let mut views = crate::materialized::list_materialized_views(base)?;
+    names.append(&mut views);
     names.sort_unstable();
+    names.dedup();
     Ok(names)
 }
 
@@ -626,12 +629,7 @@ pub fn replay_flush_wal(base: &Path, table: &str) -> Result<usize, String> {
     if recovered > 0 {
         manifest.save(&manifest_path)?;
     }
-    let all_reconciled = records.iter().all(|r| {
-        manifest.segments.contains(&r.segment) && seg_dir.join(&r.segment).exists()
-    });
-    if all_reconciled && !records.is_empty() {
-        wal::truncate_flushes(base, table)?;
-    }
+    wal::checkpoint_after_manifest(base, table, &manifest.segments, &seg_dir)?;
     Ok(recovered)
 }
 
@@ -719,6 +717,8 @@ pub fn flush_batch(
     let seg_name_clone = seg_name.clone();
     manifest.push_segment(seg_name);
     manifest.save(&manifest_path)?;
+    let seg_dir = TableManifestFile::segments_dir(base, table);
+    wal::checkpoint_after_manifest(base, table, &manifest.segments, &seg_dir)?;
     Ok(seg_name_clone)
 }
 

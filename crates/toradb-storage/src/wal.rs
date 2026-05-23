@@ -1,6 +1,7 @@
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +12,12 @@ pub struct WalFlushRecord {
     pub doc_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WalCheckpoint {
+    pub last_segment: String,
+    pub committed_unix_secs: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct Wal {
     pub entries: u64,
@@ -18,6 +25,10 @@ pub struct Wal {
 
 pub fn flush_log_path(base: &Path, table: &str) -> PathBuf {
     base.join(table).join("wal").join("flush.jsonl")
+}
+
+pub fn checkpoint_path(base: &Path, table: &str) -> PathBuf {
+    base.join(table).join("wal").join("checkpoint.json")
 }
 
 /// Append one flush record and fsync the log file.
@@ -69,6 +80,33 @@ pub fn read_flushes(base: &Path, table: &str) -> Result<Vec<WalFlushRecord>, Str
     Ok(out)
 }
 
+pub fn read_checkpoint(base: &Path, table: &str) -> Result<Option<WalCheckpoint>, String> {
+    let path = checkpoint_path(base, table);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    serde_json::from_slice(&bytes).map_err(|e| e.to_string()).map(Some)
+}
+
+fn write_checkpoint(base: &Path, table: &str, last_segment: &str) -> Result<(), String> {
+    let path = checkpoint_path(base, table);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let committed_unix_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs();
+    let checkpoint = WalCheckpoint {
+        last_segment: last_segment.to_string(),
+        committed_unix_secs,
+    };
+    let bytes = serde_json::to_vec_pretty(&checkpoint).map_err(|e| e.to_string())?;
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Remove the flush log when all records are reflected in the manifest.
 pub fn truncate_flushes(base: &Path, table: &str) -> Result<(), String> {
     let path = flush_log_path(base, table);
@@ -76,4 +114,30 @@ pub fn truncate_flushes(base: &Path, table: &str) -> Result<(), String> {
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// After manifest commit, checkpoint and trim WAL when every flush record is durable.
+pub fn checkpoint_after_manifest(
+    base: &Path,
+    table: &str,
+    manifest_segments: &[String],
+    segment_dir: &Path,
+) -> Result<bool, String> {
+    let records = read_flushes(base, table)?;
+    if records.is_empty() {
+        return Ok(false);
+    }
+    let all_reconciled = records.iter().all(|r| {
+        manifest_segments.contains(&r.segment) && segment_dir.join(&r.segment).exists()
+    });
+    if !all_reconciled {
+        return Ok(false);
+    }
+    let last_segment = records
+        .last()
+        .map(|r| r.segment.as_str())
+        .unwrap_or("");
+    write_checkpoint(base, table, last_segment)?;
+    truncate_flushes(base, table)?;
+    Ok(true)
 }
