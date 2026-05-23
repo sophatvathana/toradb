@@ -167,6 +167,36 @@ def main() -> None:
         ),
     )
 
+    section("9b. DiskANN on disk (large embedding table)")
+    ann = db.create_table("ann_corpus", mode="hybrid")
+    dim = 8
+    ann.add(
+        [
+            {
+                "text": f"vector doc {i}",
+                "embedding": [1.0 if (i % dim) == j else 0.0 for j in range(dim)],
+            }
+            for i in range(40)
+        ]
+    )
+    show_results(
+        "DiskANN strategy (on-disk graph)",
+        ann.search(
+            "vector doc",
+            top_k=3,
+            strategy="diskann",
+            query_vector=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            explain=True,
+        ),
+    )
+    show_results(
+        "SQL VECTOR SEARCH (uses diskann.bin when present)",
+        db.sql(
+            "SELECT id FROM ann_corpus VECTOR SEARCH embedding "
+            "ANN([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]) LIMIT 3"
+        ),
+    )
+
     section("10. SQL retrieval")
     show_results(
         "SQL SPARSE SEARCH",
