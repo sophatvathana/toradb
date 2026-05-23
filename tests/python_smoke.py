@@ -502,6 +502,41 @@ def test_sql_vector_search_prefers_diskann_sidecar():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_sql_search_order_by_score():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_order_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                "unrelated topic",
+                "Nikola Tesla Nikola Tesla alternating current motor",
+                "Nikola Tesla once",
+            ]
+        )
+        raw = db.sql(
+            "SELECT id, score FROM docs SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 10"
+        ).to_pandas()
+        expected_ids = [
+            int(doc_id)
+            for doc_id, _ in sorted(
+                zip(raw["id"], raw["score"]), key=lambda row: row[1], reverse=True
+            )
+        ]
+        frame = db.sql(
+            "SELECT id, score FROM docs SPARSE SEARCH body BM25('Nikola Tesla motor') "
+            "ORDER BY score DESC LIMIT 3"
+        ).to_pandas()
+        scores = list(frame["score"])
+        assert scores == sorted(scores, reverse=True)
+        want = min(3, len(expected_ids))
+        assert [int(x) for x in frame["id"]] == expected_ids[:want]
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_sql_search_limit_offset():
     import shutil
 

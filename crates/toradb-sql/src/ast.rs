@@ -80,6 +80,8 @@ pub struct SelectStmt {
     pub vector_text: Option<String>,
     pub limit: u32,
     pub offset: u32,
+    /// `Some(true)` = ORDER BY score DESC, `Some(false)` = ASC, `None` = retrieval merge order.
+    pub order_by_score_desc: Option<bool>,
     pub group_by: Option<String>,
     pub where_clause: Option<WherePred>,
 }

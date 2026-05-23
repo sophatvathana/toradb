@@ -250,6 +250,23 @@ fn parse_sparse_search(tokens: &[Token], i: &mut usize) -> Result<(Option<String
     Ok((method, query))
 }
 
+fn parse_order_by_score(tokens: &[Token], i: &mut usize) -> Result<bool, String> {
+    expect_ident(tokens, i, "ORDER")?;
+    expect_ident(tokens, i, "BY")?;
+    expect_ident(tokens, i, "SCORE")?;
+    match ident_at(tokens, *i).as_deref() {
+        Some("ASC") => {
+            *i += 1;
+            Ok(false)
+        }
+        Some("DESC") => {
+            *i += 1;
+            Ok(true)
+        }
+        _ => Ok(true),
+    }
+}
+
 pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
     let tokens = tokenize(input);
     let mut i = 0;
@@ -410,6 +427,9 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                             i += 1;
                         }
                     }
+                    Some(Token::Ident(k)) if k == "ORDER" => {
+                        order_by_score_desc = Some(parse_order_by_score(&tokens, &mut i)?);
+                    }
                     Some(Token::Ident(k)) if k == "GROUP" => {
                         i += 2;
                         if let Some(Token::Ident(g)) = tokens.get(i) {
@@ -434,6 +454,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 vector_text,
                 limit,
                 offset,
+                order_by_score_desc,
                 group_by,
                 where_clause,
             }));

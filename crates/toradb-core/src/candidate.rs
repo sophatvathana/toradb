@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use crate::schema::DocId;
 
 /// Bounded candidate set for tiered retrieval (hot path: no heap growth in steady state).
@@ -31,6 +33,23 @@ impl CandidateSet {
     pub fn truncate(&mut self, max: usize) {
         self.ids.truncate(max);
         self.scores.truncate(max);
+    }
+
+    pub fn sort_by_score(&mut self, descending: bool) {
+        let mut pairs: Vec<(DocId, f32)> = self
+            .ids
+            .iter()
+            .copied()
+            .zip(self.scores.iter().copied())
+            .collect();
+        let cmp = |a: f32, b: f32| a.partial_cmp(&b).unwrap_or(Ordering::Equal);
+        if descending {
+            pairs.sort_by(|a, b| cmp(b.1, a.1));
+        } else {
+            pairs.sort_by(|a, b| cmp(a.1, b.1));
+        }
+        self.ids = pairs.iter().map(|(id, _)| *id).collect();
+        self.scores = pairs.iter().map(|(_, s)| *s).collect();
     }
 
     pub fn slice_range(&self, offset: usize, limit: usize) -> Self {

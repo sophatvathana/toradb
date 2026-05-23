@@ -71,16 +71,23 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
 
     let limit = sel.limit.max(1);
     let offset = sel.offset;
-    let page_size = offset.saturating_add(limit).max(1);
+    let base_page = offset.saturating_add(limit).max(1);
+    let page_size = if sel.order_by_score_desc.is_some() {
+        base_page.saturating_mul(20).min(1000).max(base_page)
+    } else {
+        base_page
+    };
     let ctx = ExecCtx::new(
         page_size.saturating_mul(50).min(1000),
         page_size.saturating_mul(5).min(100),
         page_size,
     );
     let metrics = dag.run(&mut batch, &ctx);
-    let page = batch
-        .candidates
-        .slice_range(offset as usize, limit as usize);
+    let mut candidates = batch.candidates;
+    if let Some(desc) = sel.order_by_score_desc {
+        candidates.sort_by_score(desc);
+    }
+    let page = candidates.slice_range(offset as usize, limit as usize);
 
     Ok(SqlSearchResult {
         ids: page.ids,
