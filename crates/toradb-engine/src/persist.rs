@@ -146,6 +146,10 @@ pub fn load_table_diskann_sidecar(
     Ok(None)
 }
 
+pub fn table_has_diskann_sidecar(base: &Path, table: &str) -> bool {
+    table_diskann_bin_path(base, table).exists()
+}
+
 pub fn save_segment_hnsw_shards(
     base: &Path,
     table: &str,

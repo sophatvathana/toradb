@@ -146,6 +146,12 @@ impl DagRunner {
         persist::table_index_sidecars(path.as_path(), table)
     }
 
+    pub fn table_has_diskann_sidecar(&self, table: &str) -> bool {
+        self.db_path
+            .as_ref()
+            .is_some_and(|p| persist::table_has_diskann_sidecar(p.as_path(), table))
+    }
+
     fn segment_parallelism(&self, table: &str) -> u32 {
         if let Some(ref path) = self.db_path {
             persist::table_segment_count(path.as_path(), table)
