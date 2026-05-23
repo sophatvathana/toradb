@@ -22,6 +22,11 @@ fn parses_create_index() {
         stmts.as_slice(),
         [Stmt::CreateIndex(idx)] if idx.using == "BM25"
     ));
+    let stmts = parse("CREATE INDEX ann_idx ON emb (embedding) USING DISKANN").unwrap();
+    assert!(matches!(
+        stmts.as_slice(),
+        [Stmt::CreateIndex(idx)] if idx.using == "DISKANN"
+    ));
 }
 
 #[test]
