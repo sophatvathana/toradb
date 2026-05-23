@@ -129,6 +129,13 @@ impl Table {
         batch.tier1_enable_dense =
             !matches!(strategy, Some("sparse") | Some("bm25") | Some("text"));
         batch.tier1_use_diskann = matches!(strategy, Some("diskann"));
+        if !batch.tier1_use_diskann
+            && batch.tier1_enable_dense
+            && !batch.tier1_enable_sparse
+            && db.table_has_diskann_sidecar(&self.name)
+        {
+            batch.tier1_use_diskann = true;
+        }
         if batch.tier1_enable_dense && batch.query_vector.is_none() {
             if let Some(dim) = db.vector_dim(&self.name) {
                 batch.query_vector = Some(lexical_proxy_vector(query, dim));
@@ -144,11 +151,21 @@ impl Table {
         let page = batch
             .candidates
             .slice_range(offset.unwrap_or(0) as usize, top_k.unwrap_or(20) as usize);
+        let dense_backend = if batch.tier1_use_diskann {
+            "diskann"
+        } else if batch.tier1_enable_dense {
+            "hnsw"
+        } else {
+            "none"
+        };
         let explain_text = if explain.unwrap_or(false) {
             Some(format!(
-                "table={} strategy={:?} graph_expand={} depth={} hyde={} crag={} tier1={} tier2={} tier3={}",
+                "table={} strategy={:?} dense_backend={} sparse={} dense={} graph_expand={} depth={} hyde={} crag={} tier1={} tier2={} tier3={}",
                 self.name,
                 strategy,
+                dense_backend,
+                batch.tier1_enable_sparse,
+                batch.tier1_enable_dense,
                 batch.graph_expand,
                 batch.graph_depth,
                 batch.enable_hyde,

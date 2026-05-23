@@ -160,6 +160,10 @@ impl Database {
         self.dag.vector_dim(table)
     }
 
+    pub(crate) fn table_has_diskann_sidecar(&self, table: &str) -> bool {
+        self.dag.table_has_diskann_sidecar(table)
+    }
+
     fn list_table_names(&self) -> PyResult<Vec<String>> {
         self.dag
             .list_tables()
