@@ -15,6 +15,8 @@ pub struct Batch {
     pub tier1_enable_dense: bool,
     /// When true, tier-1 dense retrieval uses the on-disk DiskANN graph sidecar.
     pub tier1_use_diskann: bool,
+    /// When true, run per-segment retrieval across worker threads (single-node distributed).
+    pub distributed_segments: bool,
 }
 
 impl Default for Batch {
@@ -31,6 +33,7 @@ impl Default for Batch {
             tier1_enable_sparse: true,
             tier1_enable_dense: true,
             tier1_use_diskann: false,
+            distributed_segments: false,
         }
     }
 }

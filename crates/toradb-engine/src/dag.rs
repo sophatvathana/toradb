@@ -218,8 +218,15 @@ impl DagRunner {
             if run_segments {
                 let query = batch.query.clone();
                 let num_segments = self.segment_parallelism(&table);
+                let parallel = batch.distributed_segments;
                 let scheduler = SegmentScheduler::new(num_segments as usize);
-                let seg_merged = scheduler.run_for_segments(num_segments, |seg| {
+                metrics.segments_scanned = num_segments;
+                metrics.segment_workers = if parallel && num_segments > 1 {
+                    scheduler.workers as u32
+                } else {
+                    1
+                };
+                let seg_merged = scheduler.run_for_segments(num_segments, parallel, |seg| {
                     self.retrieval
                         .segment_candidates(&table, seg, &query, ctx)
                 });
@@ -238,9 +245,16 @@ impl DagRunner {
                         let query_vec = batch.query_vector.clone().unwrap_or_default();
                         if !query_vec.is_empty() {
                             let num_segments = self.segment_parallelism(&table);
+                            let parallel = batch.distributed_segments;
                             let scheduler = SegmentScheduler::new(num_segments as usize);
                             let k = ctx.tier2_budget as usize;
-                            let seg_merged = scheduler.run_for_segments(num_segments, |seg| {
+                            metrics.segments_scanned = num_segments;
+                            metrics.segment_workers = if parallel && num_segments > 1 {
+                                scheduler.workers as u32
+                            } else {
+                                1
+                            };
+                            let seg_merged = scheduler.run_for_segments(num_segments, parallel, |seg| {
                                 self.retrieval.segment_dense_candidates(
                                     &table,
                                     seg,

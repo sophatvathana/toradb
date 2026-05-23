@@ -98,6 +98,8 @@ pub struct SelectStmt {
     pub offset: u32,
     /// `Some(true)` = ORDER BY score DESC, `Some(false)` = ASC, `None` = retrieval merge order.
     pub order_by_score_desc: Option<bool>,
+    /// When true, scan segment shards in parallel (single-node distributed execution).
+    pub distributed: bool,
     pub group_by: Option<String>,
     pub where_clause: Option<WherePred>,
 }

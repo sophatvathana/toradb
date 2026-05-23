@@ -146,6 +146,7 @@ impl Table {
         batch.graph_expand = graph_expand.unwrap_or(false)
             || matches!(strategy, Some("graph") | Some("hybrid"));
         batch.graph_depth = depth.unwrap_or(2);
+        batch.distributed_segments = matches!(strategy, Some("distributed"));
         let ctx = tune_ctx(exec_ctx(top_k, offset), query, strategy);
         let metrics = db.run_retrieval(&mut batch, &ctx);
         let page = batch
@@ -160,7 +161,7 @@ impl Table {
         };
         let explain_text = if explain.unwrap_or(false) {
             Some(format!(
-                "table={} strategy={:?} dense_backend={} sparse={} dense={} graph_expand={} depth={} hyde={} crag={} tier1={} tier2={} tier3={}",
+                "table={} strategy={:?} dense_backend={} sparse={} dense={} graph_expand={} depth={} hyde={} crag={} distributed={} segment_workers={} segments_scanned={} tier1={} tier2={} tier3={}",
                 self.name,
                 strategy,
                 dense_backend,
@@ -170,6 +171,9 @@ impl Table {
                 batch.graph_depth,
                 batch.enable_hyde,
                 batch.enable_crag,
+                batch.distributed_segments,
+                metrics.segment_workers,
+                metrics.segments_scanned,
                 metrics.tier1_candidates,
                 metrics.tier2_candidates,
                 metrics.tier3_candidates

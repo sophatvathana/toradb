@@ -325,10 +325,15 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
     let mut limit = 20;
     let mut offset = 0u32;
     let mut order_by_score_desc = None;
+    let mut distributed = false;
     let mut group_by = None;
     let mut where_clause = None;
     while *i < tokens.len() && !matches!(tokens.get(*i), Some(Token::Eof)) {
         match tokens.get(*i) {
+            Some(Token::Ident(k)) if k == "DISTRIBUTED" => {
+                distributed = true;
+                *i += 1;
+            }
             Some(Token::Ident(k)) if k == "SPARSE" => {
                 let (method, query) = parse_sparse_search(tokens, i)?;
                 sparse = method.or(Some("bm25".into()));
@@ -383,6 +388,7 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
         limit,
         offset,
         order_by_score_desc,
+        distributed,
         group_by,
         where_clause,
     })

@@ -60,6 +60,7 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
         .unwrap_or_default();
     batch.tier1_enable_sparse = sparse;
     batch.tier1_enable_dense = vector;
+    batch.distributed_segments = sel.distributed;
     if vector && !sparse && dag.table_has_diskann_sidecar(&sel.table) {
         batch.tier1_use_diskann = true;
     }

@@ -502,6 +502,28 @@ def test_sql_vector_search_prefers_diskann_sidecar():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_sql_distributed_segment_search():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_distributed_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        for i in range(40):
+            t.add([f"Nikola Tesla item {i} motor"])
+        frame = db.sql(
+            "SELECT id FROM docs DISTRIBUTED SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 5"
+        ).to_pandas()
+        assert len(frame["id"]) > 0
+        explain = t.search(
+            "Nikola Tesla motor", top_k=3, strategy="distributed", explain=True
+        ).explain()
+        assert "distributed=true" in explain
+        assert "segment_workers=" in explain
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_sql_materialized_view():
     import shutil
 
