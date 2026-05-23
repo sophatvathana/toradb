@@ -17,14 +17,15 @@ Commands:
   smoke              Quick ingest + search sanity check
   query PATH TABLE Q Run BM25 search and print ranked ids
   sql PATH QUERY     Run a SQL statement (search or analytics)
-  tables PATH        List tables with on-disk manifests
-  reindex PATH TABLE Rebuild indexes (CREATE INDEX)
+  tables PATH        List tables (DESCRIBE summary per table)
+  reindex PATH TABLE Rebuild indexes (CREATE INDEX; USING BM25, HNSW, DISKANN, …)
 
 Examples:
   toradb smoke
   toradb query ./my_db docs "Nikola Tesla motor"
   toradb sql ./my_db "SELECT tag, COUNT(*) FROM articles GROUP BY tag"
   toradb tables ./examples/_demo_db
+  toradb reindex ./my_db emb --using DISKANN --column embedding
 """
     )
 
@@ -104,6 +105,24 @@ def cmd_sql(db_path: str, query: str) -> int:
     return 0
 
 
+def cmd_tables(db_path: str) -> int:
+    import toradb
+
+    db = toradb.local(db_path)
+    names = sorted(db.list_tables())
+    if not names:
+        print("(no tables)")
+        return 0
+    for name in names:
+        out = db.sql(f"DESCRIBE {name}")
+        if isinstance(out, str):
+            print(out)
+        else:
+            print(f"table: {name}")
+        print()
+    return 0
+
+
 def cmd_reindex(db_path: str, table: str, using: str, column: str) -> int:
     import toradb
 
@@ -149,9 +168,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         import toradb
 
-        for name in toradb.local(args.path).list_tables():
-            print(name)
-        return 0
+        return cmd_tables(args.path)
 
     if args.command == "sql":
         if not args.path:
