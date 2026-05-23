@@ -3,6 +3,7 @@ use toradb_index::dense::query_embed::lexical_proxy_vector;
 use toradb_sql::ast::SelectStmt;
 
 use crate::dag::DagRunner;
+use crate::join::apply_metadata_join;
 use crate::olap::{run_aggregate, SqlAggregateResult};
 
 pub struct SqlSearchResult {
@@ -84,6 +85,9 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
     );
     let metrics = dag.run(&mut batch, &ctx);
     let mut candidates = batch.candidates;
+    if let Some(ref join) = sel.join {
+        apply_metadata_join(dag, &sel.table, join, &mut candidates)?;
+    }
     if let Some(desc) = sel.order_by_score_desc {
         candidates.sort_by_score(desc);
     }

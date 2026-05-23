@@ -250,6 +250,65 @@ fn parse_sparse_search(tokens: &[Token], i: &mut usize) -> Result<(Option<String
     Ok((method, query))
 }
 
+fn parse_qualified_column(tokens: &[Token], i: &mut usize) -> Result<(String, String), String> {
+    let table = ident_at(tokens, *i)
+        .ok_or("expected table.column in JOIN ON")?
+        .to_lowercase();
+    *i += 1;
+    if !matches!(tokens.get(*i), Some(Token::Dot)) {
+        return Err("expected . after table name in JOIN ON".into());
+    }
+    *i += 1;
+    let column = ident_at(tokens, *i)
+        .ok_or("expected column after table. in JOIN ON")?
+        .to_lowercase();
+    *i += 1;
+    Ok((table, column))
+}
+
+fn parse_from_clause(
+    tokens: &[Token],
+    i: &mut usize,
+) -> Result<(String, Option<JoinClause>), String> {
+    let left_table = ident_at(tokens, *i)
+        .ok_or("table name after FROM")?
+        .to_lowercase();
+    *i += 1;
+    if !matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "JOIN") {
+        return Ok((left_table, None));
+    }
+    *i += 1;
+    let right_table = ident_at(tokens, *i)
+        .ok_or("table name after JOIN")?
+        .to_lowercase();
+    *i += 1;
+    expect_ident(tokens, i, "ON")?;
+    let (left_qual, left_key) = parse_qualified_column(tokens, i)?;
+    if !matches!(tokens.get(*i), Some(Token::Eq)) {
+        return Err("JOIN ON requires =".into());
+    }
+    *i += 1;
+    let (right_qual, right_key) = parse_qualified_column(tokens, i)?;
+    if left_qual != left_table {
+        return Err(format!(
+            "JOIN ON left side must use {left_table}, got {left_qual}"
+        ));
+    }
+    if right_qual != right_table {
+        return Err(format!(
+            "JOIN ON right side must use {right_table}, got {right_qual}"
+        ));
+    }
+    Ok((
+        left_table,
+        Some(JoinClause {
+            right_table,
+            left_key,
+            right_key,
+        }),
+    ))
+}
+
 fn parse_order_by_score(tokens: &[Token], i: &mut usize) -> Result<bool, String> {
     expect_ident(tokens, i, "ORDER")?;
     expect_ident(tokens, i, "BY")?;
@@ -383,13 +442,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 return Err("SELECT requires FROM".into());
             }
             i += 1;
-            let table = match tokens.get(i) {
-                Some(Token::Ident(n)) => {
-                    i += 1;
-                    n.to_lowercase()
-                }
-                _ => return Err("table name after FROM".into()),
-            };
+            let (table, join) = parse_from_clause(&tokens, &mut i)?;
             let mut sparse = None;
             let mut sparse_query = None;
             let mut vector = false;
@@ -446,6 +499,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             }
             out.push(Stmt::Select(SelectStmt {
                 table,
+                join,
                 select_items,
                 sparse,
                 sparse_query,

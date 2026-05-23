@@ -502,6 +502,41 @@ def test_sql_vector_search_prefers_diskann_sidecar():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_sql_search_join_metadata():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_join_"))
+    try:
+        db = toradb.local(str(path))
+        papers = db.create_table("papers", mode="text")
+        citations = db.create_table("citations", mode="text")
+        papers.add(
+            [
+                {
+                    "text": "Nikola Tesla alternating current motor",
+                    "paper_id": "p1",
+                },
+                {
+                    "text": "Nikola Tesla wireless power",
+                    "paper_id": "p2",
+                },
+            ]
+        )
+        citations.add([{"text": "cites p1", "paper_id": "p1"}])
+        all_ids = db.sql(
+            "SELECT id FROM papers SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 5"
+        ).to_pandas()["id"]
+        joined = db.sql(
+            "SELECT id FROM papers JOIN citations "
+            "ON papers.paper_id = citations.paper_id "
+            "SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 5"
+        ).to_pandas()["id"]
+        assert len(joined) < len(all_ids)
+        assert int(joined[0]) == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_sql_search_order_by_score():
     import shutil
 

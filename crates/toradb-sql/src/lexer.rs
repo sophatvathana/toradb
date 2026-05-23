@@ -9,6 +9,7 @@ pub enum Token {
     LBracket,
     RBracket,
     Comma,
+    Dot,
     Semi,
     Eq,
     Ne,
@@ -88,6 +89,7 @@ pub fn tokenize(input: &str) -> Vec<Token> {
             b'[' => tokens.push(Token::LBracket),
             b']' => tokens.push(Token::RBracket),
             b',' => tokens.push(Token::Comma),
+            b'.' => tokens.push(Token::Dot),
             b';' => tokens.push(Token::Semi),
             b'!' if i + 1 < bytes.len() && bytes[i + 1] == b'=' => {
                 tokens.push(Token::Ne);

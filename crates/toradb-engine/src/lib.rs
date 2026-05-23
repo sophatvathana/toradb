@@ -6,6 +6,7 @@ pub mod lowering;
 pub mod operator;
 pub mod persist;
 pub mod scheduler;
+pub mod join;
 pub mod olap;
 pub mod sql_exec;
 

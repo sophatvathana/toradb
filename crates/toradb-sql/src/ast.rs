@@ -65,8 +65,16 @@ pub enum WherePred {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct JoinClause {
+    pub right_table: String,
+    pub left_key: String,
+    pub right_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SelectStmt {
     pub table: String,
+    pub join: Option<JoinClause>,
     pub select_items: Vec<SelectExpr>,
     /// BM25 / sparse method name (e.g. "bm25").
     pub sparse: Option<String>,

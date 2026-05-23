@@ -422,6 +422,28 @@ impl CorpusStore {
         self.tables.get(name)
     }
 
+    pub fn doc_metadata_value<'a>(
+        &'a self,
+        table: &str,
+        id: DocId,
+        field: &str,
+    ) -> Option<&'a str> {
+        self.table(table)?
+            .docs
+            .get(&id)?
+            .metadata
+            .get(field)
+            .map(|s| s.as_str())
+    }
+
+    pub fn any_doc_metadata_eq(&self, table: &str, field: &str, value: &str) -> bool {
+        self.table(table).is_some_and(|t| {
+            t.docs
+                .values()
+                .any(|d| d.metadata.get(field).map(|v| v == value).unwrap_or(false))
+        })
+    }
+
     pub fn vector_dim(&self, table: &str) -> Option<usize> {
         self.table(table).and_then(TableCorpus::vector_dim)
     }
