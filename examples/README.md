@@ -36,8 +36,18 @@ toradb sql ./examples/_demo_db "SHOW TABLES"
 toradb sql ./examples/_demo_db "DESCRIBE articles"
 toradb sql ./examples/_demo_db "DROP TABLE logs"
 toradb sql ./examples/_demo_db "CREATE INDEX text_idx ON articles (text) USING BM25"
+toradb sql ./examples/_demo_db "CREATE INDEX ann_idx ON papers (embedding) USING DISKANN"
 ```
 
 Use `db.table("articles")` (not `create_table`) to query tables already on disk.
 
 Rebuild indexes from Python: `db.reindex("articles", using="BM25")`.
+
+Vector ANN on disk (needs enough embedded docs for graph build, typically 32+):
+
+```python
+table.search("query", strategy="diskann", query_vector=[...], top_k=10)
+db.reindex("emb", using="DISKANN", column="embedding")
+```
+
+`DESCRIBE table` lists row count, vector dimension, segment count, and on-disk index sidecars (`bm25`, `vectors`, `hnsw`, `diskann`, `segment_*`).
