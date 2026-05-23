@@ -69,6 +69,115 @@ def test_stream_search_pagination():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def _unit_vector(doc_id: int, dim: int = 8) -> list[float]:
+    v = [0.0] * dim
+    v[doc_id % dim] = 1.0
+    return v
+
+
+def test_diskann_strategy_search():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_diskann_"))
+    try:
+        db = toradb.local(str(path))
+        emb = db.create_table("emb", mode="hybrid")
+        emb.add(
+            [
+                {
+                    "text": f"doc {i}",
+                    "embedding": _unit_vector(i),
+                }
+                for i in range(40)
+            ]
+        )
+        sidecar = path / "emb" / "indexes" / "diskann.bin"
+        assert sidecar.is_file(), "diskann.bin should exist after flush"
+        frame = emb.search(
+            "query",
+            top_k=5,
+            strategy="diskann",
+            query_vector=_unit_vector(39),
+        ).to_pandas()
+        assert len(frame["id"]) > 0
+        assert 39 in list(frame["id"][:5])
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_sql_create_index_diskann():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_create_index_diskann_"))
+    try:
+        db = toradb.local(str(path))
+        emb = db.create_table("emb", mode="hybrid")
+        emb.add(
+            [
+                {
+                    "text": f"doc {i}",
+                    "embedding": _unit_vector(i),
+                }
+                for i in range(40)
+            ]
+        )
+        msg = db.sql("CREATE INDEX ann_idx ON emb (embedding) USING DISKANN")
+        assert isinstance(msg, str)
+        assert "DISKANN" in msg
+        assert (path / "emb" / "indexes" / "diskann.bin").is_file()
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_reindex_diskann():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_reindex_diskann_"))
+    try:
+        db = toradb.local(str(path))
+        emb = db.create_table("emb", mode="hybrid")
+        emb.add(
+            [
+                {
+                    "text": f"doc {i}",
+                    "embedding": _unit_vector(i),
+                }
+                for i in range(40)
+            ]
+        )
+        sidecar = path / "emb" / "indexes" / "diskann.bin"
+        sidecar.unlink(missing_ok=True)
+        msg = db.reindex("emb", using="DISKANN", column="embedding")
+        assert "DISKANN" in msg
+        assert sidecar.is_file()
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_sql_describe_lists_index_sidecars():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_describe_idx_"))
+    try:
+        db = toradb.local(str(path))
+        emb = db.create_table("emb", mode="hybrid")
+        emb.add(
+            [
+                {
+                    "text": f"doc {i}",
+                    "embedding": _unit_vector(i),
+                }
+                for i in range(40)
+            ]
+        )
+        out = db.sql("DESCRIBE emb")
+        assert isinstance(out, str)
+        assert "indexes:" in out
+        assert "diskann" in out
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_dense_vector_search():
     import shutil
 
