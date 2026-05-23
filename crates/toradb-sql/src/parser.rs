@@ -379,6 +379,8 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             let mut vector_query = None;
             let mut vector_text = None;
             let mut limit = 20;
+            let mut offset = 0u32;
+            let mut order_by_score_desc = None;
             let mut group_by = None;
             let mut where_clause = None;
             while i < tokens.len() && !matches!(tokens.get(i), Some(Token::Eof)) {
@@ -398,6 +400,13 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                         i += 1;
                         if let Some(Token::Number(n)) = tokens.get(i) {
                             limit = *n;
+                            i += 1;
+                        }
+                    }
+                    Some(Token::Ident(k)) if k == "OFFSET" => {
+                        i += 1;
+                        if let Some(Token::Number(n)) = tokens.get(i) {
+                            offset = *n;
                             i += 1;
                         }
                     }
@@ -424,6 +433,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 vector_query,
                 vector_text,
                 limit,
+                offset,
                 group_by,
                 where_clause,
             }));

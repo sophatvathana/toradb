@@ -69,14 +69,22 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
         batch.query_vector = Some(lexical_proxy_vector(text, dim));
     }
 
-    let k = sel.limit.max(1);
-    let ctx = ExecCtx::new(k.saturating_mul(50).min(1000), k.saturating_mul(5).min(100), k);
+    let limit = sel.limit.max(1);
+    let offset = sel.offset;
+    let page_size = offset.saturating_add(limit).max(1);
+    let ctx = ExecCtx::new(
+        page_size.saturating_mul(50).min(1000),
+        page_size.saturating_mul(5).min(100),
+        page_size,
+    );
     let metrics = dag.run(&mut batch, &ctx);
-    batch.candidates.truncate(k as usize);
+    let page = batch
+        .candidates
+        .slice_range(offset as usize, limit as usize);
 
     Ok(SqlSearchResult {
-        ids: batch.candidates.ids,
-        scores: batch.candidates.scores,
+        ids: page.ids,
+        scores: page.scores,
         metrics,
     })
 }

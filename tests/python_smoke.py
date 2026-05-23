@@ -502,6 +502,26 @@ def test_sql_vector_search_prefers_diskann_sidecar():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_sql_search_limit_offset():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_offset_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        for i in range(5):
+            t.add([f"Nikola Tesla item {i}"])
+        all_ids = db.sql(
+            "SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla') LIMIT 5 OFFSET 0"
+        ).to_pandas()["id"]
+        page1 = db.sql(
+            "SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla') LIMIT 2 OFFSET 2"
+        ).to_pandas()["id"]
+        assert list(page1) == list(all_ids[2:4])
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_sql_sparse_search():
     import shutil
 

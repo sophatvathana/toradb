@@ -79,6 +79,7 @@ pub struct SelectStmt {
     /// Text query for lexical proxy embedding from ANN('...').
     pub vector_text: Option<String>,
     pub limit: u32,
+    pub offset: u32,
     pub group_by: Option<String>,
     pub where_clause: Option<WherePred>,
 }
