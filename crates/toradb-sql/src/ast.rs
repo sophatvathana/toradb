@@ -8,6 +8,7 @@ pub enum Stmt {
     AlterTableSetSegmentWorkers { table: String, workers: u32 },
     DropTable { name: String },
     ShowTables,
+    ShowMaterializedViews,
     Describe { name: String },
     Select(SelectStmt),
 }
@@ -104,6 +105,8 @@ pub struct SelectStmt {
     pub distributed: bool,
     /// When true, clients should page results (see `Database.sql_stream`).
     pub stream: bool,
+    /// When true, return a plan only (`EXPLAIN`); do not execute retrieval.
+    pub explain: bool,
     pub group_by: Option<String>,
     pub where_clause: Option<WherePred>,
 }

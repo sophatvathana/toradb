@@ -207,12 +207,13 @@ impl SearchResults {
         ids: Vec<u64>,
         scores: Vec<f32>,
         metrics: toradb_core::QueryMetrics,
+        explain_text: Option<String>,
     ) -> Self {
         Self {
             ids,
             scores,
             metrics,
-            explain_text: None,
+            explain_text,
         }
     }
 }

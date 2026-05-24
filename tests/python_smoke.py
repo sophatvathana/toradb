@@ -523,6 +523,48 @@ def test_sql_alter_segment_workers():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_sql_explain_select():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_explain_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(["Nikola Tesla alternating current motor"])
+        plan = db.sql(
+            "EXPLAIN SELECT id FROM docs SPARSE SEARCH body BM25('Tesla') LIMIT 5"
+        ).explain()
+        assert "RetrievalScan" in plan
+        assert "sparse=true" in plan
+        assert "table=docs" in plan
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_sql_show_materialized_views():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_show_mv_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                "Nikola Tesla alternating current motor",
+                "Marie Curie studied radioactivity",
+            ]
+        )
+        db.sql(
+            "CREATE MATERIALIZED VIEW hot AS "
+            "SELECT id FROM docs SPARSE SEARCH body BM25('Tesla') LIMIT 10"
+        )
+        frame = db.sql("SHOW MATERIALIZED VIEWS").to_pandas()
+        assert "hot" in list(frame["view"])
+        assert list(frame["rows"])[list(frame["view"]).index("hot")] >= 1
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_sql_distributed_segment_search():
     import shutil
 

@@ -33,6 +33,33 @@ impl Database {
         }
         if stmts.len() == 1 {
             match &stmts[0] {
+                Stmt::ShowMaterializedViews => {
+                    let base = self
+                        .dag
+                        .db_path()
+                        .ok_or_else(|| {
+                            pyo3::exceptions::PyValueError::new_err(
+                                "materialized views require a local on-disk database",
+                            )
+                        })?
+                        .to_path_buf();
+                    let names = materialized::list_materialized_views(base.as_path())
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                    let mut view_names = Vec::new();
+                    let mut row_counts = Vec::new();
+                    for name in names {
+                        let n = materialized::load_view_row_count(base.as_path(), &name)
+                            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                        view_names.push(name);
+                        row_counts.push(n as f64);
+                    }
+                    return Ok(SqlOutcome::Aggregate(AnalyticsResults::new(
+                        "view".into(),
+                        view_names,
+                        "rows".into(),
+                        row_counts,
+                    )));
+                }
                 Stmt::ShowTables => {
                     let names = self
                         .dag
@@ -196,11 +223,16 @@ impl Database {
                     )));
                 }
                 Stmt::Select(sel) => {
+                    if sel.explain && sel.stream {
+                        return Err(pyo3::exceptions::PyValueError::new_err(
+                            "EXPLAIN does not support STREAM",
+                        ));
+                    }
                     let out = sql_exec::run_select(&mut self.dag, sel)
                         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
                     return match out {
                         sql_exec::SqlSelectResult::Search(s) => Ok(SqlOutcome::Search(
-                            SearchResults::from_sql(s.ids, s.scores, s.metrics),
+                            SearchResults::from_sql(s.ids, s.scores, s.metrics, s.explain_text),
                         )),
                         sql_exec::SqlSelectResult::Aggregate(a) => Ok(SqlOutcome::Aggregate(
                             AnalyticsResults::new(
@@ -291,6 +323,11 @@ impl Database {
                 "sql_stream does not support GROUP BY",
             ));
         }
+        if sel.explain {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "sql_stream does not support EXPLAIN",
+            ));
+        }
         let page_size = batch_size.max(1) as u32;
         let mut offset = sel.offset;
         let list = PyList::empty(py);
@@ -308,7 +345,8 @@ impl Database {
             if n == 0 {
                 break;
             }
-            let results = SearchResults::from_sql(page.ids, page.scores, page.metrics);
+            let results =
+                SearchResults::from_sql(page.ids, page.scores, page.metrics, None);
             list.append(results.into_pyobject(py)?)?;
             offset += n as u32;
             if n < page_size as usize {

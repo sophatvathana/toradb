@@ -327,6 +327,7 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
     let mut order_by_score_desc = None;
     let mut distributed = false;
     let mut stream = false;
+    let mut explain = false;
     let mut group_by = None;
     let mut where_clause = None;
     while *i < tokens.len() && !matches!(tokens.get(*i), Some(Token::Eof)) {
@@ -337,6 +338,10 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
             }
             Some(Token::Ident(k)) if k == "STREAM" => {
                 stream = true;
+                *i += 1;
+            }
+            Some(Token::Ident(k)) if k == "EXPLAIN" => {
+                explain = true;
                 *i += 1;
             }
             Some(Token::Ident(k)) if k == "SPARSE" => {
@@ -395,6 +400,7 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
         order_by_score_desc,
         distributed,
         stream,
+        explain,
         group_by,
         where_clause,
     })
@@ -560,8 +566,19 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             }
         }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "SHOW") {
-            i += 2;
-            out.push(Stmt::ShowTables);
+            i += 1;
+            match tokens.get(i) {
+                Some(Token::Ident(k)) if k == "TABLES" => {
+                    i += 1;
+                    out.push(Stmt::ShowTables);
+                }
+                Some(Token::Ident(k)) if k == "MATERIALIZED" => {
+                    i += 1;
+                    expect_ident(&tokens, &mut i, "VIEWS")?;
+                    out.push(Stmt::ShowMaterializedViews);
+                }
+                _ => return Err("expected TABLES or MATERIALIZED VIEWS after SHOW".into()),
+            }
             continue;
         }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "REFRESH") {
@@ -592,14 +609,23 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 i += 1;
                 true
             };
+        let explain_prefix =
+            matches!(tokens.get(i), Some(Token::Ident(k)) if k == "EXPLAIN") && {
+                i += 1;
+                true
+            };
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "SELECT") {
             let mut select = parse_select_stmt(&tokens, &mut i)?;
             select.stream |= stream_prefix;
+            select.explain |= explain_prefix;
             out.push(Stmt::Select(select));
             continue;
         }
         if stream_prefix {
             return Err("STREAM requires a SELECT statement".into());
+        }
+        if explain_prefix {
+            return Err("EXPLAIN requires a SELECT statement".into());
         }
         i += 1;
     }

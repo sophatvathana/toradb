@@ -6,11 +6,13 @@ use crate::dag::DagRunner;
 use crate::join::apply_metadata_join;
 use crate::materialized;
 use crate::olap::{run_aggregate, SqlAggregateResult};
+use crate::persist;
 
 pub struct SqlSearchResult {
     pub ids: Vec<u64>,
     pub scores: Vec<f32>,
     pub metrics: QueryMetrics,
+    pub explain_text: Option<String>,
 }
 
 pub enum SqlSelectResult {
@@ -19,6 +21,18 @@ pub enum SqlSelectResult {
 }
 
 pub fn run_select(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSelectResult, String> {
+    if sel.explain {
+        if sel.stream {
+            return Err("EXPLAIN does not support STREAM".into());
+        }
+        let text = explain_plan(dag, sel)?;
+        return Ok(SqlSelectResult::Search(SqlSearchResult {
+            ids: Vec::new(),
+            scores: Vec::new(),
+            metrics: QueryMetrics::default(),
+            explain_text: Some(text),
+        }));
+    }
     if let Some(base) = dag.db_path() {
         if materialized::is_materialized_view(base, &sel.table) {
             return Ok(SqlSelectResult::Search(materialized::query_materialized_view(
@@ -30,6 +44,100 @@ pub fn run_select(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSelectResu
         return Ok(SqlSelectResult::Aggregate(run_aggregate(dag, sel)?));
     }
     Ok(SqlSelectResult::Search(run_search(dag, sel)?))
+}
+
+pub fn explain_plan(dag: &DagRunner, sel: &SelectStmt) -> Result<String, String> {
+    if let Some(base) = dag.db_path() {
+        if materialized::is_materialized_view(base, &sel.table) {
+            let rows = materialized::load_view_row_count(base, &sel.table)?;
+            return Ok(format!(
+                "MaterializedViewScan(view={} cached_rows={} limit={} offset={})",
+                sel.table,
+                rows,
+                sel.limit.max(1),
+                sel.offset
+            ));
+        }
+    }
+    if sel.group_by.is_some() {
+        return Ok(format!(
+            "AggregateScan(table={} group_by={:?} limit={} offset={})",
+            sel.table,
+            sel.group_by,
+            sel.limit.max(1),
+            sel.offset
+        ));
+    }
+
+    let sparse = has_sparse(sel);
+    let vector = has_vector(sel);
+    if !sparse && !vector {
+        return Err(
+            "SELECT retrieval requires SPARSE SEARCH ... BM25('query') and/or VECTOR SEARCH ... ANN([...])"
+                .into(),
+        );
+    }
+
+    let dense_backend = if vector && !sparse && dag.table_has_diskann_sidecar(&sel.table) {
+        "diskann"
+    } else if vector {
+        "hnsw"
+    } else {
+        "none"
+    };
+    let segments = dag
+        .db_path()
+        .and_then(|p| persist::table_segment_count(p, &sel.table).ok())
+        .unwrap_or(0);
+    let workers = dag
+        .db_path()
+        .and_then(|p| persist::table_segment_workers(p, &sel.table).ok())
+        .unwrap_or(1);
+    let indexes = dag
+        .table_index_sidecars(&sel.table)
+        .unwrap_or_default()
+        .join(",");
+    let segment_scan = dag.db_path().map(|base| {
+        if sparse
+            && persist::table_has_segment_bm25_sidecars(base, &sel.table).unwrap_or(false)
+        {
+            "bm25_shards"
+        } else if vector
+            && persist::table_has_segment_hnsw_sidecars(base, &sel.table).unwrap_or(false)
+        {
+            "hnsw_shards"
+        } else {
+            "table_level"
+        }
+    }).unwrap_or("n/a");
+
+    let join = sel
+        .join
+        .as_ref()
+        .map(|j| format!(" join {} on {}={}", j.right_table, j.left_key, j.right_key))
+        .unwrap_or_default();
+    let order = match sel.order_by_score_desc {
+        Some(true) => " order_by_score_desc",
+        Some(false) => " order_by_score_asc",
+        None => "",
+    };
+
+    Ok(format!(
+        "RetrievalScan(table={table} sparse={sparse} vector={vector} dense_backend={dense_backend} distributed={distributed} segment_scan={segment_scan} segments={segments} segment_workers={workers} indexes=[{indexes}] limit={limit} offset={offset}{join}{order})",
+        table = sel.table,
+        sparse = sparse,
+        vector = vector,
+        dense_backend = dense_backend,
+        distributed = sel.distributed,
+        segment_scan = segment_scan,
+        segments = segments,
+        workers = workers,
+        indexes = if indexes.is_empty() { "none" } else { &indexes },
+        limit = sel.limit.max(1),
+        offset = sel.offset,
+        join = join,
+        order = order,
+    ))
 }
 
 fn has_sparse(sel: &SelectStmt) -> bool {
@@ -106,5 +214,6 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
         ids: page.ids,
         scores: page.scores,
         metrics,
+        explain_text: None,
     })
 }

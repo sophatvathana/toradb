@@ -138,5 +138,6 @@ pub fn query_materialized_view(
         ids: page.ids,
         scores: page.scores,
         metrics: QueryMetrics::default(),
+        explain_text: None,
     })
 }
