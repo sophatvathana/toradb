@@ -69,22 +69,11 @@ fn bm25_table_bin_path(base: &Path, table: &str) -> PathBuf {
     indexes_dir(base, table).join("bm25.bin")
 }
 
-fn bm25_table_json_path(base: &Path, table: &str) -> PathBuf {
-    indexes_dir(base, table).join("bm25.json")
-}
-
 fn segment_bm25_bin_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
     let stem = segment_parquet
         .strip_suffix(".parquet")
         .unwrap_or(segment_parquet);
     indexes_dir(base, table).join(format!("{stem}.bm25.bin"))
-}
-
-fn segment_bm25_json_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
-    let stem = segment_parquet
-        .strip_suffix(".parquet")
-        .unwrap_or(segment_parquet);
-    indexes_dir(base, table).join(format!("{stem}.bm25.json"))
 }
 
 fn table_vectors_bin_path(base: &Path, table: &str) -> PathBuf {
@@ -205,7 +194,6 @@ pub fn load_segment_hnsw_shards(
 /// Names of on-disk index sidecars present for a table (for DESCRIBE / diagnostics).
 pub fn table_index_sidecars(base: &Path, table: &str) -> Result<Vec<String>, String> {
     let mut names = Vec::new();
-    let dir = indexes_dir(base, table);
     if bm25_table_bin_path(base, table).exists() {
         names.push("bm25".into());
     }
@@ -227,15 +215,6 @@ pub fn table_index_sidecars(base: &Path, table: &str) -> Result<Vec<String>, Str
     if table_has_segment_hnsw_sidecars(base, table)? {
         names.push("segment_hnsw".into());
     }
-    if dir.exists() {
-        for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.ends_with(".bm25.json") && !names.iter().any(|n| n == "segment_bm25") {
-                names.push("segment_bm25".into());
-            }
-        }
-    }
     names.sort_unstable();
     names.dedup();
     Ok(names)
@@ -255,11 +234,6 @@ pub fn table_has_segment_hnsw_sidecars(base: &Path, table: &str) -> Result<bool,
         }
     }
     Ok(false)
-}
-
-fn load_snapshot_json(path: &Path) -> Result<Bm25Snapshot, String> {
-    let data = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&data).map_err(|e| e.to_string())
 }
 
 pub fn save_bm25_sidecar(base: &Path, table: &str, snap: &Bm25Snapshot) -> Result<(), String> {
@@ -356,10 +330,6 @@ pub fn load_bm25_sidecar(base: &Path, table: &str) -> Result<Option<Bm25Snapshot
     if bin.exists() {
         return load_snapshot_mmap(&bin).map(Some);
     }
-    let json = bm25_table_json_path(base, table);
-    if json.exists() {
-        return load_snapshot_json(&json).map(Some);
-    }
     Ok(None)
 }
 
@@ -372,14 +342,10 @@ fn load_segment_bm25_sidecar(
     if bin.exists() {
         return load_snapshot_mmap(&bin).map(Some);
     }
-    let json = segment_bm25_json_path(base, table, segment_parquet);
-    if json.exists() {
-        return load_snapshot_json(&json).map(Some);
-    }
     Ok(None)
 }
 
-/// True when at least one on-disk segment has a BM25 sidecar (bin or json).
+/// True when at least one on-disk segment has a BM25 index blob (`.bm25.bin`).
 pub fn table_has_segment_bm25_sidecars(base: &Path, table: &str) -> Result<bool, String> {
     let manifest_path = TableManifestFile::path_for_table(base, table);
     if !manifest_path.exists() {
@@ -387,9 +353,7 @@ pub fn table_has_segment_bm25_sidecars(base: &Path, table: &str) -> Result<bool,
     }
     let manifest = TableManifestFile::load(&manifest_path)?;
     for seg in &manifest.segments {
-        if segment_bm25_bin_path(base, table, seg).exists()
-            || segment_bm25_json_path(base, table, seg).exists()
-        {
+        if segment_bm25_bin_path(base, table, seg).exists() {
             return Ok(true);
         }
     }

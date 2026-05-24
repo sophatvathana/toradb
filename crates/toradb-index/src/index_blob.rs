@@ -8,7 +8,7 @@ use rkyv::ser::allocator::ArenaHandle;
 use rkyv::util::AlignedVec;
 use rkyv::{Archive, Deserialize, Serialize};
 
-/// On-disk payload encoding 
+/// Current on-disk rkyv payload version (only format supported).
 pub const INDEX_BLOB_FORMAT_VERSION: u8 = 1;
 
 /// `magic` (4) + `version` (1) + padding (3) so the rkyv payload starts 8-byte aligned.
@@ -42,7 +42,7 @@ where
     }
     if bytes[4] != INDEX_BLOB_FORMAT_VERSION {
         return Err(format!(
-            "unsupported index blob version {} (expected rkyv format {INDEX_BLOB_FORMAT_VERSION})",
+            "unsupported index blob version {} (expected {INDEX_BLOB_FORMAT_VERSION})",
             bytes[4]
         ));
     }
