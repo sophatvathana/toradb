@@ -2,17 +2,24 @@ use rayon::prelude::*;
 
 use toradb_core::{Batch, CandidateSet, DocId, ExecCtx};
 use toradb_storage::SegmentManager;
+use toradb_storage::NumaConfig;
 
 /// Coordinator dispatches per-segment work to workers (sync thread pool, not Tokio hot path).
 #[derive(Debug)]
 pub struct SegmentScheduler {
     pub workers: usize,
+    pub numa: NumaConfig,
 }
 
 impl SegmentScheduler {
     pub fn new(workers: usize) -> Self {
+        Self::new_with_numa(workers, NumaConfig::default())
+    }
+
+    pub fn new_with_numa(workers: usize, numa: NumaConfig) -> Self {
         Self {
             workers: workers.max(1),
+            numa,
         }
     }
 
