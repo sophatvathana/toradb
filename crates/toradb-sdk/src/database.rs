@@ -139,6 +139,16 @@ impl Database {
                         "ok: set segment_workers={workers} on {table}"
                     )));
                 }
+                Stmt::CompactTable { table, full } => {
+                    let report = self
+                        .dag
+                        .compact_table(&table.to_lowercase(), *full)
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                    return Ok(SqlOutcome::Message(format!(
+                        "ok: compacted {table} merges={} segments {} -> {}",
+                        report.merges, report.segments_before, report.segments_after
+                    )));
+                }
                 Stmt::DropMaterializedView { name } => {
                     let base = self
                         .dag
