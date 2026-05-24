@@ -34,7 +34,7 @@ fn replay_commits_wal_segment_missing_from_manifest() {
     assert!(!flush_log_path(base, table).exists());
 
     let mut store = CorpusStore::default();
-    let n = load_table(base, table, &mut store, 4).expect("load");
+    let n = load_table(base, table, &mut store, 4, None).expect("load");
     assert_eq!(n, 1);
     assert!(!store.docs_with_ids_since(table, 0).is_empty());
 

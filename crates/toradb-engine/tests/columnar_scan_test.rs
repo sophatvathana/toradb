@@ -20,7 +20,7 @@ fn table_documents_reads_parquet_when_corpus_empty() {
     }
 
     let empty = CorpusStore::default();
-    let docs = persist::table_documents(&empty, Some(&dir), "docs").expect("scan");
+    let docs = persist::table_documents(&empty, Some(&dir), "docs", None).expect("scan");
     assert_eq!(docs.len(), 1);
     assert!(docs[0].1.text.contains("Tesla"));
 
