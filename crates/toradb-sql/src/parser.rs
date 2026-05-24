@@ -517,6 +517,20 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 continue;
             }
         }
+        if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "COMPACT") {
+            i += 1;
+            expect_ident(&tokens, &mut i, "TABLE")?;
+            let table = ident_at(&tokens, i)
+                .ok_or("table name after COMPACT TABLE")?
+                .to_lowercase();
+            i += 1;
+            let full = matches!(tokens.get(i), Some(Token::Ident(k)) if k == "FULL");
+            if full {
+                i += 1;
+            }
+            out.push(Stmt::CompactTable { table, full });
+            continue;
+        }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "ALTER") {
             i += 1;
             expect_ident(&tokens, &mut i, "TABLE")?;
