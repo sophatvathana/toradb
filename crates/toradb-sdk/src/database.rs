@@ -104,6 +104,14 @@ impl Database {
                         name, rows
                     )));
                 }
+                Stmt::AlterTableSetSegmentWorkers { table, workers } => {
+                    self.dag
+                        .set_segment_workers(&table.to_lowercase(), *workers)
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                    return Ok(SqlOutcome::Message(format!(
+                        "ok: set segment_workers={workers} on {table}"
+                    )));
+                }
                 Stmt::DropMaterializedView { name } => {
                     let base = self
                         .dag
@@ -167,6 +175,12 @@ impl Database {
                         .and_then(|p| persist::table_segment_count(p, &table).ok())
                         .map(|n| n.to_string())
                         .unwrap_or_else(|| "n/a".to_string());
+                    let segment_workers = self
+                        .dag
+                        .db_path()
+                        .and_then(|p| persist::table_segment_workers(p, &table).ok())
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "n/a".to_string());
                     let indexes = self
                         .dag
                         .table_index_sidecars(&table)
@@ -178,7 +192,7 @@ impl Database {
                         indexes
                     };
                     return Ok(SqlOutcome::Message(format!(
-                        "table: {table}\nrows: {row_count}\nvector_dim: {vector_dim}\nsegments: {segments}\nindexes: {indexes_line}"
+                        "table: {table}\nrows: {row_count}\nvector_dim: {vector_dim}\nsegments: {segments}\nsegment_workers: {segment_workers}\nindexes: {indexes_line}"
                     )));
                 }
                 Stmt::Select(sel) => {

@@ -511,6 +511,29 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 continue;
             }
         }
+        if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "ALTER") {
+            i += 1;
+            expect_ident(&tokens, &mut i, "TABLE")?;
+            let table = ident_at(&tokens, i)
+                .ok_or("table name after ALTER TABLE")?
+                .to_lowercase();
+            i += 1;
+            expect_ident(&tokens, &mut i, "SET")?;
+            expect_ident(&tokens, &mut i, "SEGMENT_WORKERS")?;
+            if !matches!(tokens.get(i), Some(Token::Eq)) {
+                return Err("ALTER TABLE SET SEGMENT_WORKERS requires =".into());
+            }
+            i += 1;
+            let workers = match tokens.get(i) {
+                Some(Token::Number(n)) => {
+                    i += 1;
+                    *n
+                }
+                _ => return Err("segment worker count after =".into()),
+            };
+            out.push(Stmt::AlterTableSetSegmentWorkers { table, workers });
+            continue;
+        }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "DROP") {
             if matches!(tokens.get(i + 1), Some(Token::Ident(k)) if k == "MATERIALIZED")
                 && matches!(tokens.get(i + 2), Some(Token::Ident(k)) if k == "VIEW")

@@ -26,6 +26,32 @@ pub fn table_segment_count(base: &Path, table: &str) -> Result<u32, String> {
     Ok(num_segments_hint(manifest.segments.len()))
 }
 
+/// Configured rayon worker cap for distributed segment scans on this table.
+pub fn table_segment_workers(base: &Path, table: &str) -> Result<u32, String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(DEFAULT_SEGMENT_PARALLELISM);
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    Ok(manifest
+        .segment_workers
+        .unwrap_or(DEFAULT_SEGMENT_PARALLELISM)
+        .max(1))
+}
+
+pub fn set_table_segment_workers(base: &Path, table: &str, workers: u32) -> Result<(), String> {
+    if workers == 0 {
+        return Err("segment_workers must be >= 1".into());
+    }
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Err(format!("table {table} not found"));
+    }
+    let mut manifest = TableManifestFile::load(&manifest_path)?;
+    manifest.segment_workers = Some(workers);
+    manifest.save(&manifest_path)
+}
+
 fn ingest_to_columnar(id: u64, doc: &IngestDoc) -> ColumnarDoc {
     ColumnarDoc {
         id,

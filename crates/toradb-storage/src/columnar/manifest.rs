@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 pub struct TableManifestFile {
     pub schema_version: u32,
     pub segments: Vec<String>,
+    /// Cap on rayon threads for distributed segment scans (default 4 when unset).
+    #[serde(default)]
+    pub segment_workers: Option<u32>,
 }
 
 impl Default for TableManifestFile {
@@ -13,6 +16,7 @@ impl Default for TableManifestFile {
         Self {
             schema_version: 1,
             segments: Vec::new(),
+            segment_workers: None,
         }
     }
 }

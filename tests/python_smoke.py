@@ -502,6 +502,27 @@ def test_sql_vector_search_prefers_diskann_sidecar():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_sql_alter_segment_workers():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_segment_workers_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        for i in range(20):
+            t.add([f"Nikola Tesla item {i} motor"])
+        msg = db.sql("ALTER TABLE docs SET SEGMENT_WORKERS = 2")
+        assert "segment_workers=2" in str(msg)
+        desc = db.sql("DESCRIBE docs")
+        assert "segment_workers: 2" in str(desc)
+        explain = t.search(
+            "Nikola Tesla motor", top_k=3, strategy="distributed", explain=True
+        ).explain()
+        assert "segment_workers=2" in explain
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_sql_distributed_segment_search():
     import shutil
 

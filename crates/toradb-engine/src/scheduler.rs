@@ -29,7 +29,19 @@ impl SegmentScheduler {
         let n = num_segments.max(1);
         let use_parallel = parallel && self.workers > 1 && n > 1;
         if use_parallel {
-            let locals: Vec<CandidateSet> = (0..n).into_par_iter().map(|seg| f(seg)).collect();
+            let workers = self.workers;
+            let scan = || -> Vec<CandidateSet> { (0..n).into_par_iter().map(|seg| f(seg)).collect() };
+            let locals = if workers > 1 {
+                match rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                {
+                    Ok(pool) => pool.install(scan),
+                    Err(_) => scan(),
+                }
+            } else {
+                scan()
+            };
             let mut merged = CandidateSet::with_capacity(1024);
             for local in locals {
                 Self::merge_local(&mut merged, local);

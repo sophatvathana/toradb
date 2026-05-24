@@ -5,6 +5,7 @@ pub enum Stmt {
     CreateMaterializedView(CreateMaterializedViewStmt),
     RefreshMaterializedView { name: String },
     DropMaterializedView { name: String },
+    AlterTableSetSegmentWorkers { table: String, workers: u32 },
     DropTable { name: String },
     ShowTables,
     Describe { name: String },
