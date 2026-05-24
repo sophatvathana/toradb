@@ -18,6 +18,12 @@ pub struct WalCheckpoint {
     pub committed_unix_secs: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WalCompactionRecord {
+    pub removed: Vec<String>,
+    pub added: Vec<String>,
+}
+
 #[derive(Debug, Default)]
 pub struct Wal {
     pub entries: u64,
@@ -29,6 +35,64 @@ pub fn flush_log_path(base: &Path, table: &str) -> PathBuf {
 
 pub fn checkpoint_path(base: &Path, table: &str) -> PathBuf {
     base.join(table).join("wal").join("checkpoint.json")
+}
+
+pub fn compaction_log_path(base: &Path, table: &str) -> PathBuf {
+    base.join(table).join("wal").join("compaction.jsonl")
+}
+
+/// Append one compaction record and fsync.
+pub fn append_compaction(
+    base: &Path,
+    table: &str,
+    removed: &[String],
+    added: &[String],
+) -> Result<(), String> {
+    if removed.is_empty() && added.is_empty() {
+        return Ok(());
+    }
+    let path = compaction_log_path(base, table);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let record = WalCompactionRecord {
+        removed: removed.to_vec(),
+        added: added.to_vec(),
+    };
+    let line = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    writeln!(file, "{line}").map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn read_compactions(base: &Path, table: &str) -> Result<Vec<WalCompactionRecord>, String> {
+    let path = compaction_log_path(base, table);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for line in BufReader::new(file).lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        out.push(serde_json::from_str(&line).map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+pub fn truncate_compactions(base: &Path, table: &str) -> Result<(), String> {
+    let path = compaction_log_path(base, table);
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Append one flush record and fsync the log file.
