@@ -3,6 +3,7 @@ use std::path::Path;
 use toradb_core::{Batch, ExecCtx, QueryMetrics};
 use toradb_index::RetrievalRuntime;
 use toradb_storage::SegmentManager;
+use toradb_storage::StorageCaches;
 
 use crate::advanced::apply_crag;
 use crate::fusion::rrf_merge;
@@ -15,6 +16,7 @@ use crate::scheduler::SegmentScheduler;
 pub struct DagRunner {
     pub retrieval: RetrievalRuntime,
     pub segments: SegmentManager,
+    pub caches: StorageCaches,
     db_path: Option<DbPath>,
 }
 
@@ -23,6 +25,7 @@ impl DagRunner {
         Self {
             retrieval: RetrievalRuntime::new(),
             segments: SegmentManager::new(),
+            caches: StorageCaches::default_from_env(),
             db_path: None,
         }
     }
@@ -45,6 +48,7 @@ impl DagRunner {
             path.as_path(),
             &mut self.retrieval.store,
             self.segments.len(),
+            Some(&mut self.caches),
         )
     }
 
@@ -70,6 +74,7 @@ impl DagRunner {
                 &mut self.retrieval.store,
                 since_id,
                 n.max(1),
+                Some(&mut self.caches),
             )?;
         }
         Ok(added)
@@ -179,6 +184,30 @@ impl DagRunner {
         persist::set_table_segment_workers(path.as_path(), table, workers)
     }
 
+    pub fn compact_table(&mut self, table: &str, full: bool) -> Result<toradb_storage::compaction::CompactReport, String> {
+        let Some(ref path) = self.db_path else {
+            return Err("COMPACT TABLE requires a local on-disk database".into());
+        };
+        let mode = if full {
+            toradb_storage::compaction::CompactMode::Full
+        } else {
+            toradb_storage::compaction::CompactMode::Normal
+        };
+        let policy = toradb_storage::compaction::CompactPolicy::from_env();
+        persist::compact_table(
+            path.as_path(),
+            table,
+            Some(&mut self.retrieval.store),
+            mode,
+            &policy,
+            Some(&mut self.caches),
+        )
+    }
+
+    pub fn cache_stats(&self) -> toradb_storage::CacheHierarchy {
+        self.caches.combined_stats()
+    }
+
     pub fn db_path(&self) -> Option<&std::path::Path> {
         self.db_path.as_ref().map(|p| p.as_path())
     }
@@ -191,13 +220,15 @@ impl DagRunner {
     }
 
     pub fn table_documents(
-        &self,
+        &mut self,
         table: &str,
     ) -> Result<Vec<(u64, toradb_index::IngestDoc)>, String> {
+        let base = self.db_path().map(|p| p.to_path_buf());
         crate::persist::table_documents(
             &self.retrieval.store,
-            self.db_path(),
+            base.as_deref(),
             table,
+            Some(&mut self.caches),
         )
     }
 
@@ -237,7 +268,8 @@ impl DagRunner {
                 let num_segments = self.segment_parallelism(&table);
                 let workers = self.segment_worker_count(&table);
                 let parallel = batch.distributed_segments;
-                let scheduler = SegmentScheduler::new(workers as usize);
+                let scheduler =
+                    SegmentScheduler::new_with_numa(workers as usize, self.caches.numa);
                 metrics.segments_scanned = num_segments;
                 metrics.segment_workers = if parallel && num_segments > 1 && workers > 1 {
                     workers
@@ -265,7 +297,8 @@ impl DagRunner {
                             let num_segments = self.segment_parallelism(&table);
                             let workers = self.segment_worker_count(&table);
                             let parallel = batch.distributed_segments;
-                            let scheduler = SegmentScheduler::new(workers as usize);
+                            let scheduler =
+                    SegmentScheduler::new_with_numa(workers as usize, self.caches.numa);
                             let k = ctx.tier2_budget as usize;
                             metrics.segments_scanned = num_segments;
                             metrics.segment_workers = if parallel && num_segments > 1 && workers > 1 {
@@ -296,6 +329,14 @@ impl DagRunner {
 
         let t3 = lower_tier3();
         metrics.tier3_candidates = t3.execute(batch, ctx) as u32;
+        if let Some(ref path) = self.db_path {
+            if !batch.table.is_empty()
+                && persist::table_has_quant_sidecars(path.as_path(), &batch.table)
+                    .unwrap_or(false)
+            {
+                metrics.decompressions = metrics.tier3_candidates;
+            }
+        }
         metrics
     }
 }
