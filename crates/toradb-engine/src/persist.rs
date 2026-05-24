@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use memmap2::MmapOptions;
-use toradb_index::dense::{diskann_codec, hnsw_codec, vector_codec};
+use toradb_index::dense::{diskann_codec, hnsw_codec, quant_codec, vector_codec};
 use toradb_index::sparse::bm25_codec;
 use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
 use toradb_storage::columnar::{
-    read_segment, write_segment, ColumnarDoc, TableManifestFile,
+    read_segment, write_segment, write_segment_with_compression, ColumnarDoc, TableManifestFile,
 };
+use toradb_storage::cache::{get_or_mmap, read_segment_cached, StorageCaches};
+use toradb_storage::compaction::{self, CompactMode, CompactPolicy, CompactReport};
 use toradb_storage::wal;
 
 pub const DEFAULT_SEGMENT_PARALLELISM: u32 = 4;
@@ -99,22 +100,26 @@ fn segment_vectors_bin_path(base: &Path, table: &str, segment_parquet: &str) -> 
     indexes_dir(base, table).join(format!("{stem}.vectors.bin"))
 }
 
-fn load_snapshot_mmap(path: &Path) -> Result<Bm25Snapshot, String> {
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mmap = unsafe { MmapOptions::new().map(&file).map_err(|e| e.to_string())? };
-    bm25_codec::decode_snapshot(&mmap)
+fn segment_quant_bin_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
+    let stem = segment_parquet
+        .strip_suffix(".parquet")
+        .unwrap_or(segment_parquet);
+    indexes_dir(base, table).join(format!("{stem}.vectors.q.bin"))
 }
 
-fn load_vector_snapshot_mmap(path: &Path) -> Result<VectorSnapshot, String> {
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mmap = unsafe { MmapOptions::new().map(&file).map_err(|e| e.to_string())? };
-    vector_codec::decode_snapshot(&mmap)
+fn load_snapshot_mmap(path: &Path, caches: Option<&mut StorageCaches>) -> Result<Bm25Snapshot, String> {
+    let mmap = get_or_mmap(path, caches)?;
+    bm25_codec::decode_snapshot(mmap.as_ref())
 }
 
-fn load_hnsw_index_mmap(path: &Path) -> Result<toradb_index::dense::hnsw_index::HnswIndex, String> {
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mmap = unsafe { MmapOptions::new().map(&file).map_err(|e| e.to_string())? };
-    hnsw_codec::decode_index(&mmap)
+fn load_vector_snapshot_mmap(path: &Path, caches: Option<&mut StorageCaches>) -> Result<VectorSnapshot, String> {
+    let mmap = get_or_mmap(path, caches)?;
+    vector_codec::decode_snapshot(mmap.as_ref())
+}
+
+fn load_hnsw_index_mmap(path: &Path, caches: Option<&mut StorageCaches>) -> Result<toradb_index::dense::hnsw_index::HnswIndex, String> {
+    let mmap = get_or_mmap(path, caches)?;
+    hnsw_codec::decode_index(mmap.as_ref())
 }
 
 pub fn save_table_hnsw_sidecar(
@@ -128,18 +133,18 @@ pub fn save_table_hnsw_sidecar(
 pub fn load_table_hnsw_sidecar(
     base: &Path,
     table: &str,
+    caches: Option<&mut StorageCaches>,
 ) -> Result<Option<toradb_index::dense::hnsw_index::HnswIndex>, String> {
     let bin = table_hnsw_bin_path(base, table);
     if bin.exists() {
-        return load_hnsw_index_mmap(&bin).map(Some);
+        return load_hnsw_index_mmap(&bin, caches).map(Some);
     }
     Ok(None)
 }
 
-fn load_diskann_index_mmap(path: &Path) -> Result<toradb_index::dense::hnsw_index::HnswIndex, String> {
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mmap = unsafe { MmapOptions::new().map(&file).map_err(|e| e.to_string())? };
-    diskann_codec::decode_index(&mmap)
+fn load_diskann_index_mmap(path: &Path, caches: Option<&mut StorageCaches>) -> Result<toradb_index::dense::hnsw_index::HnswIndex, String> {
+    let mmap = get_or_mmap(path, caches)?;
+    diskann_codec::decode_index(mmap.as_ref())
 }
 
 pub fn save_table_diskann_sidecar(
@@ -153,10 +158,11 @@ pub fn save_table_diskann_sidecar(
 pub fn load_table_diskann_sidecar(
     base: &Path,
     table: &str,
+    caches: Option<&mut StorageCaches>,
 ) -> Result<Option<toradb_index::dense::hnsw_index::HnswIndex>, String> {
     let bin = table_diskann_bin_path(base, table);
     if bin.exists() {
-        return load_diskann_index_mmap(&bin).map(Some);
+        return load_diskann_index_mmap(&bin, caches).map(Some);
     }
     Ok(None)
 }
@@ -180,12 +186,13 @@ pub fn load_segment_hnsw_shards(
     base: &Path,
     table: &str,
     num_segments: u32,
+    mut caches: Option<&mut StorageCaches>,
 ) -> Result<std::collections::HashMap<u32, toradb_index::dense::hnsw_index::HnswIndex>, String> {
     let mut out = std::collections::HashMap::new();
     for seg in 0..num_segments {
         let path = segment_hnsw_shard_path(base, table, seg);
         if path.exists() {
-            out.insert(seg, load_hnsw_index_mmap(&path)?);
+            out.insert(seg, load_hnsw_index_mmap(&path, caches.as_deref_mut())?);
         }
     }
     Ok(out)
@@ -272,10 +279,14 @@ pub fn save_segment_vector_sidecar(
     )
 }
 
-pub fn load_table_vector_sidecar(base: &Path, table: &str) -> Result<Option<VectorSnapshot>, String> {
+pub fn load_table_vector_sidecar(
+    base: &Path,
+    table: &str,
+    caches: Option<&mut StorageCaches>,
+) -> Result<Option<VectorSnapshot>, String> {
     let bin = table_vectors_bin_path(base, table);
     if bin.exists() {
-        return load_vector_snapshot_mmap(&bin).map(Some);
+        return load_vector_snapshot_mmap(&bin, caches).map(Some);
     }
     Ok(None)
 }
@@ -284,10 +295,11 @@ fn load_segment_vector_sidecar(
     base: &Path,
     table: &str,
     segment_parquet: &str,
+    caches: Option<&mut StorageCaches>,
 ) -> Result<Option<VectorSnapshot>, String> {
     let bin = segment_vectors_bin_path(base, table, segment_parquet);
     if bin.exists() {
-        return load_vector_snapshot_mmap(&bin).map(Some);
+        return load_vector_snapshot_mmap(&bin, caches).map(Some);
     }
     Ok(None)
 }
@@ -310,6 +322,7 @@ pub fn table_has_segment_vector_sidecars(base: &Path, table: &str) -> Result<boo
 fn load_merged_segment_vector_map(
     base: &Path,
     table: &str,
+    mut caches: Option<&mut StorageCaches>,
 ) -> Result<HashMap<u64, Vec<f32>>, String> {
     let manifest_path = TableManifestFile::path_for_table(base, table);
     if !manifest_path.exists() {
@@ -318,17 +331,21 @@ fn load_merged_segment_vector_map(
     let manifest = TableManifestFile::load(&manifest_path)?;
     let mut merged = HashMap::new();
     for seg in &manifest.segments {
-        if let Some(snap) = load_segment_vector_sidecar(base, table, seg)? {
+        if let Some(snap) = load_segment_vector_sidecar(base, table, seg, caches.as_deref_mut())? {
             merged.extend(snap.to_map());
         }
     }
     Ok(merged)
 }
 
-pub fn load_bm25_sidecar(base: &Path, table: &str) -> Result<Option<Bm25Snapshot>, String> {
+pub fn load_bm25_sidecar(
+    base: &Path,
+    table: &str,
+    caches: Option<&mut StorageCaches>,
+) -> Result<Option<Bm25Snapshot>, String> {
     let bin = bm25_table_bin_path(base, table);
     if bin.exists() {
-        return load_snapshot_mmap(&bin).map(Some);
+        return load_snapshot_mmap(&bin, caches).map(Some);
     }
     Ok(None)
 }
@@ -337,10 +354,11 @@ fn load_segment_bm25_sidecar(
     base: &Path,
     table: &str,
     segment_parquet: &str,
+    caches: Option<&mut StorageCaches>,
 ) -> Result<Option<Bm25Snapshot>, String> {
     let bin = segment_bm25_bin_path(base, table, segment_parquet);
     if bin.exists() {
-        return load_snapshot_mmap(&bin).map(Some);
+        return load_snapshot_mmap(&bin, caches).map(Some);
     }
     Ok(None)
 }
@@ -364,6 +382,7 @@ pub fn table_has_segment_bm25_sidecars(base: &Path, table: &str) -> Result<bool,
 pub fn load_merged_segment_bm25_sidecars(
     base: &Path,
     table: &str,
+    mut caches: Option<&mut StorageCaches>,
 ) -> Result<Option<Bm25Snapshot>, String> {
     let manifest_path = TableManifestFile::path_for_table(base, table);
     if !manifest_path.exists() {
@@ -372,7 +391,7 @@ pub fn load_merged_segment_bm25_sidecars(
     let manifest = TableManifestFile::load(&manifest_path)?;
     let mut merged: Option<Bm25Snapshot> = None;
     for seg in &manifest.segments {
-        if let Some(snap) = load_segment_bm25_sidecar(base, table, seg)? {
+        if let Some(snap) = load_segment_bm25_sidecar(base, table, seg, caches.as_deref_mut())? {
             match merged {
                 None => merged = Some(snap),
                 Some(ref mut acc) => acc.merge(snap),
@@ -384,6 +403,45 @@ pub fn load_merged_segment_bm25_sidecars(
 
 fn snapshot_for_columnar_docs(docs: &[ColumnarDoc]) -> Bm25Snapshot {
     Bm25Snapshot::from_documents(docs.iter().map(|d| (d.id, d.text.as_str())))
+}
+
+fn snapshot_for_columnar_quant(docs: &[ColumnarDoc]) -> Option<quant_codec::QuantVectorSnapshot> {
+    let mut pairs = Vec::new();
+    for doc in docs {
+        if let Some(ref emb) = doc.embedding {
+            pairs.push((doc.id, emb.clone()));
+        }
+    }
+    if pairs.is_empty() {
+        return None;
+    }
+    quant_codec::QuantVectorSnapshot::from_pairs(&pairs).ok()
+}
+
+pub fn table_has_quant_sidecars(base: &Path, table: &str) -> Result<bool, String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(false);
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    for seg in &manifest.segments {
+        if segment_quant_bin_path(base, table, seg).exists() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn save_segment_quant_sidecar(
+    base: &Path,
+    table: &str,
+    segment_parquet: &str,
+    snap: &quant_codec::QuantVectorSnapshot,
+) -> Result<(), String> {
+    quant_codec::write_snapshot_file(
+        &segment_quant_bin_path(base, table, segment_parquet),
+        snap,
+    )
 }
 
 fn snapshot_for_columnar_vectors(docs: &[ColumnarDoc]) -> Option<VectorSnapshot> {
@@ -421,7 +479,11 @@ fn vector_snapshot_from_store(store: &CorpusStore, table: &str) -> Option<Vector
 }
 
 /// Read all documents for a table from on-disk Parquet segments.
-pub fn read_table_documents(base: &Path, table: &str) -> Result<Vec<(u64, IngestDoc)>, String> {
+pub fn read_table_documents(
+    base: &Path,
+    table: &str,
+    mut caches: Option<&mut StorageCaches>,
+) -> Result<Vec<(u64, IngestDoc)>, String> {
     let manifest_path = TableManifestFile::path_for_table(base, table);
     if !manifest_path.exists() {
         return Ok(Vec::new());
@@ -434,7 +496,7 @@ pub fn read_table_documents(base: &Path, table: &str) -> Result<Vec<(u64, Ingest
         if !path.exists() {
             continue;
         }
-        for doc in read_segment(&path)? {
+        for doc in read_segment_cached(&path, caches.as_deref_mut())? {
             out.push((
                 doc.id,
                 IngestDoc {
@@ -453,13 +515,14 @@ pub fn table_documents(
     store: &CorpusStore,
     base: Option<&Path>,
     table: &str,
+    mut caches: Option<&mut StorageCaches>,
 ) -> Result<Vec<(u64, IngestDoc)>, String> {
     let mem = store.all_documents(table);
     if !mem.is_empty() {
         return Ok(mem);
     }
     if let Some(base) = base {
-        return read_table_documents(base, table);
+        return read_table_documents(base, table, caches.as_deref_mut());
     }
     Ok(Vec::new())
 }
@@ -499,7 +562,12 @@ pub fn list_tables(base: &Path) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-pub fn load_all(base: &Path, store: &mut CorpusStore, segment_count: usize) -> Result<usize, String> {
+pub fn load_all(
+    base: &Path,
+    store: &mut CorpusStore,
+    segment_count: usize,
+    mut caches: Option<&mut StorageCaches>,
+) -> Result<usize, String> {
     if !base.exists() {
         return Ok(0);
     }
@@ -510,7 +578,13 @@ pub fn load_all(base: &Path, store: &mut CorpusStore, segment_count: usize) -> R
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
-        total += load_table(base, &name, store, segment_count)?;
+        total += load_table(
+            base,
+            &name,
+            store,
+            segment_count,
+            caches.as_deref_mut(),
+        )?;
     }
     Ok(total)
 }
@@ -520,10 +594,11 @@ fn restore_bm25_index(
     table: &str,
     store: &mut CorpusStore,
     num_segments: u32,
+    mut caches: Option<&mut StorageCaches>,
 ) -> Result<(), String> {
-    if let Some(snap) = load_merged_segment_bm25_sidecars(base, table)? {
+    if let Some(snap) = load_merged_segment_bm25_sidecars(base, table, caches.as_deref_mut())? {
         store.restore_bm25(table, snap);
-    } else if let Some(snap) = load_bm25_sidecar(base, table)? {
+    } else if let Some(snap) = load_bm25_sidecar(base, table, caches.as_deref_mut())? {
         store.restore_bm25(table, snap);
     } else {
         store.rebuild_bm25(table);
@@ -531,17 +606,22 @@ fn restore_bm25_index(
             save_bm25_sidecar(base, table, &snap)?;
         }
     }
-    restore_hnsw_index(base, table, store, num_segments)?;
-    restore_diskann_index(base, table, store)?;
+    restore_hnsw_index(base, table, store, num_segments, caches.as_deref_mut())?;
+    restore_diskann_index(base, table, store, caches.as_deref_mut())?;
     Ok(())
 }
 
-fn restore_diskann_index(base: &Path, table: &str, store: &mut CorpusStore) -> Result<(), String> {
-    if let Some(index) = load_table_diskann_sidecar(base, table)? {
+fn restore_diskann_index(
+    base: &Path,
+    table: &str,
+    store: &mut CorpusStore,
+    mut caches: Option<&mut StorageCaches>,
+) -> Result<(), String> {
+    if let Some(index) = load_table_diskann_sidecar(base, table, caches.as_deref_mut())? {
         store.restore_diskann(table, index);
         return Ok(());
     }
-    if let Some(snap) = load_table_vector_sidecar(base, table)? {
+    if let Some(snap) = load_table_vector_sidecar(base, table, caches.as_deref_mut())? {
         if let Some(index) = diskann_codec::build_index_from_snapshot(&snap) {
             save_table_diskann_sidecar(base, table, &index)?;
             store.restore_diskann(table, index);
@@ -560,12 +640,13 @@ fn restore_hnsw_index(
     table: &str,
     store: &mut CorpusStore,
     num_segments: u32,
+    mut caches: Option<&mut StorageCaches>,
 ) -> Result<(), String> {
-    let shards = load_segment_hnsw_shards(base, table, num_segments)?;
+    let shards = load_segment_hnsw_shards(base, table, num_segments, caches.as_deref_mut())?;
     for (seg, index) in shards {
         store.restore_segment_hnsw(table, seg, index);
     }
-    if let Some(index) = load_table_hnsw_sidecar(base, table)? {
+    if let Some(index) = load_table_hnsw_sidecar(base, table, caches.as_deref_mut())? {
         store.restore_hnsw(table, index);
     } else if !store.has_segment_hnsw(table) {
         store.rebuild_hnsw(table);
@@ -631,8 +712,10 @@ pub fn load_table(
     table: &str,
     store: &mut CorpusStore,
     segment_count: usize,
+    mut caches: Option<&mut StorageCaches>,
 ) -> Result<usize, String> {
     replay_flush_wal(base, table)?;
+    replay_compaction_wal(base, table)?;
     let manifest_path = TableManifestFile::path_for_table(base, table);
     if !manifest_path.exists() {
         return Ok(0);
@@ -640,9 +723,9 @@ pub fn load_table(
     let manifest = TableManifestFile::load(&manifest_path)?;
     let seg_dir = TableManifestFile::segments_dir(base, table);
     let num_segments = num_segments_hint(segment_count.max(manifest.segments.len()));
-    let merged_vectors = load_merged_segment_vector_map(base, table)?;
+    let merged_vectors = load_merged_segment_vector_map(base, table, caches.as_deref_mut())?;
     let table_vectors = if merged_vectors.is_empty() {
-        load_table_vector_sidecar(base, table)?
+        load_table_vector_sidecar(base, table, caches.as_deref_mut())?
             .map(|s| s.to_map())
             .unwrap_or_default()
     } else {
@@ -654,10 +737,10 @@ pub fn load_table(
         if !path.exists() {
             continue;
         }
-        let seg_vectors = load_segment_vector_sidecar(base, table, seg)?
+        let seg_vectors = load_segment_vector_sidecar(base, table, seg, caches.as_deref_mut())?
             .map(|s| s.to_map())
             .unwrap_or_default();
-        for doc in read_segment(&path)? {
+        for doc in read_segment_cached(&path, caches.as_deref_mut())? {
             let embedding = seg_vectors
                 .get(&doc.id)
                 .or_else(|| table_vectors.get(&doc.id))
@@ -677,7 +760,7 @@ pub fn load_table(
         }
     }
     if n > 0 {
-        restore_bm25_index(base, table, store, num_segments)?;
+        restore_bm25_index(base, table, store, num_segments, caches.as_deref_mut())?;
     }
     Ok(n)
 }
@@ -699,11 +782,14 @@ pub fn flush_batch(
     };
     let seg_name = format!("seg_{:05}.parquet", manifest.segments.len() + 1);
     let seg_path = TableManifestFile::segments_dir(base, table).join(&seg_name);
-    write_segment(&seg_path, docs)?;
+    write_segment_with_compression(&seg_path, docs, manifest.compression.as_ref())?;
     let seg_snap = snapshot_for_columnar_docs(docs);
     save_segment_bm25_sidecar(base, table, &seg_name, &seg_snap)?;
     if let Some(vec_snap) = snapshot_for_columnar_vectors(docs) {
         save_segment_vector_sidecar(base, table, &seg_name, &vec_snap)?;
+    }
+    if let Some(qsnap) = snapshot_for_columnar_quant(docs) {
+        save_segment_quant_sidecar(base, table, &seg_name, &qsnap)?;
     }
     wal::append_flush(base, table, &seg_name, since_id, docs.len())?;
     let mut manifest = manifest;
@@ -715,12 +801,151 @@ pub fn flush_batch(
     Ok(seg_name_clone)
 }
 
+fn remove_segment_sidecars(base: &Path, table: &str, segment_parquet: &str) -> Result<(), String> {
+    let bm25 = segment_bm25_bin_path(base, table, segment_parquet);
+    if bm25.exists() {
+        std::fs::remove_file(&bm25).map_err(|e| e.to_string())?;
+    }
+    let vec = segment_vectors_bin_path(base, table, segment_parquet);
+    if vec.exists() {
+        std::fs::remove_file(&vec).map_err(|e| e.to_string())?;
+    }
+    let quant = segment_quant_bin_path(base, table, segment_parquet);
+    if quant.exists() {
+        std::fs::remove_file(&quant).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Replay compaction WAL: drop removed segment names from manifest if files are gone.
+pub fn replay_compaction_wal(base: &Path, table: &str) -> Result<usize, String> {
+    let records = wal::read_compactions(base, table)?;
+    if records.is_empty() {
+        return Ok(0);
+    }
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(0);
+    }
+    let mut manifest = TableManifestFile::load(&manifest_path)?;
+    let seg_dir = TableManifestFile::segments_dir(base, table);
+    let mut fixed = 0usize;
+    for record in &records {
+        for removed in &record.removed {
+            if manifest.segments.contains(removed) && !seg_dir.join(removed).exists() {
+                manifest.segments.retain(|s| s != removed);
+                fixed += 1;
+            }
+        }
+        for added in &record.added {
+            if !manifest.segments.contains(added) && seg_dir.join(added).exists() {
+                manifest.push_segment(added.clone());
+                fixed += 1;
+            }
+        }
+    }
+    if fixed > 0 {
+        manifest.save(&manifest_path)?;
+    }
+    let all_present = manifest
+        .segments
+        .iter()
+        .all(|s| seg_dir.join(s).exists());
+    if all_present {
+        wal::truncate_compactions(base, table)?;
+    }
+    Ok(fixed)
+}
+
+pub fn compact_table(
+    base: &Path,
+    table: &str,
+    store: Option<&mut CorpusStore>,
+    mode: CompactMode,
+    policy: &CompactPolicy,
+    mut caches: Option<&mut StorageCaches>,
+) -> Result<CompactReport, String> {
+    replay_compaction_wal(base, table)?;
+    let report = compaction::compact_table_segments(base, table, policy, mode)?;
+    if report.merges == 0 {
+        return Ok(report);
+    }
+    let seg_dir = TableManifestFile::segments_dir(base, table);
+    for removed in &report.removed {
+        remove_segment_sidecars(base, table, removed)?;
+        if let Some(caches) = caches.as_deref_mut() {
+            caches.invalidate_segment(&seg_dir.join(removed));
+            caches.invalidate_index_blob(&segment_bm25_bin_path(base, table, removed));
+            caches.invalidate_index_blob(&segment_vectors_bin_path(base, table, removed));
+        }
+    }
+    for added in &report.added {
+        if let Some(caches) = caches.as_deref_mut() {
+            caches.invalidate_segment(&seg_dir.join(added));
+        }
+    }
+    rebuild_segment_sidecars(base, table, true, true)?;
+    let num_segments = table_segment_count(base, table)?;
+    if let Some(store) = store {
+        save_table_indexes(base, table, store, num_segments)?;
+    } else {
+        let mut tmp = CorpusStore::default();
+        let n = load_table(
+            base,
+            table,
+            &mut tmp,
+            num_segments as usize,
+            caches.as_deref_mut(),
+        )?;
+        if n > 0 {
+            save_table_indexes(base, table, &mut tmp, num_segments)?;
+        }
+    }
+    wal::append_compaction(base, table, &report.removed, &report.added)?;
+    let manifest = TableManifestFile::load(&TableManifestFile::path_for_table(base, table))?;
+    wal::checkpoint_after_manifest(base, table, &manifest.segments, &seg_dir)?;
+    wal::truncate_compactions(base, table)?;
+    Ok(report)
+}
+
+pub fn maybe_compact_after_flush(
+    base: &Path,
+    table: &str,
+    store: &mut CorpusStore,
+    caches: Option<&mut StorageCaches>,
+) -> Result<Option<CompactReport>, String> {
+    let policy = CompactPolicy::from_env();
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    let seg_dir = TableManifestFile::segments_dir(base, table);
+    if !compaction::should_compact(&manifest, &seg_dir, &policy) {
+        return Ok(None);
+    }
+    let report = compact_table(
+        base,
+        table,
+        Some(store),
+        CompactMode::Auto,
+        &policy,
+        caches,
+    )?;
+    if report.merges > 0 {
+        Ok(Some(report))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn flush_new_docs(
     base: &Path,
     table: &str,
     store: &mut CorpusStore,
     since_id: u64,
     num_segments: u32,
+    caches: Option<&mut StorageCaches>,
 ) -> Result<(), String> {
     let columnar: Vec<ColumnarDoc> = store
         .docs_with_ids_since(table, since_id)
@@ -732,6 +957,7 @@ pub fn flush_new_docs(
     }
     let _segment = flush_batch(base, table, &columnar, since_id)?;
     save_table_indexes(base, table, store, num_segments)?;
+    let _ = maybe_compact_after_flush(base, table, store, caches)?;
     Ok(())
 }
 
@@ -764,6 +990,9 @@ pub fn rebuild_segment_sidecars(
         if vectors {
             if let Some(snap) = snapshot_for_columnar_vectors(&docs) {
                 save_segment_vector_sidecar(base, table, seg, &snap)?;
+            }
+            if let Some(qsnap) = snapshot_for_columnar_quant(&docs) {
+                save_segment_quant_sidecar(base, table, seg, &qsnap)?;
             }
         }
     }
