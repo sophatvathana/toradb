@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bench]]
+name = "segment_read"
+harness = false
+
 [dependencies]
 toradb-core = { workspace = true }
 serde = { workspace = true }
@@ -11,6 +15,16 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 arrow = { workspace = true }
 parquet = { workspace = true }
+memmap2 = { workspace = true }
+libc = "0.2"
+tempfile = "3"
+io-uring = { version = "0.7.12", optional = true }
 
 [dev-dependencies]
 toradb-core = { workspace = true }
+tempfile = "3"
+criterion = { version = "0.8.2", features = ["html_reports"] }
+
+[features]
+default = []
+io-uring = ["dep:io-uring"]
