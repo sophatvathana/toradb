@@ -7,7 +7,9 @@ use arrow::array::{ArrayRef, Float32Array, ListArray, StringArray, UInt64Array};
 use arrow::buffer::OffsetBuffer;
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
+use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
+use toradb_core::CompressionConfig;
 
 use super::schema::doc_schema;
 
@@ -20,6 +22,14 @@ pub struct ColumnarDoc {
 }
 
 pub fn write_segment(path: &Path, docs: &[ColumnarDoc]) -> Result<(), String> {
+    write_segment_with_compression(path, docs, None)
+}
+
+pub fn write_segment_with_compression(
+    path: &Path,
+    docs: &[ColumnarDoc],
+    compression: Option<&CompressionConfig>,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -27,7 +37,13 @@ pub fn write_segment(path: &Path, docs: &[ColumnarDoc]) -> Result<(), String> {
     let schema = doc_schema();
     let batch = docs_to_batch(&schema, docs)?;
     let file = File::create(path).map_err(|e| e.to_string())?;
-    let props = WriterProperties::builder().build();
+    let mut props_builder = WriterProperties::builder();
+    if let Some(cfg) = compression {
+        if cfg.enabled {
+            props_builder = props_builder.set_compression(Compression::ZSTD(Default::default()));
+        }
+    }
+    let props = props_builder.build();
     let mut writer = ArrowWriter::try_new(file, schema, Some(props)).map_err(|e| e.to_string())?;
     writer.write(&batch).map_err(|e| e.to_string())?;
     writer.close().map_err(|e| e.to_string())?;

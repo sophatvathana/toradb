@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CompressionConfig {
     pub enabled: bool,
     pub block_size: u32,

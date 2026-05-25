@@ -2,13 +2,16 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TableManifestFile {
     pub schema_version: u32,
     pub segments: Vec<String>,
     /// Cap on rayon threads for distributed segment scans (default 4 when unset).
     #[serde(default)]
     pub segment_workers: Option<u32>,
+    /// Parquet compression for new segments (optional).
+    #[serde(default)]
+    pub compression: Option<toradb_core::CompressionConfig>,
 }
 
 impl Default for TableManifestFile {
@@ -17,6 +20,7 @@ impl Default for TableManifestFile {
             schema_version: 1,
             segments: Vec::new(),
             segment_workers: None,
+            compression: None,
         }
     }
 }
