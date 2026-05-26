@@ -74,11 +74,7 @@ impl Database {
                     let mut table_names = Vec::new();
                     let mut row_counts = Vec::new();
                     for name in names {
-                        let n = self
-                            .dag
-                            .table_documents(&name)
-                            .map(|d| d.len())
-                            .unwrap_or(0);
+                        let n = self.dag.table_row_count(&name).unwrap_or(0);
                         table_names.push(name);
                         row_counts.push(n as f64);
                     }
@@ -202,11 +198,7 @@ impl Database {
                             )));
                         }
                     }
-                    let row_count = self
-                        .dag
-                        .table_documents(&table)
-                        .map(|d| d.len())
-                        .unwrap_or(0);
+                    let row_count = self.dag.table_row_count(&table).unwrap_or(0);
                     let vector_dim = self
                         .dag
                         .vector_dim(&table)
@@ -335,12 +327,12 @@ fn ingest_doc_to_py<'py>(
 #[pymethods]
 impl Database {
     #[new]
-    fn py_new(path: String) -> PyResult<Self> {
-        Self::open(path)
+    fn py_new(py: Python<'_>, path: String) -> PyResult<Self> {
+        py.detach(|| Self::open(path))
     }
 
     fn sql<'py>(&mut self, py: Python<'py>, query: &str) -> PyResult<Bound<'py, PyAny>> {
-        match self.execute_sql(query)? {
+        match py.detach(|| self.execute_sql(query))? {
             SqlOutcome::Message(s) => Ok(s.into_pyobject(py)?.into_any()),
             SqlOutcome::Search(results) => Ok(results.into_pyobject(py)?.into_any()),
             SqlOutcome::Aggregate(results) => Ok(results.into_pyobject(py)?.into_any()),
@@ -381,7 +373,8 @@ impl Database {
         loop {
             sel.limit = page_size;
             sel.offset = offset;
-            let out = sql_exec::run_select(&mut self.dag, &sel)
+            let out = py
+                .detach(|| sql_exec::run_select(&mut self.dag, &sel))
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
             let sql_exec::SqlSelectResult::Search(page) = out else {
                 return Err(pyo3::exceptions::PyValueError::new_err(
@@ -518,9 +511,8 @@ impl Database {
         table: &str,
         ids: Vec<u64>,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let rows = self
-            .dag
-            .fetch_documents(table, &ids)
+        let rows = py
+            .detach(|| self.dag.fetch_documents(table, &ids))
             .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))?;
         let out = PyDict::new(py);
         for (id, doc) in rows {

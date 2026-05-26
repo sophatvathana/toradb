@@ -125,7 +125,6 @@ impl Table {
         depth: Option<u32>,
         query_vector: Option<Vec<f32>>,
     ) -> PyResult<SearchResults> {
-        let mut db = self.db.borrow_mut(py);
         let mut batch = Batch::new();
         batch.table = self.name.clone();
         batch.query = query.to_string();
@@ -138,16 +137,19 @@ impl Table {
         batch.tier1_enable_dense =
             !matches!(strategy, Some("sparse") | Some("bm25") | Some("text"));
         batch.tier1_use_diskann = matches!(strategy, Some("diskann"));
-        if !batch.tier1_use_diskann
-            && batch.tier1_enable_dense
-            && !batch.tier1_enable_sparse
-            && db.table_has_diskann_sidecar(&self.name)
         {
-            batch.tier1_use_diskann = true;
-        }
-        if batch.tier1_enable_dense && batch.query_vector.is_none() {
-            if let Some(dim) = db.vector_dim(&self.name) {
-                batch.query_vector = Some(lexical_proxy_vector(query, dim));
+            let db = self.db.borrow_mut(py);
+            if !batch.tier1_use_diskann
+                && batch.tier1_enable_dense
+                && !batch.tier1_enable_sparse
+                && db.table_has_diskann_sidecar(&self.name)
+            {
+                batch.tier1_use_diskann = true;
+            }
+            if batch.tier1_enable_dense && batch.query_vector.is_none() {
+                if let Some(dim) = db.vector_dim(&self.name) {
+                    batch.query_vector = Some(lexical_proxy_vector(query, dim));
+                }
             }
         }
         batch.enable_hyde = matches!(strategy, Some("hyde"));
@@ -157,9 +159,18 @@ impl Table {
         batch.graph_depth = depth.unwrap_or(2);
         batch.distributed_segments = matches!(strategy, Some("distributed"));
         let ctx = tune_ctx(exec_ctx(top_k, offset), query, strategy);
-        let metrics = db
-            .run_retrieval(&mut batch, &ctx)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        let db_handle = self.db.clone_ref(py);
+        let (metrics, batch) = py
+            .detach(move || {
+                Python::attach(|inner_py| {
+                    let metrics = db_handle
+                        .bind(inner_py)
+                        .borrow_mut()
+                        .run_retrieval(&mut batch, &ctx)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+                    PyResult::Ok((metrics, batch))
+                })
+            })?;
         let page = batch
             .candidates
             .slice_range(offset.unwrap_or(0) as usize, top_k.unwrap_or(20) as usize);

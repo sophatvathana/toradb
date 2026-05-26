@@ -6,14 +6,18 @@ use pyo3::prelude::*;
 
 #[pyfunction]
 #[pyo3(signature = (path, reload=None))]
-fn local(path: &str, reload: Option<bool>) -> PyResult<database::Database> {
-    database::Database::open_with_reload(path.to_string(), reload.unwrap_or(true))
+fn local(py: Python<'_>, path: &str, reload: Option<bool>) -> PyResult<database::Database> {
+    let path = path.to_string();
+    let reload = reload.unwrap_or(true);
+    py.detach(|| database::Database::open_with_reload(path, reload))
 }
 
 #[pyfunction]
 #[pyo3(signature = (path, reload=None))]
-fn connect(path: &str, reload: Option<bool>) -> PyResult<database::Database> {
-    database::Database::open_with_reload(path.to_string(), reload.unwrap_or(true))
+fn connect(py: Python<'_>, path: &str, reload: Option<bool>) -> PyResult<database::Database> {
+    let path = path.to_string();
+    let reload = reload.unwrap_or(true);
+    py.detach(|| database::Database::open_with_reload(path, reload))
 }
 
 #[pymodule]
