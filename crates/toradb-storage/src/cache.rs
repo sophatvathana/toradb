@@ -24,6 +24,56 @@ impl Default for CacheConfig {
     }
 }
 
+fn env_usize(name: &str) -> Option<usize> {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+}
+
+fn system_memory_bytes() -> Option<usize> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        let out = Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .ok()?;
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            return s.trim().parse().ok();
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(s) = std::fs::read_to_string("/proc/meminfo") {
+            for line in s.lines() {
+                if line.starts_with("MemTotal:") {
+                    let kb: usize = line
+                        .split_whitespace()
+                        .nth(1)?
+                        .parse()
+                        .ok()?;
+                    return Some(kb.saturating_mul(1024));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn auto_index_bytes() -> usize {
+    const MIN_BYTES: usize = 256 * 1024 * 1024;
+    const DEFAULT_CAP: usize = 8 * 1024 * 1024 * 1024;
+    let fraction = std::env::var("TORADB_CACHE_INDEX_FRACTION")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.20);
+    let cap = env_usize("TORADB_CACHE_AUTO_CAP_BYTES").unwrap_or(DEFAULT_CAP);
+    let mem = system_memory_bytes().unwrap_or(4 * 1024 * 1024 * 1024);
+    let budget = ((mem as f64) * fraction) as usize;
+    budget.clamp(MIN_BYTES, cap)
+}
+
 impl CacheConfig {
     pub fn from_env() -> Self {
         let mut c = Self::default();
@@ -32,10 +82,13 @@ impl CacheConfig {
                 c.segment_entries = n.max(1);
             }
         }
-        if let Ok(v) = std::env::var("TORADB_CACHE_INDEX_BYTES") {
-            if let Ok(n) = v.parse::<usize>() {
-                c.index_bytes = n.max(1024);
-            }
+        if let Some(n) = env_usize("TORADB_CACHE_INDEX_BYTES") {
+            c.index_bytes = n.max(1024);
+        } else if std::env::var("TORADB_CACHE_AUTO")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+        {
+            c.index_bytes = auto_index_bytes();
         }
         c
     }
@@ -274,6 +327,18 @@ pub struct StorageCaches {
 
 impl StorageCaches {
     pub fn new(config: CacheConfig) -> Self {
+        if std::env::var("TORADB_CACHE_DEBUG")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+            || std::env::var("TORADB_CACHE_AUTO")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false)
+        {
+            eprintln!(
+                "toradb: index cache budget {} bytes (segment entries {})",
+                config.index_bytes, config.segment_entries
+            );
+        }
         Self {
             segments: SegmentCache::new(config.segment_entries),
             index_blobs: IndexBlobCache::new(config.index_bytes),
@@ -356,5 +421,23 @@ mod tests {
         assert!(cache.get(Path::new("/a")).is_none());
         assert!(cache.get(Path::new("/b")).is_some());
         assert!(cache.get(Path::new("/c")).is_some());
+    }
+
+    #[test]
+    fn cache_auto_budget_from_env() {
+        let key_auto = "TORADB_CACHE_AUTO";
+        let key_bytes = "TORADB_CACHE_INDEX_BYTES";
+        let key_frac = "TORADB_CACHE_INDEX_FRACTION";
+        let key_cap = "TORADB_CACHE_AUTO_CAP_BYTES";
+        std::env::remove_var(key_bytes);
+        std::env::set_var(key_auto, "1");
+        std::env::set_var(key_frac, "0.25");
+        std::env::set_var(key_cap, "1073741824");
+        let cfg = CacheConfig::from_env();
+        assert!(cfg.index_bytes >= 256 * 1024 * 1024);
+        assert!(cfg.index_bytes <= 1073741824);
+        std::env::remove_var(key_auto);
+        std::env::remove_var(key_frac);
+        std::env::remove_var(key_cap);
     }
 }
