@@ -29,6 +29,11 @@ pub struct DagRunner {
     bulk_disk_state: HashMap<String, BulkDiskState>,
 }
 
+fn segment_bm25_per_segment_k(ctx: &ExecCtx) -> usize {
+    let fetch = ctx.tier3_budget as usize;
+    fetch.saturating_mul(2).max(fetch).min(ctx.tier1_budget as usize)
+}
+
 impl DagRunner {
     pub fn new() -> Self {
         Self {
@@ -407,6 +412,22 @@ impl DagRunner {
         )
     }
 
+    /// Fetch stored text/metadata for specific doc ids (lazy Parquet read when not in RAM).
+    pub fn fetch_documents(
+        &mut self,
+        table: &str,
+        ids: &[u64],
+    ) -> Result<Vec<(u64, toradb_index::IngestDoc)>, String> {
+        let base = self.db_path().map(|p| p.to_path_buf());
+        crate::persist::fetch_documents_by_ids(
+            &self.retrieval.store,
+            base.as_deref(),
+            table,
+            ids,
+            Some(&mut self.caches),
+        )
+    }
+
     pub fn run(&mut self, batch: &mut Batch, ctx: &ExecCtx) -> QueryMetrics {
         let mut metrics = QueryMetrics::default();
 
@@ -445,11 +466,19 @@ impl DagRunner {
                 .as_ref()
                 .and_then(|p| persist::table_has_segment_bm25_sidecars(p.as_path(), &table).ok())
                 .unwrap_or(false);
-            if run_segments {
+            let segment_only = self.db_path.as_ref().is_some_and(|path| {
+                persist::table_index_mode(path.as_path(), &table)
+                    .map(|m| m == IndexMode::SegmentOnly)
+                    .unwrap_or(false)
+            });
+            let skip_segment_bm25 = !segment_only
+                && persist::table_has_merged_bm25_in_memory(&self.retrieval.store, &table);
+            if run_segments && !skip_segment_bm25 {
                 let query = batch.query.clone();
                 let num_segments = self.segment_parallelism(&table);
                 let workers = self.segment_worker_count(&table);
-                let parallel = batch.distributed_segments;
+                let parallel = batch.distributed_segments
+                    || (segment_only && num_segments > 1 && workers > 1);
                 let scheduler =
                     SegmentScheduler::new_with_numa(workers as usize, self.caches.numa);
                 metrics.segments_scanned = num_segments;
@@ -458,13 +487,9 @@ impl DagRunner {
                 } else {
                     1
                 };
-                let use_disk_segments = self.db_path.as_ref().is_some_and(|path| {
-                    persist::table_has_segment_bm25_sidecars(path.as_path(), &table)
-                        .unwrap_or(false)
-                        && persist::table_index_mode(path.as_path(), &table)
-                            .map(|m| m == IndexMode::SegmentOnly)
-                            .unwrap_or(false)
-                });
+                let use_disk_segments = segment_only;
+                let seg_k = segment_bm25_per_segment_k(ctx);
+                let caches = &self.caches;
                 let seg_merged = scheduler.run_for_segments(num_segments, parallel, |seg| {
                     if use_disk_segments {
                         if let Some(ref path) = self.db_path {
@@ -473,8 +498,8 @@ impl DagRunner {
                                 &table,
                                 seg,
                                 &query,
-                                ctx.tier1_budget as usize,
-                                None,
+                                seg_k,
+                                Some(caches),
                             )
                             .unwrap_or_default();
                         }

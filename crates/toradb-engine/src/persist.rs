@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
@@ -8,7 +8,8 @@ use toradb_core::CandidateSet;
 use toradb_index::sparse::bm25::Bm25Index;
 use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
 use toradb_storage::columnar::{
-    parquet_row_count, read_segment, read_segment_texts, write_segment_with_compression,
+    parquet_row_count, read_segment, read_segment_id_bounds, read_segment_matching_ids,
+    read_segment_texts, write_segment_with_compression,
     ColumnarDoc, IndexMode, TableManifestFile,
 };
 use toradb_storage::cache::{get_or_mmap, read_segment_cached, StorageCaches};
@@ -102,6 +103,13 @@ fn segment_bm25_bin_path(base: &Path, table: &str, segment_parquet: &str) -> Pat
         .strip_suffix(".parquet")
         .unwrap_or(segment_parquet);
     indexes_dir(base, table).join(format!("{stem}.bm25.bin"))
+}
+
+fn segment_bm25_v2_bin_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
+    let stem = segment_parquet
+        .strip_suffix(".parquet")
+        .unwrap_or(segment_parquet);
+    indexes_dir(base, table).join(format!("{stem}.bm25.v2.bin"))
 }
 
 fn table_vectors_bin_path(base: &Path, table: &str) -> PathBuf {
@@ -383,6 +391,10 @@ fn load_segment_bm25_sidecar(
     segment_parquet: &str,
     caches: Option<&mut StorageCaches>,
 ) -> Result<Option<Bm25Snapshot>, String> {
+    let v2 = segment_bm25_v2_bin_path(base, table, segment_parquet);
+    if v2.exists() {
+        return load_snapshot_mmap(&v2, caches).map(Some);
+    }
     let bin = segment_bm25_bin_path(base, table, segment_parquet);
     if bin.exists() {
         return load_snapshot_mmap(&bin, caches).map(Some);
@@ -400,6 +412,37 @@ pub fn table_index_mode(base: &Path, table: &str) -> Result<IndexMode, String> {
 }
 
 /// Set manifest index mode to segment-only (bulk ingest default).
+/// Rebuild `segment_id_ranges` from WAL flush records (for existing DBs missing ranges).
+pub fn rebuild_segment_id_ranges(base: &Path, table: &str) -> Result<(), String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(());
+    }
+    let mut manifest = TableManifestFile::load(&manifest_path)?;
+    manifest.segment_id_ranges.clear();
+    let records = wal::read_flushes(base, table)?;
+    if !records.is_empty() {
+        for rec in records {
+            let max_id = rec
+                .since_id
+                .saturating_add(rec.doc_count as u64)
+                .saturating_sub(1);
+            manifest.record_segment_id_range(&rec.segment, rec.since_id, max_id);
+        }
+    } else {
+        let seg_dir = TableManifestFile::segments_dir(base, table);
+        for seg in manifest.segments.clone() {
+            let path = seg_dir.join(&seg);
+            if !path.exists() {
+                continue;
+            }
+            let (min_id, max_id) = read_segment_id_bounds(&path)?;
+            manifest.record_segment_id_range(&seg, min_id, max_id);
+        }
+    }
+    manifest.save(&manifest_path)
+}
+
 pub fn mark_table_segment_only(base: &Path, table: &str) -> Result<(), String> {
     let path = TableManifestFile::path_for_table(base, table);
     let mut manifest = if path.exists() {
@@ -411,14 +454,14 @@ pub fn mark_table_segment_only(base: &Path, table: &str) -> Result<(), String> {
     manifest.save(&path)
 }
 
-/// BM25 search against one segment sidecar (mmap decode per call; no table merge).
+/// BM25 search against one segment sidecar (mmap + decoded index LRU when `caches` is set).
 pub fn search_segment_bm25_sidecar(
     base: &Path,
     table: &str,
     segment_index: u32,
     query: &str,
     k: usize,
-    mut caches: Option<&mut StorageCaches>,
+    caches: Option<&StorageCaches>,
 ) -> Result<CandidateSet, String> {
     let manifest_path = TableManifestFile::path_for_table(base, table);
     if !manifest_path.exists() {
@@ -428,10 +471,41 @@ pub fn search_segment_bm25_sidecar(
     let Some(seg) = manifest.segments.get(segment_index as usize) else {
         return Ok(CandidateSet::default());
     };
-    let Some(snap) = load_segment_bm25_sidecar(base, table, seg, caches.as_deref_mut())? else {
+    let bin_path = segment_bm25_v2_bin_path(base, table, seg);
+    let bin_path = if bin_path.exists() {
+        bin_path
+    } else {
+        segment_bm25_bin_path(base, table, seg)
+    };
+    if !bin_path.exists() {
+        return Ok(CandidateSet::default());
+    }
+    if let Some(caches) = caches {
+        let index = {
+            let mut guard = caches
+                .segment_bm25
+                .lock()
+                .map_err(|_| "segment_bm25 cache lock poisoned".to_string())?;
+            guard.get_or_insert(&bin_path, || {
+                let snap = load_segment_bm25_sidecar(base, table, seg, None)?
+                    .ok_or_else(|| format!("missing bm25 sidecar for {seg}"))?;
+                Ok(Bm25Index::from_snapshot(snap))
+            })?
+        };
+        return Ok(index.search(query, k));
+    }
+    let Some(snap) = load_segment_bm25_sidecar(base, table, seg, None)? else {
         return Ok(CandidateSet::default());
     };
     Ok(Bm25Index::from_snapshot(snap).search(query, k))
+}
+
+/// True when merged BM25 is loaded in memory for this table (skip redundant segment fan-out).
+pub fn table_has_merged_bm25_in_memory(store: &CorpusStore, table: &str) -> bool {
+    store
+        .table(table)
+        .map(|t| t.has_bm25_index())
+        .unwrap_or(false)
 }
 
 pub fn table_has_segment_bm25_sidecars(base: &Path, table: &str) -> Result<bool, String> {
@@ -441,7 +515,9 @@ pub fn table_has_segment_bm25_sidecars(base: &Path, table: &str) -> Result<bool,
     }
     let manifest = TableManifestFile::load(&manifest_path)?;
     for seg in &manifest.segments {
-        if segment_bm25_bin_path(base, table, seg).exists() {
+        if segment_bm25_v2_bin_path(base, table, seg).exists()
+            || segment_bm25_bin_path(base, table, seg).exists()
+        {
             return Ok(true);
         }
     }
@@ -611,6 +687,87 @@ pub fn table_documents(
         return read_table_documents(base, table, caches.as_deref_mut());
     }
     Ok(Vec::new())
+}
+
+fn columnar_to_ingest(doc: ColumnarDoc) -> IngestDoc {
+    IngestDoc {
+        text: doc.text,
+        metadata: doc.metadata,
+        vector: doc.embedding,
+    }
+}
+
+/// Load documents by id: in-memory corpus first, then targeted Parquet segment reads.
+pub fn fetch_documents_by_ids(
+    store: &CorpusStore,
+    base: Option<&Path>,
+    table: &str,
+    ids: &[u64],
+    _caches: Option<&mut StorageCaches>,
+) -> Result<Vec<(u64, IngestDoc)>, String> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut want: std::collections::HashSet<u64> = ids.iter().copied().collect();
+    let mut out: Vec<(u64, IngestDoc)> = Vec::with_capacity(ids.len());
+
+    for (id, doc) in store.documents_by_ids(table, ids) {
+        want.remove(&id);
+        out.push((id, doc));
+    }
+    if want.is_empty() {
+        return Ok(out);
+    }
+    let Some(base) = base else {
+        return Ok(out);
+    };
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(out);
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    let seg_dir = TableManifestFile::segments_dir(base, table);
+
+    if !manifest.segment_id_ranges.is_empty() {
+        for range in &manifest.segment_id_ranges {
+            if want.is_empty() {
+                break;
+            }
+            let path = seg_dir.join(&range.file);
+            if !path.exists() {
+                continue;
+            }
+            let seg_want: HashSet<u64> = want
+                .iter()
+                .filter(|id| **id >= range.min_id && **id <= range.max_id)
+                .copied()
+                .collect();
+            if seg_want.is_empty() {
+                continue;
+            }
+            let bounds = Some((range.min_id, range.max_id));
+            for doc in read_segment_matching_ids(&path, &seg_want, bounds)? {
+                want.remove(&doc.id);
+                out.push((doc.id, columnar_to_ingest(doc)));
+            }
+        }
+    } else {
+        let remaining: Vec<u64> = want.iter().copied().collect();
+        for seg in manifest.segments_for_ids(&remaining) {
+            if want.is_empty() {
+                break;
+            }
+            let path = seg_dir.join(seg);
+            if !path.exists() {
+                continue;
+            }
+            for doc in read_segment_matching_ids(&path, &want, None)? {
+                want.remove(&doc.id);
+                out.push((doc.id, columnar_to_ingest(doc)));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Remove a table directory from disk.
@@ -929,6 +1086,8 @@ pub fn flush_batch_with_opts(
     )?;
     let mut manifest = manifest;
     let seg_name_clone = seg_name.clone();
+    let max_id = since_id.saturating_add(docs.len() as u64).saturating_sub(1);
+    manifest.record_segment_id_range(&seg_name, since_id, max_id);
     manifest.push_segment(seg_name);
     manifest.save(&manifest_path)?;
     let seg_dir = TableManifestFile::segments_dir(base, table);
@@ -1412,6 +1571,7 @@ pub fn finalize_bulk_table_indexes(
             )?;
             reload_table_texts_from_segments(base, table, store, num_segments)?;
         }
+        rebuild_segment_id_ranges(base, table)?;
         Ok(())
     })();
 
