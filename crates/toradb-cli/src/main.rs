@@ -1,13 +1,20 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use arrow::array::StringArray;
 use arrow::record_batch::RecordBatch;
 use clap::{Parser, Subcommand};
+use indicatif::{ProgressBar, ProgressStyle};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use toradb_engine::DagRunner;
+use toradb_engine::persist;
+use toradb_engine::{DagRunner, IndexBuildPhase, IndexBuildState};
 
 #[derive(Parser)]
 #[command(name = "toradb-ingest", about = "ToraDB bulk ingest and index build")]
@@ -68,17 +75,95 @@ fn main() -> Result<(), String> {
 }
 
 fn run_index_op(args: FinishArgs, resume: bool) -> Result<(), String> {
+    let label = if resume { "resume" } else { "finish" };
+    eprintln!("{label}: building segment BM25 + indexes…");
     let t0 = Instant::now();
-    let mut dag = DagRunner::open_with_reload(&args.db, false)?;
-    dag.ensure_table(&args.table);
-    if resume {
-        dag.resume_index_build(&args.table, args.compact)?;
-        println!("resume_index_build: {:.1}s", t0.elapsed().as_secs_f64());
-    } else {
-        dag.resume_index_build(&args.table, args.compact)?;
-        println!("finish (resume path): {:.1}s", t0.elapsed().as_secs_f64());
-    }
+    let db = args.db.clone();
+    let table = args.table.clone();
+    let compact = args.compact;
+    with_index_progress(&args.db, &args.table, || {
+        let mut dag = DagRunner::open_with_reload(&db, false)?;
+        dag.ensure_table(&table);
+        dag.resume_index_build(&table, compact)
+    })?;
+    eprintln!("{label}: {:.1}s", t0.elapsed().as_secs_f64());
     Ok(())
+}
+
+fn with_index_progress(
+    db: &Path,
+    table: &str,
+    work: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_watch = Arc::clone(&stop);
+    let db_watch = db.to_path_buf();
+    let table_watch = table.to_string();
+    let watcher = thread::spawn(move || index_progress_loop(&db_watch, &table_watch, stop_watch));
+
+    let result = work();
+    stop.store(true, Ordering::Relaxed);
+    watcher.join().ok();
+    result
+}
+
+fn index_progress_loop(db: &Path, table: &str, stop: Arc<AtomicBool>) {
+    let pb = ProgressBar::new(1);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+        )
+        .unwrap()
+        .progress_chars("█▉▊▋▌▍▎▏  "),
+    );
+    pb.enable_steady_tick(Duration::from_millis(120));
+
+    while !stop.load(Ordering::Relaxed) {
+        if let Some(status) = persist::read_table_index_build_status(db, table) {
+            update_index_progress(&pb, &status);
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    pb.finish_and_clear();
+}
+
+fn update_index_progress(pb: &ProgressBar, status: &toradb_engine::IndexBuildStatus) {
+    let phase_label = status
+        .phase
+        .map(index_phase_label)
+        .unwrap_or("index build");
+
+    match status.state {
+        IndexBuildState::Ready => {
+            pb.set_length(1);
+            pb.set_position(1);
+            pb.set_message("ready");
+        }
+        IndexBuildState::Failed => {
+            let msg = status.message.clone().unwrap_or_else(|| "failed".into());
+            pb.set_message(msg);
+        }
+        IndexBuildState::Building => {
+            if status.phase == Some(IndexBuildPhase::SegmentBm25) && status.segments_total > 0 {
+                pb.set_length(status.segments_total as u64);
+                pb.set_position(status.segments_done as u64);
+            } else {
+                let total = status.segments_total.max(1) as u64;
+                pb.set_length(total);
+                pb.set_position(total);
+            }
+            pb.set_message(phase_label);
+        }
+    }
+}
+
+fn index_phase_label(phase: IndexBuildPhase) -> &'static str {
+    match phase {
+        IndexBuildPhase::SegmentBm25 => "segment BM25",
+        IndexBuildPhase::MergeBm25 => "merge BM25",
+        IndexBuildPhase::TableIndexes => "table indexes",
+        IndexBuildPhase::ReloadTexts => "reload texts",
+    }
 }
 
 fn run_bulk(args: BulkArgs) -> Result<(), String> {
@@ -119,7 +204,8 @@ fn run_bulk(args: BulkArgs) -> Result<(), String> {
     if !args.no_finish {
         eprintln!("finish: building segment BM25 + indexes…");
         let t1 = Instant::now();
-        dag.finish_bulk_ingest(&args.table, false)?;
+        let table = args.table.clone();
+        with_index_progress(&args.db, &args.table, || dag.finish_bulk_ingest(&table, false))?;
         eprintln!("finish: {:.1}s", t1.elapsed().as_secs_f64());
     } else {
         eprintln!("skipped finish (--no-finish); run: toradb-ingest finish --db … --table …");
