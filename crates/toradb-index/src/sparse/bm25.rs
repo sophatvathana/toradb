@@ -16,6 +16,10 @@ pub struct Bm25Index {
 }
 
 impl Bm25Index {
+    pub fn doc_count(&self) -> u32 {
+        self.num_docs
+    }
+
     pub fn add_document(&mut self, id: DocId, text: &str) {
         self.num_docs += 1;
         let mut tf_map: HashMap<String, u32> = HashMap::new();

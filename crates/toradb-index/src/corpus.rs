@@ -104,6 +104,10 @@ impl TableCorpus {
         self.bm25.search(query, k)
     }
 
+    pub fn has_bm25_index(&self) -> bool {
+        self.bm25.doc_count() > 0
+    }
+
     pub fn rebuild_hnsw(&mut self) {
         let mut ids: Vec<DocId> = self.docs.keys().copied().collect();
         ids.sort_unstable();
@@ -587,6 +591,27 @@ impl CorpusStore {
 
     pub fn all_documents(&self, table: &str) -> Vec<(DocId, IngestDoc)> {
         self.docs_with_ids_since(table, 0)
+    }
+
+    /// Look up documents by id from the in-memory corpus (empty when segment-only open).
+    pub fn documents_by_ids(&self, table: &str, ids: &[DocId]) -> Vec<(DocId, IngestDoc)> {
+        let Some(t) = self.table(table) else {
+            return Vec::new();
+        };
+        ids.iter()
+            .filter_map(|id| {
+                t.docs.get(id).map(|d| {
+                    (
+                        *id,
+                        IngestDoc {
+                            text: d.text.clone(),
+                            metadata: d.metadata.clone(),
+                            vector: d.vector.clone(),
+                        },
+                    )
+                })
+            })
+            .collect()
     }
 
     pub fn insert_stored(&mut self, table: &str, id: DocId, doc: IngestDoc, num_segments: u32) {
