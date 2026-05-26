@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use rayon::prelude::*;
 use toradb_index::dense::{diskann_codec, hnsw_codec, quant_codec, vector_codec};
@@ -1322,6 +1323,10 @@ pub fn rebuild_segment_sidecars_with_progress(
         .build()
         .map_err(|e| e.to_string())?;
 
+    let segments_done_atomic = AtomicU32::new(0);
+    let base_progress = base.to_path_buf();
+    let table_progress = table.to_string();
+
     let results: Vec<Result<(String, Option<SegmentBuildRecord>), String>> = pool.install(|| {
         segments
             .par_iter()
@@ -1334,7 +1339,24 @@ pub fn rebuild_segment_sidecars_with_progress(
                     && sparse
                     && segment_sparse_up_to_date(&base_owned, &table_owned, seg, &path, &build_manifest)
                 {
-                    return Ok((seg.clone(), None));
+                    let record = SegmentBuildRecord {
+                        segment: seg.clone(),
+                        sparse_done: true,
+                        parquet_mtime_secs: index_build_status::parquet_mtime_secs(&path),
+                    };
+                    let done = segments_done_atomic.fetch_add(1, Ordering::Relaxed) + 1;
+                    if report_progress
+                        && (done % 1 == 0 || done == segments_total)
+                    {
+                        let _ = mark_index_building(
+                            &base_progress,
+                            &table_progress,
+                            IndexBuildPhase::SegmentBm25,
+                            done,
+                            segments_total,
+                        );
+                    }
+                    return Ok((seg.clone(), Some(record)));
                 }
                 if sparse && !vectors {
                     let snap = snapshot_for_segment_bm25(&path)?;
@@ -1365,12 +1387,21 @@ pub fn rebuild_segment_sidecars_with_progress(
                     sparse_done: sparse,
                     parquet_mtime_secs: index_build_status::parquet_mtime_secs(&path),
                 };
+                let done = segments_done_atomic.fetch_add(1, Ordering::Relaxed) + 1;
+                if report_progress && (done % 1 == 0 || done == segments_total) {
+                    let _ = mark_index_building(
+                        &base_progress,
+                        &table_progress,
+                        IndexBuildPhase::SegmentBm25,
+                        done,
+                        segments_total,
+                    );
+                }
                 Ok((seg.clone(), Some(record)))
             })
             .collect()
     });
 
-    let mut done = 0u32;
     for result in results {
         let (seg, record) = result?;
         if let Some(rec) = record {
@@ -1379,16 +1410,6 @@ pub fn rebuild_segment_sidecars_with_progress(
             } else {
                 build_manifest.segments.push(rec);
             }
-        }
-        done += 1;
-        if report_progress && done % 4 == 0 || done == segments_total {
-            mark_index_building(
-                base,
-                table,
-                IndexBuildPhase::SegmentBm25,
-                done,
-                segments_total,
-            )?;
         }
     }
     write_build_manifest(base, table, &build_manifest)?;

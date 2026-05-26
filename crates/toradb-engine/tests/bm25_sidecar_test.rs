@@ -1,3 +1,6 @@
+use toradb_engine::index_build_status::{
+    segment_bm25_path, segment_sparse_up_to_date, IndexBuildManifest,
+};
 use toradb_engine::{persist, DagRunner};
 use toradb_index::IngestDoc;
 
@@ -34,6 +37,41 @@ fn bm25_sidecar_written_on_flush_and_used_on_reload() {
     let ctx = toradb_core::ExecCtx::new(10, 10, 5);
     dag2.retrieval.run_tier1(&mut batch, &ctx);
     assert!(!batch.candidates.is_empty());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn segment_sparse_up_to_date_without_build_manifest_entry() {
+    let dir = std::env::temp_dir().join("toradb_sparse_skip_disk");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    {
+        let mut dag = DagRunner::open(&dir).expect("open");
+        dag.add_documents(
+            "docs",
+            vec![IngestDoc {
+                text: "Nikola Tesla coil".into(),
+                metadata: Default::default(),
+                vector: None,
+            }],
+        )
+        .expect("add");
+    }
+
+    let seg = "seg_00001.parquet";
+    let parquet_path = dir.join("docs/segments").join(seg);
+    let bm25_path = segment_bm25_path(&dir, "docs", seg);
+    assert!(bm25_path.exists());
+
+    let empty_manifest = IndexBuildManifest::default();
+    assert!(segment_sparse_up_to_date(
+        &dir,
+        "docs",
+        seg,
+        &parquet_path,
+        &empty_manifest
+    ));
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -227,20 +227,26 @@ pub fn segment_sparse_up_to_date(
     parquet_path: &Path,
     manifest: &IndexBuildManifest,
 ) -> bool {
-    let bm25_path = base
-        .join(table)
-        .join("indexes")
-        .join(format!(
-            "{}.bm25.bin",
-            segment.strip_suffix(".parquet").unwrap_or(segment)
-        ));
+    let bm25_path = segment_bm25_path(base, table, segment);
     if !bm25_path.exists() {
         return false;
     }
     let pq_mtime = parquet_mtime_secs(parquet_path);
-    manifest
+    if manifest
         .segments
         .iter()
         .find(|r| r.segment == segment)
         .is_some_and(|r| r.sparse_done && r.parquet_mtime_secs == pq_mtime)
+    {
+        return true;
+    }
+    // Sidecar on disk but manifest incomplete (interrupted resume) — trust mtime ordering.
+    parquet_mtime_secs(&bm25_path) >= pq_mtime
+}
+
+pub fn segment_bm25_path(base: &Path, table: &str, segment: &str) -> PathBuf {
+    base.join(table).join("indexes").join(format!(
+        "{}.bm25.bin",
+        segment.strip_suffix(".parquet").unwrap_or(segment)
+    ))
 }
