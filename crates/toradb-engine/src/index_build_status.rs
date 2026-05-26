@@ -220,6 +220,13 @@ pub fn parquet_mtime_secs(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+fn segment_bm25_lex_path(base: &Path, table: &str, segment: &str) -> PathBuf {
+    base.join(table).join("indexes").join(format!(
+        "{}.bm25.lex.bin",
+        segment.strip_suffix(".parquet").unwrap_or(segment)
+    ))
+}
+
 pub fn segment_sparse_up_to_date(
     base: &Path,
     table: &str,
@@ -228,14 +235,8 @@ pub fn segment_sparse_up_to_date(
     manifest: &IndexBuildManifest,
 ) -> bool {
     let bm25_path = segment_bm25_path(base, table, segment);
-    let v2 = base
-        .join(table)
-        .join("indexes")
-        .join(format!(
-            "{}.bm25.v2.bin",
-            segment.strip_suffix(".parquet").unwrap_or(segment)
-        ));
-    if !bm25_path.exists() && !v2.exists() {
+    let lex_path = segment_bm25_lex_path(base, table, segment);
+    if !bm25_path.exists() || !lex_path.exists() {
         return false;
     }
     let pq_mtime = parquet_mtime_secs(parquet_path);

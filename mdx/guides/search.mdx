@@ -81,7 +81,7 @@ ann.search(
 
 ## Performance (large segment-only tables)
 
-After bulk ingest, the first search may decode many segment indexes (cold start). Mitigations:
+After bulk ingest, the first search may mmap many segment indexes (cold start). Mitigations:
 
 - Set `TORADB_CACHE_INDEX_BYTES` high enough to hold hot segment sidecars (demo defaults to 8GB).
 - Enable `TORADB_WARMUP_ON_START=1` so the API warms indexes in the background.

@@ -95,9 +95,9 @@ fn tbm3_sidecar_search_after_flush() {
         .expect("add");
     }
 
-    let v2 = dir.join("docs/indexes/seg_00001.bm25.v2.bin");
-    assert!(v2.exists(), "TBM3 v2 sidecar should exist after flush");
-    let bytes = std::fs::read(&v2).expect("read");
+    let bin = dir.join("docs/indexes/seg_00001.bm25.bin");
+    assert!(bin.exists(), "TBM3 BM25 sidecar should exist after flush");
+    let bytes = std::fs::read(&bin).expect("read");
     let view = Bm25Tbm3View::open(&bytes).expect("parse");
     let hits = view.search("Nikola motor", 5);
     assert!(!hits.is_empty());

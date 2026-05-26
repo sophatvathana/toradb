@@ -39,7 +39,7 @@ fn bulk_finish_segment_only_skips_merged_bm25() {
         toradb_engine::persist::table_has_segment_bm25_sidecars(&dir, "docs").expect("check")
     );
     assert!(
-        dir.join("docs/indexes/seg_00001.bm25.v2.bin").exists(),
+        dir.join("docs/indexes/seg_00001.bm25.bin").exists(),
         "TBM3 sidecar"
     );
     assert!(

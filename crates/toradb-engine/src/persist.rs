@@ -4,10 +4,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use rayon::prelude::*;
 use toradb_index::dense::{diskann_codec, hnsw_codec, quant_codec, vector_codec};
-use toradb_index::sparse::bm25_codec;
 use toradb_index::sparse::bm25_lexicon::{self, Bm25LexiconView};
 use toradb_index::sparse::bm25_route::{self, Bm25RouteView};
-use toradb_index::sparse::bm25_tbm3::TBM3_MAGIC;
+use toradb_index::sparse::bm25_tbm3;
 use toradb_index::sparse::bm25::tokenize;
 use toradb_core::CandidateSet;
 use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
@@ -109,13 +108,6 @@ fn segment_bm25_bin_path(base: &Path, table: &str, segment_parquet: &str) -> Pat
     indexes_dir(base, table).join(format!("{stem}.bm25.bin"))
 }
 
-fn segment_bm25_v2_bin_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
-    let stem = segment_parquet
-        .strip_suffix(".parquet")
-        .unwrap_or(segment_parquet);
-    indexes_dir(base, table).join(format!("{stem}.bm25.v2.bin"))
-}
-
 fn segment_bm25_lex_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
     let stem = segment_parquet
         .strip_suffix(".parquet")
@@ -165,9 +157,9 @@ fn segment_quant_bin_path(base: &Path, table: &str, segment_parquet: &str) -> Pa
     indexes_dir(base, table).join(format!("{stem}.vectors.q.bin"))
 }
 
-fn load_snapshot_mmap(path: &Path, caches: Option<&mut StorageCaches>) -> Result<Bm25Snapshot, String> {
+fn load_bm25_snapshot_mmap(path: &Path, caches: Option<&mut StorageCaches>) -> Result<Bm25Snapshot, String> {
     let mmap = get_or_mmap(path, caches)?;
-    bm25_codec::decode_snapshot(mmap.as_ref())
+    bm25_tbm3::snapshot_from_tbm3(mmap.as_ref())
 }
 
 fn load_vector_snapshot_mmap(path: &Path, caches: Option<&mut StorageCaches>) -> Result<VectorSnapshot, String> {
@@ -302,7 +294,7 @@ pub fn table_has_segment_hnsw_sidecars(base: &Path, table: &str) -> Result<bool,
 }
 
 pub fn save_bm25_sidecar(base: &Path, table: &str, snap: &Bm25Snapshot) -> Result<(), String> {
-    bm25_codec::write_snapshot_file(&bm25_table_bin_path(base, table), snap)
+    bm25_tbm3::write_tbm3_file(&bm25_table_bin_path(base, table), snap)
 }
 
 pub fn save_segment_bm25_sidecar(
@@ -311,12 +303,8 @@ pub fn save_segment_bm25_sidecar(
     segment_parquet: &str,
     snap: &Bm25Snapshot,
 ) -> Result<(), String> {
-    bm25_codec::write_snapshot_file(
+    bm25_tbm3::write_tbm3_file(
         &segment_bm25_bin_path(base, table, segment_parquet),
-        snap,
-    )?;
-    toradb_index::sparse::bm25_tbm3::write_tbm3_file(
-        &segment_bm25_v2_bin_path(base, table, segment_parquet),
         snap,
     )?;
     let terms = bm25_lexicon::terms_from_posting_keys(snap.postings.keys().map(|s| s.as_str()));
@@ -412,7 +400,7 @@ pub fn load_bm25_sidecar(
 ) -> Result<Option<Bm25Snapshot>, String> {
     let bin = bm25_table_bin_path(base, table);
     if bin.exists() {
-        return load_snapshot_mmap(&bin, caches).map(Some);
+        return load_bm25_snapshot_mmap(&bin, caches).map(Some);
     }
     Ok(None)
 }
@@ -423,13 +411,9 @@ fn load_segment_bm25_sidecar(
     segment_parquet: &str,
     caches: Option<&mut StorageCaches>,
 ) -> Result<Option<Bm25Snapshot>, String> {
-    let v2 = segment_bm25_v2_bin_path(base, table, segment_parquet);
-    if v2.exists() {
-        return load_snapshot_mmap(&v2, caches).map(Some);
-    }
     let bin = segment_bm25_bin_path(base, table, segment_parquet);
     if bin.exists() {
-        return load_snapshot_mmap(&bin, caches).map(Some);
+        return load_bm25_snapshot_mmap(&bin, caches).map(Some);
     }
     Ok(None)
 }
@@ -497,10 +481,6 @@ pub fn list_segment_bm25_bins(base: &Path, table: &str) -> Result<Vec<Option<Pat
         .segments
         .iter()
         .map(|seg| {
-            let v2 = segment_bm25_v2_bin_path(base, table, seg);
-            if v2.exists() {
-                return Some(v2);
-            }
             let bin = segment_bm25_bin_path(base, table, seg);
             if bin.exists() {
                 Some(bin)
@@ -513,11 +493,12 @@ pub fn list_segment_bm25_bins(base: &Path, table: &str) -> Result<Vec<Option<Pat
 
 fn load_cached_bm25_segment(bin_path: &Path) -> Result<CachedBm25Segment, String> {
     let mmap = get_or_mmap(bin_path, None)?;
-    if mmap.len() >= 4 && &mmap[..4] == TBM3_MAGIC {
-        return Ok(CachedBm25Segment::Tbm3(mmap));
-    }
-    let snap = bm25_codec::decode_snapshot(mmap.as_ref())?;
-    Ok(CachedBm25Segment::Snapshot(std::sync::Arc::new(snap)))
+    CachedBm25Segment::from_mmap(mmap).map_err(|_| {
+        format!(
+            "invalid BM25 sidecar at {} (expected TBM3); re-run: toradb-ingest resume",
+            bin_path.display()
+        )
+    })
 }
 
 /// BM25 search against one on-disk segment sidecar path.
@@ -589,7 +570,6 @@ pub fn filter_bm25_segment_indices(
         }
         let lex_path = segment_bm25_lex_path(base, table, seg);
         if !lex_path.exists() {
-            out.push(idx as u32);
             continue;
         }
         let bytes = std::fs::read(&lex_path).map_err(|e| e.to_string())?;
@@ -652,12 +632,7 @@ pub fn search_segment_bm25_sidecar(
     let Some(seg) = manifest.segments.get(segment_index as usize) else {
         return Ok(CandidateSet::default());
     };
-    let v2 = segment_bm25_v2_bin_path(base, table, seg);
-    let bin_path = if v2.exists() {
-        v2
-    } else {
-        segment_bm25_bin_path(base, table, seg)
-    };
+    let bin_path = segment_bm25_bin_path(base, table, seg);
     search_segment_bm25_at_path(&bin_path, query, k, caches)
 }
 
@@ -676,9 +651,7 @@ pub fn table_has_segment_bm25_sidecars(base: &Path, table: &str) -> Result<bool,
     }
     let manifest = TableManifestFile::load(&manifest_path)?;
     for seg in &manifest.segments {
-        if segment_bm25_v2_bin_path(base, table, seg).exists()
-            || segment_bm25_bin_path(base, table, seg).exists()
-        {
+        if segment_bm25_bin_path(base, table, seg).exists() {
             return Ok(true);
         }
     }

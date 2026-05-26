@@ -280,8 +280,8 @@ mod tests {
     #[test]
     fn binary_codec_roundtrip() {
         let snap = Bm25Snapshot::from_documents([(0u64, "alpha beta gamma")]);
-        let bytes = crate::sparse::bm25_codec::encode_snapshot(&snap).unwrap();
-        let back = crate::sparse::bm25_codec::decode_snapshot(&bytes).unwrap();
+        let bytes = crate::sparse::bm25_tbm3::encode_tbm3(&snap);
+        let back = crate::sparse::bm25_tbm3::snapshot_from_tbm3(&bytes).unwrap();
         let index = Bm25Index::from_snapshot(back);
         assert!(!index.search("gamma", 1).is_empty());
     }

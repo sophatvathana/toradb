@@ -8,6 +8,14 @@ use toradb_core::{CandidateSet, DocId};
 
 use super::bm25::{tokenize, B, K1, Bm25Snapshot};
 
+pub fn decode_snapshot(bytes: &[u8]) -> Result<Bm25Snapshot, String> {
+    snapshot_from_tbm3(bytes)
+}
+
+pub fn write_snapshot_file(path: &Path, snap: &Bm25Snapshot) -> Result<(), String> {
+    write_tbm3_file(path, snap)
+}
+
 pub const TBM3_MAGIC: &[u8; 4] = b"TBM3";
 const VERSION: u8 = 1;
 const HEADER_LEN: usize = 20;
@@ -102,7 +110,7 @@ impl<'a> Bm25Tbm3View<'a> {
         Self::open(mmap.as_ref())
     }
 
-    fn term_at(&self, index: u32) -> Result<(&str, u32, u32, u32), String> {
+    pub(crate) fn term_at(&self, index: u32) -> Result<(&str, u32, u32, u32), String> {
         let mut pos = self.dict_start;
         for _ in 0..index {
             let tlen = u16::from_le_bytes(self.bytes[pos..pos + 2].try_into().unwrap()) as usize;
@@ -133,6 +141,26 @@ impl<'a> Bm25Tbm3View<'a> {
             }
         }
         None
+    }
+
+    fn read_postings(&self, rel_off: u32, _plen: u32) -> Vec<(DocId, u32)> {
+        let base = self.postings_start + rel_off as usize;
+        if base + 4 > self.bytes.len() {
+            return Vec::new();
+        }
+        let count = u32::from_le_bytes(self.bytes[base..base + 4].try_into().unwrap()) as usize;
+        let mut pos = base + 4;
+        let mut out = Vec::with_capacity(count);
+        for _ in 0..count {
+            if pos + 12 > self.bytes.len() {
+                break;
+            }
+            let doc_id = u64::from_le_bytes(self.bytes[pos..pos + 8].try_into().unwrap());
+            let tf = u32::from_le_bytes(self.bytes[pos + 8..pos + 12].try_into().unwrap());
+            pos += 12;
+            out.push((doc_id, tf));
+        }
+        out
     }
 
     pub fn search(&self, query: &str, k: usize) -> CandidateSet {
@@ -171,6 +199,31 @@ impl<'a> Bm25Tbm3View<'a> {
         }
         out
     }
+}
+
+/// Rebuild an in-memory snapshot (e.g. merge table-level index from segments).
+pub fn snapshot_from_tbm3(bytes: &[u8]) -> Result<Bm25Snapshot, String> {
+    let view = Bm25Tbm3View::open(bytes)?;
+    let mut postings: HashMap<String, Vec<(DocId, u32)>> = HashMap::new();
+    let mut doc_freq: HashMap<String, u32> = HashMap::new();
+    let mut doc_len: HashMap<DocId, u32> = HashMap::new();
+    for i in 0..view.num_terms {
+        let (term, df, off, plen) = view.term_at(i)?;
+        doc_freq.insert(term.to_string(), df);
+        let posts = view.read_postings(off, plen);
+        for &(doc_id, tf) in &posts {
+            let entry = doc_len.entry(doc_id).or_insert(0);
+            *entry = entry.saturating_add(tf);
+        }
+        postings.insert(term.to_string(), posts);
+    }
+    Ok(Bm25Snapshot {
+        postings,
+        doc_len,
+        doc_freq,
+        num_docs: view.num_docs,
+        avg_dl: view.avg_dl,
+    })
 }
 
 #[cfg(test)]

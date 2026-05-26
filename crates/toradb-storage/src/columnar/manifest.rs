@@ -17,7 +17,7 @@ pub enum IndexMode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryMode {
-    /// Scan every segment BM25 sidecar (legacy fan-out).
+    /// Scan every segment BM25 sidecar.
     #[default]
     SegmentFanout,
     /// Use `indexes/bm25.route.bin` to skip segments with no query-term overlap.

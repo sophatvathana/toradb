@@ -4,8 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use memmap2::Mmap;
 use toradb_core::CandidateSet;
-use toradb_index::sparse::bm25::Bm25Snapshot;
-use toradb_index::sparse::bm25_tbm3::Bm25Tbm3View;
+use toradb_index::sparse::bm25_tbm3::{Bm25Tbm3View, TBM3_MAGIC};
 
 use crate::columnar::ColumnarDoc;
 use crate::numa::{NumaConfig, prefetch_mmap_sequential};
@@ -173,31 +172,27 @@ impl IndexBlobCache {
     }
 }
 
-/// Cached per-segment BM25: mmap TBM3 (preferred) or decoded TBM2 snapshot.
+/// Cached per-segment BM25 (`TBM3` mmap).
 #[derive(Debug)]
-pub enum CachedBm25Segment {
-    Snapshot(Arc<Bm25Snapshot>),
-    Tbm3(Arc<Mmap>),
-}
+pub struct CachedBm25Segment(Arc<Mmap>);
 
 impl CachedBm25Segment {
-    pub fn search(&self, query: &str, k: usize) -> Result<CandidateSet, String> {
-        match self {
-            Self::Snapshot(s) => Ok(s.search(query, k)),
-            Self::Tbm3(m) => {
-                let view = Bm25Tbm3View::from_mmap(m)?;
-                Ok(view.search(query, k))
-            }
+    pub fn from_mmap(mmap: Arc<Mmap>) -> Result<Self, String> {
+        if mmap.len() < 4 || &mmap[..4] != TBM3_MAGIC {
+            return Err("invalid BM25 sidecar (expected TBM3)".into());
         }
+        Ok(Self(mmap))
     }
 
-    fn entry_bytes(path: &Path, entry: &Self) -> usize {
+    pub fn search(&self, query: &str, k: usize) -> Result<CandidateSet, String> {
+        let view = Bm25Tbm3View::from_mmap(&self.0)?;
+        Ok(view.search(query, k))
+    }
+
+    fn entry_bytes(path: &Path, _entry: &Self) -> usize {
         std::fs::metadata(path)
             .map(|m| m.len() as usize)
-            .unwrap_or_else(|_| match entry {
-                Self::Snapshot(s) => s.num_docs as usize * 64 + 4096,
-                Self::Tbm3(_) => 64 * 1024 * 1024,
-            })
+            .unwrap_or(64 * 1024 * 1024)
     }
 }
 
