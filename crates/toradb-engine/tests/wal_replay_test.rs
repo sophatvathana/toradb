@@ -23,7 +23,7 @@ fn replay_commits_wal_segment_missing_from_manifest() {
         }],
     )
     .expect("write segment");
-    append_flush(base, table, seg_name, 0, 1).expect("wal");
+    append_flush(base, table, seg_name, 0, 1, true).expect("wal");
 
     let recovered = replay_flush_wal(base, table).expect("replay");
     assert_eq!(recovered, 1);
@@ -63,7 +63,7 @@ fn open_after_crash_before_manifest_recovers_docs() {
         let mut manifest = TableManifestFile::load(&manifest_path).expect("manifest");
         manifest.segments.clear();
         manifest.save(&manifest_path).expect("strip manifest");
-        append_flush(&dir, "docs", "seg_00001.parquet", 0, 1).expect("wal");
+        append_flush(&dir, "docs", "seg_00001.parquet", 0, 1, true).expect("wal");
     }
 
     let mut dag2 = toradb_engine::DagRunner::open(&dir).expect("reopen");

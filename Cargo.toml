@@ -8,6 +8,7 @@ members = [
     "crates/toradb-engine",
     "crates/toradb-sql",
     "crates/toradb-sdk",
+    "crates/toradb-cli",
 ]
 # toradb-sdk is a Python cdylib; build it with maturin or `cargo build -p toradb-sdk`.
 default-members = [
@@ -17,6 +18,7 @@ default-members = [
     "crates/toradb-index",
     "crates/toradb-engine",
     "crates/toradb-sql",
+    "crates/toradb-cli",
 ]
 
 [workspace.package]

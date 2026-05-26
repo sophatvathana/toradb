@@ -1,7 +1,9 @@
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use toradb_core::{Batch, ExecCtx, QueryMetrics};
+use toradb_core::{Batch, DocId, ExecCtx, IngestOptions, QueryMetrics};
 use toradb_index::RetrievalRuntime;
+use toradb_storage::columnar::IndexMode;
 use toradb_storage::SegmentManager;
 use toradb_storage::StorageCaches;
 
@@ -11,6 +13,11 @@ use crate::lowering::{lower_tier1, lower_tier2, lower_tier3};
 use crate::persist::{self, DbPath};
 use crate::scheduler::SegmentScheduler;
 
+#[derive(Debug, Clone, Copy)]
+struct BulkDiskState {
+    next_id: DocId,
+}
+
 /// Single execution path for all queries (SQL and SDK).
 #[derive(Debug)]
 pub struct DagRunner {
@@ -18,6 +25,8 @@ pub struct DagRunner {
     pub segments: SegmentManager,
     pub caches: StorageCaches,
     db_path: Option<DbPath>,
+    bulk_tables: HashSet<String>,
+    bulk_disk_state: HashMap<String, BulkDiskState>,
 }
 
 impl DagRunner {
@@ -27,15 +36,123 @@ impl DagRunner {
             segments: SegmentManager::new(),
             caches: StorageCaches::default_from_env(),
             db_path: None,
+            bulk_tables: HashSet::new(),
+            bulk_disk_state: HashMap::new(),
         }
     }
 
+    fn ingest_options_for(&self, table: &str) -> IngestOptions {
+        if self.bulk_tables.contains(table) {
+            IngestOptions::bulk()
+        } else {
+            IngestOptions::default()
+        }
+    }
+
+    /// Defer per-batch index rebuilds and table index writes until [`Self::finish_bulk_ingest`].
+    pub fn begin_bulk_ingest(&mut self, table: &str) {
+        self.ensure_table(table);
+        let next_id = self.retrieval.store.next_id(table);
+        self.bulk_tables.insert(table.to_string());
+        self.bulk_disk_state
+            .insert(table.to_string(), BulkDiskState { next_id });
+        if let Some(ref path) = self.db_path {
+            let _ = crate::index_build_status::clear_index_build_status(path.as_path(), table);
+            let _ = persist::mark_table_segment_only(path.as_path(), table);
+        }
+    }
+
+    pub fn bulk_ingest_active(&self, table: &str) -> bool {
+        self.bulk_tables.contains(table)
+    }
+
+    pub fn ensure_table_queryable(&self, table: &str) -> Result<(), String> {
+        if self.bulk_ingest_active(table) {
+            return Err(format!("bulk ingest in progress for table {table}"));
+        }
+        if let Some(ref path) = self.db_path {
+            if let Some(status) = persist::read_table_index_build_status(path.as_path(), table) {
+                if status.state == crate::index_build_status::IndexBuildState::Building {
+                    return Err(format!("index build in progress for table {table}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Finalize indexes after bulk load (table sidecars + optional compaction).
+    pub fn finish_bulk_ingest(&mut self, table: &str, compact: bool) -> Result<(), String> {
+        if !self.bulk_tables.remove(table) {
+            return Err(format!("table {table} is not in bulk ingest mode"));
+        }
+        let _had_bulk_disk = self.bulk_disk_state.remove(table).is_some();
+        let Some(ref path) = self.db_path else {
+            return Err("finish_bulk_ingest requires a local on-disk database".into());
+        };
+        let reload_texts = _had_bulk_disk
+            && persist::table_index_mode(path.as_path(), table)? != IndexMode::SegmentOnly;
+        let num_segments = self.segment_parallelism(table);
+        persist::finalize_bulk_table_indexes(
+            path.as_path(),
+            table,
+            &mut self.retrieval.store,
+            num_segments,
+            Some(&mut self.caches),
+            reload_texts,
+        )?;
+        if compact {
+            let _ = persist::maybe_compact_after_flush(
+                path.as_path(),
+                table,
+                &mut self.retrieval.store,
+                Some(&mut self.caches),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Build or resume table indexes without an active bulk session.
+    pub fn resume_index_build(&mut self, table: &str, compact: bool) -> Result<(), String> {
+        let Some(ref path) = self.db_path else {
+            return Err("resume_index_build requires a local on-disk database".into());
+        };
+        let num_segments = self.segment_parallelism(table);
+        let _had_disk = self.bulk_disk_state.remove(table).is_some();
+        let reload_texts =
+            persist::table_index_mode(path.as_path(), table)? != IndexMode::SegmentOnly;
+        persist::resume_table_indexes(
+            path.as_path(),
+            table,
+            &mut self.retrieval.store,
+            num_segments,
+            Some(&mut self.caches),
+            reload_texts,
+        )?;
+        if compact {
+            let _ = persist::maybe_compact_after_flush(
+                path.as_path(),
+                table,
+                &mut self.retrieval.store,
+                Some(&mut self.caches),
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
+        Self::open_with_reload(path, true)
+    }
+
+    /// Open a database directory. When `reload` is false, skip loading tables into memory
+    /// (use after removing a table on disk to avoid reloading millions of rows).
+    pub fn open_with_reload(path: impl AsRef<Path>, reload: bool) -> Result<Self, String> {
         let db_path = DbPath::new(path.as_ref());
         std::fs::create_dir_all(db_path.as_path()).map_err(|e| e.to_string())?;
         let mut runner = Self::new();
         runner.db_path = Some(db_path);
-        runner.reload_from_disk()?;
+        if reload {
+            runner.reload_from_disk()?;
+        }
         Ok(runner)
     }
 
@@ -61,21 +178,79 @@ impl DagRunner {
             return Ok(0);
         }
         self.ensure_table(table);
+        let opts = self.ingest_options_for(table);
         let since_id = self.retrieval.store.next_id(table);
         let n = self.segment_parallelism(table);
+        let num_segments = n.max(1);
+        if opts.defer_table_indexes {
+            if let Some(ref path) = self.db_path {
+                let since_id = self
+                    .bulk_disk_state
+                    .get(table)
+                    .map(|s| s.next_id)
+                    .unwrap_or(since_id);
+                let added = persist::flush_ingest_batch_disk_only(
+                    path.as_path(),
+                    table,
+                    since_id,
+                    &docs,
+                    &opts,
+                )?;
+                if let Some(state) = self.bulk_disk_state.get_mut(table) {
+                    state.next_id = state.next_id.saturating_add(added as u64);
+                }
+                return Ok(added);
+            }
+        }
         let added = self
             .retrieval
             .store
-            .add_documents(table, docs, n.max(1));
+            .add_documents(table, docs, num_segments, opts);
         if let Some(ref path) = self.db_path {
             persist::flush_new_docs(
                 path.as_path(),
                 table,
                 &mut self.retrieval.store,
                 since_id,
-                n.max(1),
+                num_segments,
                 Some(&mut self.caches),
+                opts,
             )?;
+        }
+        Ok(added)
+    }
+
+    /// Ingest an Arrow record batch on the bulk disk-only path (no `IngestDoc` vec).
+    pub fn ingest_record_batch(
+        &mut self,
+        table: &str,
+        batch: &arrow::record_batch::RecordBatch,
+    ) -> Result<usize, String> {
+        if batch.num_rows() == 0 {
+            return Ok(0);
+        }
+        self.ensure_table(table);
+        let opts = self.ingest_options_for(table);
+        let Some(ref path) = self.db_path else {
+            return Err("ingest_record_batch requires a local on-disk database".into());
+        };
+        if !opts.defer_table_indexes {
+            return Err("ingest_record_batch requires bulk ingest mode".into());
+        }
+        let since_id = self
+            .bulk_disk_state
+            .get(table)
+            .map(|s| s.next_id)
+            .unwrap_or_else(|| self.retrieval.store.next_id(table));
+        let added = persist::flush_arrow_batch_disk_only(
+            path.as_path(),
+            table,
+            since_id,
+            batch,
+            &opts,
+        )?;
+        if let Some(state) = self.bulk_disk_state.get_mut(table) {
+            state.next_id = state.next_id.saturating_add(added as u64);
         }
         Ok(added)
     }
@@ -235,6 +410,13 @@ impl DagRunner {
     pub fn run(&mut self, batch: &mut Batch, ctx: &ExecCtx) -> QueryMetrics {
         let mut metrics = QueryMetrics::default();
 
+        if !batch.table.is_empty() {
+            if let Err(e) = self.ensure_table_queryable(&batch.table) {
+                eprintln!("toradb: {e}");
+                return metrics;
+            }
+        }
+
         if batch.enable_hyde && !batch.table.is_empty() {
             batch.query = self
                 .retrieval
@@ -276,7 +458,27 @@ impl DagRunner {
                 } else {
                     1
                 };
+                let use_disk_segments = self.db_path.as_ref().is_some_and(|path| {
+                    persist::table_has_segment_bm25_sidecars(path.as_path(), &table)
+                        .unwrap_or(false)
+                        && persist::table_index_mode(path.as_path(), &table)
+                            .map(|m| m == IndexMode::SegmentOnly)
+                            .unwrap_or(false)
+                });
                 let seg_merged = scheduler.run_for_segments(num_segments, parallel, |seg| {
+                    if use_disk_segments {
+                        if let Some(ref path) = self.db_path {
+                            return persist::search_segment_bm25_sidecar(
+                                path.as_path(),
+                                &table,
+                                seg,
+                                &query,
+                                ctx.tier1_budget as usize,
+                                None,
+                            )
+                            .unwrap_or_default();
+                        }
+                    }
                     self.retrieval
                         .segment_candidates(&table, seg, &query, ctx)
                 });

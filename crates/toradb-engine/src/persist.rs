@@ -1,17 +1,44 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use rayon::prelude::*;
 use toradb_index::dense::{diskann_codec, hnsw_codec, quant_codec, vector_codec};
 use toradb_index::sparse::bm25_codec;
+use toradb_core::CandidateSet;
+use toradb_index::sparse::bm25::Bm25Index;
 use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
 use toradb_storage::columnar::{
-    read_segment, write_segment, write_segment_with_compression, ColumnarDoc, TableManifestFile,
+    parquet_row_count, read_segment, read_segment_texts, write_segment_with_compression,
+    ColumnarDoc, IndexMode, TableManifestFile,
 };
 use toradb_storage::cache::{get_or_mmap, read_segment_cached, StorageCaches};
 use toradb_storage::compaction::{self, CompactMode, CompactPolicy, CompactReport};
 use toradb_storage::wal;
 
+use crate::index_build_status::{
+    self, mark_index_building, mark_index_failed, mark_index_ready, read_build_manifest,
+    segment_sparse_up_to_date, write_build_manifest, IndexBuildPhase, SegmentBuildRecord,
+};
+
+pub use crate::index_build_status::{
+    list_tables_on_disk, read_index_build_status as read_table_index_build_status,
+    scan_indexing_tables,
+};
+
 pub const DEFAULT_SEGMENT_PARALLELISM: u32 = 4;
+
+fn ingest_thread_count() -> usize {
+    std::env::var("TORADB_INGEST_THREADS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        })
+        .min(32)
+}
 
 fn num_segments_hint(segments_len: usize) -> u32 {
     segments_len.max(DEFAULT_SEGMENT_PARALLELISM as usize) as u32
@@ -364,6 +391,49 @@ fn load_segment_bm25_sidecar(
 }
 
 /// True when at least one on-disk segment has a BM25 index blob (`.bm25.bin`).
+pub fn table_index_mode(base: &Path, table: &str) -> Result<IndexMode, String> {
+    let path = TableManifestFile::path_for_table(base, table);
+    if !path.exists() {
+        return Ok(IndexMode::Merged);
+    }
+    Ok(TableManifestFile::load(&path)?.index_mode)
+}
+
+/// Set manifest index mode to segment-only (bulk ingest default).
+pub fn mark_table_segment_only(base: &Path, table: &str) -> Result<(), String> {
+    let path = TableManifestFile::path_for_table(base, table);
+    let mut manifest = if path.exists() {
+        TableManifestFile::load(&path)?
+    } else {
+        TableManifestFile::default()
+    };
+    manifest.index_mode = IndexMode::SegmentOnly;
+    manifest.save(&path)
+}
+
+/// BM25 search against one segment sidecar (mmap decode per call; no table merge).
+pub fn search_segment_bm25_sidecar(
+    base: &Path,
+    table: &str,
+    segment_index: u32,
+    query: &str,
+    k: usize,
+    mut caches: Option<&mut StorageCaches>,
+) -> Result<CandidateSet, String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(CandidateSet::default());
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    let Some(seg) = manifest.segments.get(segment_index as usize) else {
+        return Ok(CandidateSet::default());
+    };
+    let Some(snap) = load_segment_bm25_sidecar(base, table, seg, caches.as_deref_mut())? else {
+        return Ok(CandidateSet::default());
+    };
+    Ok(Bm25Index::from_snapshot(snap).search(query, k))
+}
+
 pub fn table_has_segment_bm25_sidecars(base: &Path, table: &str) -> Result<bool, String> {
     let manifest_path = TableManifestFile::path_for_table(base, table);
     if !manifest_path.exists() {
@@ -382,27 +452,43 @@ pub fn table_has_segment_bm25_sidecars(base: &Path, table: &str) -> Result<bool,
 pub fn load_merged_segment_bm25_sidecars(
     base: &Path,
     table: &str,
-    mut caches: Option<&mut StorageCaches>,
+    caches: Option<&mut StorageCaches>,
 ) -> Result<Option<Bm25Snapshot>, String> {
     let manifest_path = TableManifestFile::path_for_table(base, table);
     if !manifest_path.exists() {
         return Ok(None);
     }
     let manifest = TableManifestFile::load(&manifest_path)?;
-    let mut merged: Option<Bm25Snapshot> = None;
-    for seg in &manifest.segments {
-        if let Some(snap) = load_segment_bm25_sidecar(base, table, seg, caches.as_deref_mut())? {
-            match merged {
-                None => merged = Some(snap),
-                Some(ref mut acc) => acc.merge(snap),
-            }
-        }
-    }
-    Ok(merged)
+    let base_owned = base.to_path_buf();
+    let table_owned = table.to_string();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(ingest_thread_count())
+        .build()
+        .map_err(|e| e.to_string())?;
+    let snaps: Vec<Bm25Snapshot> = pool.install(|| {
+        manifest
+            .segments
+            .par_iter()
+            .filter_map(|seg| {
+                load_segment_bm25_sidecar(&base_owned, &table_owned, seg, None)
+                    .ok()
+                    .flatten()
+            })
+            .collect()
+    });
+    let _ = caches;
+    Ok(Bm25Snapshot::merge_snapshots_tree(snaps))
 }
 
 fn snapshot_for_columnar_docs(docs: &[ColumnarDoc]) -> Bm25Snapshot {
     Bm25Snapshot::from_documents(docs.iter().map(|d| (d.id, d.text.as_str())))
+}
+
+fn snapshot_for_segment_bm25(path: &Path) -> Result<Bm25Snapshot, String> {
+    let rows = read_segment_texts(path)?;
+    Ok(Bm25Snapshot::from_documents(
+        rows.into_iter().map(|(id, text)| (id, text)),
+    ))
 }
 
 fn snapshot_for_columnar_quant(docs: &[ColumnarDoc]) -> Option<quant_codec::QuantVectorSnapshot> {
@@ -721,6 +807,9 @@ pub fn load_table(
         return Ok(0);
     }
     let manifest = TableManifestFile::load(&manifest_path)?;
+    if manifest.index_mode == IndexMode::SegmentOnly {
+        return load_table_segment_only(base, table, store, &manifest);
+    }
     let seg_dir = TableManifestFile::segments_dir(base, table);
     let num_segments = num_segments_hint(segment_count.max(manifest.segments.len()));
     let merged_vectors = load_merged_segment_vector_map(base, table, caches.as_deref_mut())?;
@@ -765,11 +854,46 @@ pub fn load_table(
     Ok(n)
 }
 
+/// Register a segment-only table without loading texts or merged BM25 into RAM.
+pub fn load_table_segment_only(
+    base: &Path,
+    table: &str,
+    store: &mut CorpusStore,
+    manifest: &TableManifestFile,
+) -> Result<usize, String> {
+    store.ensure_table(table);
+    let seg_dir = TableManifestFile::segments_dir(base, table);
+    let mut n = 0usize;
+    for seg in &manifest.segments {
+        let path = seg_dir.join(seg);
+        if path.exists() {
+            n += parquet_row_count(&path)?;
+        }
+    }
+    Ok(n)
+}
+
 pub fn flush_batch(
     base: &Path,
     table: &str,
     docs: &[ColumnarDoc],
     since_id: u64,
+) -> Result<String, String> {
+    flush_batch_with_opts(
+        base,
+        table,
+        docs,
+        since_id,
+        &toradb_core::IngestOptions::default(),
+    )
+}
+
+pub fn flush_batch_with_opts(
+    base: &Path,
+    table: &str,
+    docs: &[ColumnarDoc],
+    since_id: u64,
+    opts: &toradb_core::IngestOptions,
 ) -> Result<String, String> {
     if docs.is_empty() {
         return Err("flush_batch: empty docs".into());
@@ -783,22 +907,47 @@ pub fn flush_batch(
     let seg_name = format!("seg_{:05}.parquet", manifest.segments.len() + 1);
     let seg_path = TableManifestFile::segments_dir(base, table).join(&seg_name);
     write_segment_with_compression(&seg_path, docs, manifest.compression.as_ref())?;
-    let seg_snap = snapshot_for_columnar_docs(docs);
-    save_segment_bm25_sidecar(base, table, &seg_name, &seg_snap)?;
-    if let Some(vec_snap) = snapshot_for_columnar_vectors(docs) {
-        save_segment_vector_sidecar(base, table, &seg_name, &vec_snap)?;
+    if !opts.defer_bm25 {
+        let seg_snap = snapshot_for_columnar_docs(docs);
+        save_segment_bm25_sidecar(base, table, &seg_name, &seg_snap)?;
     }
-    if let Some(qsnap) = snapshot_for_columnar_quant(docs) {
-        save_segment_quant_sidecar(base, table, &seg_name, &qsnap)?;
+    if !opts.defer_dense_rebuild {
+        if let Some(vec_snap) = snapshot_for_columnar_vectors(docs) {
+            save_segment_vector_sidecar(base, table, &seg_name, &vec_snap)?;
+        }
+        if let Some(qsnap) = snapshot_for_columnar_quant(docs) {
+            save_segment_quant_sidecar(base, table, &seg_name, &qsnap)?;
+        }
     }
-    wal::append_flush(base, table, &seg_name, since_id, docs.len())?;
+    wal::append_flush(
+        base,
+        table,
+        &seg_name,
+        since_id,
+        docs.len(),
+        !opts.defer_wal_fsync,
+    )?;
     let mut manifest = manifest;
     let seg_name_clone = seg_name.clone();
     manifest.push_segment(seg_name);
     manifest.save(&manifest_path)?;
     let seg_dir = TableManifestFile::segments_dir(base, table);
-    wal::checkpoint_after_manifest(base, table, &manifest.segments, &seg_dir)?;
+    if !opts.defer_wal_fsync {
+        wal::checkpoint_after_manifest(base, table, &manifest.segments, &seg_dir)?;
+    }
     Ok(seg_name_clone)
+}
+
+pub fn finalize_bulk_wal(base: &Path, table: &str) -> Result<(), String> {
+    wal::sync_flush_log(base, table)?;
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(());
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    let seg_dir = TableManifestFile::segments_dir(base, table);
+    wal::checkpoint_after_manifest(base, table, &manifest.segments, &seg_dir)?;
+    Ok(())
 }
 
 fn remove_segment_sidecars(base: &Path, table: &str, segment_parquet: &str) -> Result<(), String> {
@@ -946,6 +1095,7 @@ pub fn flush_new_docs(
     since_id: u64,
     num_segments: u32,
     caches: Option<&mut StorageCaches>,
+    opts: toradb_core::IngestOptions,
 ) -> Result<(), String> {
     let columnar: Vec<ColumnarDoc> = store
         .docs_with_ids_since(table, since_id)
@@ -955,9 +1105,13 @@ pub fn flush_new_docs(
     if columnar.is_empty() {
         return Ok(());
     }
-    let _segment = flush_batch(base, table, &columnar, since_id)?;
-    save_table_indexes(base, table, store, num_segments)?;
-    let _ = maybe_compact_after_flush(base, table, store, caches)?;
+    let _segment = flush_batch_with_opts(base, table, &columnar, since_id, &opts)?;
+    if !opts.defer_table_indexes {
+        save_table_indexes(base, table, store, num_segments)?;
+    }
+    if !opts.defer_compaction {
+        let _ = maybe_compact_after_flush(base, table, store, caches)?;
+    }
     Ok(())
 }
 
@@ -968,6 +1122,17 @@ pub fn rebuild_segment_sidecars(
     sparse: bool,
     vectors: bool,
 ) -> Result<(), String> {
+    rebuild_segment_sidecars_with_progress(base, table, sparse, vectors, true, true)
+}
+
+pub fn rebuild_segment_sidecars_with_progress(
+    base: &Path,
+    table: &str,
+    sparse: bool,
+    vectors: bool,
+    skip_unchanged: bool,
+    report_progress: bool,
+) -> Result<(), String> {
     if !sparse && !vectors {
         return Ok(());
     }
@@ -977,25 +1142,98 @@ pub fn rebuild_segment_sidecars(
     }
     let manifest = TableManifestFile::load(&manifest_path)?;
     let seg_dir = TableManifestFile::segments_dir(base, table);
-    for seg in &manifest.segments {
-        let path = seg_dir.join(seg);
-        if !path.exists() {
-            continue;
-        }
-        let docs = read_segment(&path)?;
-        if sparse {
-            let snap = snapshot_for_columnar_docs(&docs);
-            save_segment_bm25_sidecar(base, table, seg, &snap)?;
-        }
-        if vectors {
-            if let Some(snap) = snapshot_for_columnar_vectors(&docs) {
-                save_segment_vector_sidecar(base, table, seg, &snap)?;
+    let segments_total = manifest.segments.len() as u32;
+    let mut build_manifest = read_build_manifest(base, table);
+
+    if report_progress {
+        mark_index_building(
+            base,
+            table,
+            IndexBuildPhase::SegmentBm25,
+            0,
+            segments_total,
+        )?;
+    }
+
+    let base_owned = base.to_path_buf();
+    let table_owned = table.to_string();
+    let segments: Vec<String> = manifest.segments.clone();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(ingest_thread_count())
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let results: Vec<Result<(String, Option<SegmentBuildRecord>), String>> = pool.install(|| {
+        segments
+            .par_iter()
+            .map(|seg| {
+                let path = seg_dir.join(seg);
+                if !path.exists() {
+                    return Ok((seg.clone(), None));
+                }
+                if skip_unchanged
+                    && sparse
+                    && segment_sparse_up_to_date(&base_owned, &table_owned, seg, &path, &build_manifest)
+                {
+                    return Ok((seg.clone(), None));
+                }
+                if sparse && !vectors {
+                    let snap = snapshot_for_segment_bm25(&path)?;
+                    save_segment_bm25_sidecar(&base_owned, &table_owned, seg, &snap)?;
+                } else {
+                    let docs = read_segment(&path)?;
+                    if sparse {
+                        let snap = snapshot_for_columnar_docs(&docs);
+                        save_segment_bm25_sidecar(&base_owned, &table_owned, seg, &snap)?;
+                    }
+                    if vectors {
+                        if let Some(snap) = snapshot_for_columnar_vectors(&docs) {
+                            let vec_path = segment_vectors_bin_path(&base_owned, &table_owned, seg);
+                            if !vec_path.exists() {
+                                save_segment_vector_sidecar(&base_owned, &table_owned, seg, &snap)?;
+                            }
+                        }
+                        if let Some(qsnap) = snapshot_for_columnar_quant(&docs) {
+                            let quant_path = segment_quant_bin_path(&base_owned, &table_owned, seg);
+                            if !quant_path.exists() {
+                                save_segment_quant_sidecar(&base_owned, &table_owned, seg, &qsnap)?;
+                            }
+                        }
+                    }
+                }
+                let record = SegmentBuildRecord {
+                    segment: seg.clone(),
+                    sparse_done: sparse,
+                    parquet_mtime_secs: index_build_status::parquet_mtime_secs(&path),
+                };
+                Ok((seg.clone(), Some(record)))
+            })
+            .collect()
+    });
+
+    let mut done = 0u32;
+    for result in results {
+        let (seg, record) = result?;
+        if let Some(rec) = record {
+            if let Some(entry) = build_manifest.segments.iter_mut().find(|e| e.segment == seg) {
+                *entry = rec;
+            } else {
+                build_manifest.segments.push(rec);
             }
-            if let Some(qsnap) = snapshot_for_columnar_quant(&docs) {
-                save_segment_quant_sidecar(base, table, seg, &qsnap)?;
-            }
+        }
+        done += 1;
+        if report_progress && done % 4 == 0 || done == segments_total {
+            mark_index_building(
+                base,
+                table,
+                IndexBuildPhase::SegmentBm25,
+                done,
+                segments_total,
+            )?;
         }
     }
+    write_build_manifest(base, table, &build_manifest)?;
+
     Ok(())
 }
 
@@ -1012,19 +1250,193 @@ pub fn save_table_indexes(
     if let Some(snap) = vector_snapshot_from_store(store, table) {
         save_table_vector_sidecar(base, table, &snap)?;
     }
-    store.rebuild_segment_hnsw(table, num_segments);
-    let segment_snap = store.segment_hnsw_snapshot(table);
-    if !segment_snap.is_empty() {
-        save_segment_hnsw_shards(base, table, &segment_snap)?;
-    }
-    if let Some(index) = store.hnsw_snapshot(table) {
-        save_table_hnsw_sidecar(base, table, &index)?;
-    }
-    store.rebuild_diskann(table);
-    if let Some(index) = store.diskann_snapshot(table) {
-        save_table_diskann_sidecar(base, table, &index)?;
+    let dense = store.table(table).is_some_and(|t| t.has_vectors());
+    if dense {
+        store.rebuild_segment_hnsw(table, num_segments);
+        let segment_snap = store.segment_hnsw_snapshot(table);
+        if !segment_snap.is_empty() {
+            save_segment_hnsw_shards(base, table, &segment_snap)?;
+        }
+        if let Some(index) = store.hnsw_snapshot(table) {
+            save_table_hnsw_sidecar(base, table, &index)?;
+        }
+        store.rebuild_diskann(table);
+        if let Some(index) = store.diskann_snapshot(table) {
+            save_table_diskann_sidecar(base, table, &index)?;
+        }
     }
     Ok(())
+}
+
+fn docs_to_columnar(since_id: u64, docs: &[IngestDoc]) -> Vec<ColumnarDoc> {
+    docs.iter()
+        .enumerate()
+        .map(|(i, d)| ingest_to_columnar(since_id + i as u64, d))
+        .collect()
+}
+
+/// Bulk path with in-memory corpus (legacy).
+pub fn flush_ingest_batch(
+    base: &Path,
+    table: &str,
+    store: &mut CorpusStore,
+    since_id: u64,
+    docs: Vec<IngestDoc>,
+    num_segments: u32,
+    opts: toradb_core::IngestOptions,
+) -> Result<usize, String> {
+    if docs.is_empty() {
+        return Ok(0);
+    }
+    let columnar = docs_to_columnar(since_id, &docs);
+    let added = store.ingest_bulk_batch(table, since_id, docs, num_segments, opts);
+    flush_batch_with_opts(base, table, &columnar, since_id, &opts)?;
+    Ok(added)
+}
+
+/// Bulk path without retaining document text in memory.
+pub fn flush_ingest_batch_disk_only(
+    base: &Path,
+    table: &str,
+    since_id: u64,
+    docs: &[IngestDoc],
+    opts: &toradb_core::IngestOptions,
+) -> Result<usize, String> {
+    if docs.is_empty() {
+        return Ok(0);
+    }
+    let columnar = docs_to_columnar(since_id, docs);
+    flush_batch_with_opts(base, table, &columnar, since_id, opts)?;
+    Ok(docs.len())
+}
+
+/// Flush one Arrow batch to a new Parquet segment without `IngestDoc` allocation.
+pub fn flush_arrow_batch_disk_only(
+    base: &Path,
+    table: &str,
+    since_id: u64,
+    batch: &arrow::record_batch::RecordBatch,
+    opts: &toradb_core::IngestOptions,
+) -> Result<usize, String> {
+    let columnar = crate::arrow_batch::record_batch_to_columnar(batch, since_id)?;
+    if columnar.is_empty() {
+        return Ok(0);
+    }
+    flush_batch_with_opts(base, table, &columnar, since_id, opts)?;
+    Ok(columnar.len())
+}
+
+pub fn reload_table_texts_from_segments(
+    base: &Path,
+    table: &str,
+    store: &mut CorpusStore,
+    num_segments: u32,
+) -> Result<usize, String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(0);
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    let seg_dir = TableManifestFile::segments_dir(base, table);
+    let mut loaded = 0usize;
+    for seg in &manifest.segments {
+        let path = seg_dir.join(seg);
+        if !path.exists() {
+            continue;
+        }
+        let docs = read_segment(&path)?;
+        for doc in docs {
+            let ingest = IngestDoc {
+                text: doc.text,
+                metadata: doc.metadata,
+                vector: doc.embedding,
+            };
+            store.insert_stored(table, doc.id, ingest, num_segments);
+            loaded += 1;
+        }
+    }
+    Ok(loaded)
+}
+
+/// After bulk ingest: build segment sidecars, merge BM25, write table-level sidecars.
+pub fn finalize_bulk_table_indexes(
+    base: &Path,
+    table: &str,
+    store: &mut CorpusStore,
+    num_segments: u32,
+    mut caches: Option<&mut StorageCaches>,
+    reload_texts: bool,
+) -> Result<(), String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    let segments_total = if manifest_path.exists() {
+        TableManifestFile::load(&manifest_path)?.segments.len() as u32
+    } else {
+        0
+    };
+
+    mark_index_building(base, table, IndexBuildPhase::SegmentBm25, 0, segments_total)?;
+
+    let result = (|| {
+        finalize_bulk_wal(base, table)?;
+        let vectors = store.table(table).is_some_and(|t| t.has_vectors());
+        rebuild_segment_sidecars_with_progress(base, table, true, vectors, true, true)?;
+
+        let index_mode = table_index_mode(base, table)?;
+        if index_mode != IndexMode::SegmentOnly {
+            mark_index_building(
+                base,
+                table,
+                IndexBuildPhase::MergeBm25,
+                segments_total,
+                segments_total,
+            )?;
+            restore_bm25_index(base, table, store, num_segments, caches.as_deref_mut())?;
+
+            mark_index_building(
+                base,
+                table,
+                IndexBuildPhase::TableIndexes,
+                segments_total,
+                segments_total,
+            )?;
+            save_table_indexes(base, table, store, num_segments)?;
+        }
+
+        if reload_texts && index_mode != IndexMode::SegmentOnly {
+            mark_index_building(
+                base,
+                table,
+                IndexBuildPhase::ReloadTexts,
+                segments_total,
+                segments_total,
+            )?;
+            reload_table_texts_from_segments(base, table, store, num_segments)?;
+        }
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            mark_index_ready(base, table)?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = mark_index_failed(base, table, &e);
+            Err(e)
+        }
+    }
+}
+
+/// Resume or run index build outside an active bulk session (crash recovery).
+pub fn resume_table_indexes(
+    base: &Path,
+    table: &str,
+    store: &mut CorpusStore,
+    num_segments: u32,
+    caches: Option<&mut StorageCaches>,
+    reload_texts: bool,
+) -> Result<(), String> {
+    finalize_bulk_table_indexes(base, table, store, num_segments, caches, reload_texts)
 }
 
 #[derive(Debug, Clone)]
