@@ -293,10 +293,6 @@ impl Database {
             .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))
     }
 
-    pub(crate) fn bulk_ingest_active(&self, table: &str) -> bool {
-        self.dag.bulk_ingest_active(table)
-    }
-
     pub(crate) fn ingest_record_batch(
         &mut self,
         table: &str,
@@ -318,6 +314,22 @@ impl Database {
             .list_tables()
             .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))
     }
+}
+
+fn ingest_doc_to_py<'py>(
+    py: Python<'py>,
+    doc_id: u64,
+    doc: &toradb_index::IngestDoc,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("id", doc_id)?;
+    d.set_item("text", &doc.text)?;
+    let meta = PyDict::new(py);
+    for (k, v) in &doc.metadata {
+        meta.set_item(k, v)?;
+    }
+    d.set_item("metadata", meta)?;
+    Ok(d)
 }
 
 #[pymethods]
@@ -455,7 +467,7 @@ impl Database {
         self.dag.begin_bulk_ingest(table);
     }
 
-    fn bulk_ingest_active(&self, table: &str) -> bool {
+    pub(crate) fn bulk_ingest_active(&self, table: &str) -> bool {
         self.dag.bulk_ingest_active(table)
     }
 
@@ -490,6 +502,25 @@ impl Database {
             .resume_index_build(table, compact)
             .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))?;
         Ok(())
+    }
+
+    /// Load text and metadata for doc ids from RAM or on-disk Parquet segments.
+    #[pyo3(signature = (table, ids))]
+    fn fetch_documents<'py>(
+        &mut self,
+        py: Python<'py>,
+        table: &str,
+        ids: Vec<u64>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let rows = self
+            .dag
+            .fetch_documents(table, &ids)
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))?;
+        let out = PyDict::new(py);
+        for (id, doc) in rows {
+            out.set_item(id, ingest_doc_to_py(py, id, &doc)?)?;
+        }
+        Ok(out)
     }
 
     fn __repr__(&self) -> String {
