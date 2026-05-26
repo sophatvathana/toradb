@@ -25,6 +25,7 @@ Full guides (install, quickstart, SQL, API reference) live in the Mintlify site 
 - `python/` — Python package
 - `mdx/` — documentation site source
 - `examples/` — runnable Python examples
+- Engineering plans live in [`toradb-planning`](../toradb-planning) (outside this repo), e.g. [bulk ingest throughput](../toradb-planning/bulk-ingest-throughput.md)
 
 ## Support
 

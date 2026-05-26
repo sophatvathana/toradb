@@ -12,7 +12,38 @@ Commands:
   sql PATH QUERY     Run a SQL statement (search or analytics)
   tables PATH        List tables (DESCRIBE summary per table)
   reindex PATH TABLE Rebuild indexes (CREATE INDEX; USING BM25, HNSW, DISKANN, …)
+
+toradb-ingest — native bulk ingest (Rust, no Python hot path)
+
+  bulk               Stream parquet/jsonl → segments + finish indexes
+  finish             Build indexes after bulk load
+  resume             Idempotent index build / crash recovery
 ```
+
+## `toradb-ingest bulk`
+
+Build: `cargo build -p toradb-cli --release`
+
+<ParamField path="--db" type="path" required>
+  Database directory.
+</ParamField>
+<ParamField path="--table" type="str" default="passages">
+  Table name.
+</ParamField>
+<ParamField path="--source" type="str" default="parquet">
+  `parquet` or `jsonl`.
+</ParamField>
+<ParamField path="--path" type="path">
+  Parquet file/directory or JSONL path.
+</ParamField>
+<ParamField path="--limit" type="int" default="0">
+  Max documents (0 = no limit).
+</ParamField>
+<ParamField path="--drop-table" type="flag">
+  Remove existing table directory before ingest.
+</ParamField>
+
+Bulk tables use `index_mode=segment_only`: segment BM25 sidecars without merging into RAM-heavy `bm25.bin` or reloading all texts at finish.
 
 ## `toradb smoke`
 

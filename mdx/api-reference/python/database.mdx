@@ -74,3 +74,38 @@ Page through a retrieval `SELECT`. Does not support `GROUP BY` or `EXPLAIN`.
 ```python
 db.reindex("articles", using="BM25")
 ```
+
+### `begin_bulk_ingest(table: str) -> None`
+
+Start a bulk load session on `table`. Defers per-batch dense index rebuilds and table-level index writes until [`finish_bulk_ingest`](#finish_bulk_ingesttable-compactfalse-reindex_bm25false---none).
+
+### `bulk_ingest_active(table: str) -> bool`
+
+Return whether `table` is in an active bulk ingest session.
+
+### `finish_bulk_ingest(table, compact=False, reindex_bm25=False) -> None`
+
+Finalize indexes after bulk load: builds deferred segment BM25 sidecars, merges table indexes, and reloads corpus texts for search.
+
+<ParamField path="compact" type="bool" default="false">
+  Run segment compaction after writing table indexes.
+</ParamField>
+<ParamField path="reindex_bm25" type="bool" default="false">
+  Extra `CREATE INDEX` BM25 pass (usually unnecessary — finish already builds BM25).
+</ParamField>
+
+```python
+db.begin_bulk_ingest("docs")
+# ... many add / add_arrow calls ...
+db.finish_bulk_ingest("docs", compact=True)
+```
+
+### `index_build_status(table: str) -> dict | None`
+
+Read `{table}/indexes/build_status.json` without loading the full corpus. Returns `None` when no build is in progress and no status file exists.
+
+### `resume_index_build(table: str, compact=False) -> None`
+
+Resume or rerun index build after crash or partial finish (idempotent segment BM25 skip when sidecars are current).
+
+See [Bulk load](/guides/ingest#bulk-load-100k-rows).

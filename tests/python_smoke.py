@@ -1035,3 +1035,22 @@ def test_langchain_adapter():
         assert hits[0]["id"] == 0
     finally:
         shutil.rmtree(path, ignore_errors=True)
+
+
+def test_bulk_ingest_finish_and_search():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_bulk_smoke_"))
+    try:
+        db = toradb.local(str(path))
+        db.begin_bulk_ingest("docs")
+        t = db.create_table("docs", mode="text")
+        for i in range(5):
+            t.add([f"Nikola Tesla bulk document {i} alternating current motor"])
+        assert db.bulk_ingest_active("docs")
+        db.finish_bulk_ingest("docs", compact=False, reindex_bm25=True)
+        assert not db.bulk_ingest_active("docs")
+        frame = t.search("Nikola Tesla alternating current", top_k=3).to_pandas()
+        assert len(frame["id"]) > 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)

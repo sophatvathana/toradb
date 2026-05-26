@@ -75,3 +75,7 @@ docs/_build/
 test_db_*/
 examples/_demo_db/
 _demo_db/
+demo/api/.venv/
+demo/web/node_modules/
+demo/web/dist/
+data/

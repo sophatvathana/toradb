@@ -60,6 +60,50 @@ add_arrow(table, batch)
 
 When the Rust `Table.add_arrow` binding is available, ingestion uses the Arrow C Data interface directly.
 
+## Bulk load (100k+ rows)
+
+For production-scale loads from Parquet or JSONL, prefer the **Rust ingest CLI** (no Python on the hot path):
+
+```bash
+cargo build -p toradb-cli --release
+./target/release/toradb-ingest bulk \
+  --db ./data/msmarco_1m \
+  --table passages \
+  --source parquet \
+  --path ./downloads/shards \
+  --drop-table
+```
+
+`toradb-ingest finish` / `resume` rebuild segment BM25 sidecars without an active bulk session. Hugging Face downloads can stay in Python; point `--source parquet` at exported shards.
+
+For smaller loads or HF streaming, use the Python bulk session:
+
+```python
+import toradb
+from toradb.ingest import add_arrow
+
+db = toradb.local("./big_db")
+db.begin_bulk_ingest("docs")
+table = db.create_table("docs", mode="text")  # or db.table("docs")
+
+for batch in arrow_batches:  # 100k–200k rows per batch is typical with `--fast-bulk`
+    add_arrow(table, batch)
+
+db.finish_bulk_ingest("docs", compact=True)
+```
+
+- Call `begin_bulk_ingest` before the first `add` / `add_arrow` on that table.
+- Always call `finish_bulk_ingest` when done — it builds deferred segment BM25 sidecars, merges table indexes, and reloads texts for search.
+- `reindex_bm25=True` is only needed if you skipped BM25 during finish (`--no-reindex` on the demo ingest script).
+- While finish runs, progress is written to `{table}/indexes/build_status.json`. The Python SDK exposes `db.index_build_status(table)` without loading the full corpus.
+- After a crash during finish, call `db.resume_index_build("docs")` to continue idempotently from Parquet + `build_manifest.json`.
+- **Crash window:** batches flushed during bulk ingest are on disk (Parquet + manifest). If the process dies *before* `finish_bulk_ingest` completes, search may be incomplete until you call `finish_bulk_ingest` or `resume_index_build`. WAL entries may be buffered until batch fsync at finish when using fast bulk (`defer_wal_fsync`).
+- Text-only tables skip dense index rebuilds automatically even outside bulk mode.
+
+### API during indexing
+
+The demo API reads `build_status.json` directly so `/api/health` stays available while finish runs in another process. `/api/search` returns `503` with `index_building` until `state` is `ready`.
+
 ## Tips
 
 - Batch large loads, then [reindex](/guides/reindex-compact) if search quality lags.
