@@ -5,13 +5,15 @@ mod table;
 use pyo3::prelude::*;
 
 #[pyfunction]
-fn local(path: &str) -> PyResult<database::Database> {
-    database::Database::open(path.to_string())
+#[pyo3(signature = (path, reload=None))]
+fn local(path: &str, reload: Option<bool>) -> PyResult<database::Database> {
+    database::Database::open_with_reload(path.to_string(), reload.unwrap_or(true))
 }
 
 #[pyfunction]
-fn connect(path: &str) -> PyResult<database::Database> {
-    database::Database::open(path.to_string())
+#[pyo3(signature = (path, reload=None))]
+fn connect(path: &str, reload: Option<bool>) -> PyResult<database::Database> {
+    database::Database::open_with_reload(path.to_string(), reload.unwrap_or(true))
 }
 
 #[pymodule]

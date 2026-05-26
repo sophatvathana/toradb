@@ -1,7 +1,9 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use toradb_core::{Batch, ExecCtx, QueryMetrics};
-use toradb_engine::{materialized, persist, sql_exec, DagRunner};
+use toradb_engine::{
+    materialized, persist, sql_exec, DagRunner, IndexBuildPhase, IndexBuildState, IndexBuildStatus,
+};
 use toradb_sql::{ast::Stmt, binder::Binder, parse};
 
 use crate::table::{AnalyticsResults, SearchResults};
@@ -21,7 +23,11 @@ pub struct Database {
 
 impl Database {
     pub fn open(path: String) -> PyResult<Self> {
-        let dag = DagRunner::open(&path)
+        Self::open_with_reload(path, true)
+    }
+
+    pub fn open_with_reload(path: String, reload: bool) -> PyResult<Self> {
+        let dag = DagRunner::open_with_reload(&path, reload)
             .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))?;
         Ok(Self { path, dag, binder: Binder::new() })
     }
@@ -262,8 +268,15 @@ impl Database {
         Ok(SqlOutcome::Message(format!("ok:{} stmts", stmts.len())))
     }
 
-    pub(crate) fn run_retrieval(&mut self, batch: &mut Batch, ctx: &ExecCtx) -> QueryMetrics {
-        self.dag.run(batch, ctx)
+    pub(crate) fn run_retrieval(
+        &mut self,
+        batch: &mut Batch,
+        ctx: &ExecCtx,
+    ) -> Result<QueryMetrics, String> {
+        if !batch.table.is_empty() {
+            self.dag.ensure_table_queryable(&batch.table)?;
+        }
+        Ok(self.dag.run(batch, ctx))
     }
 
     pub(crate) fn ensure_table(&mut self, name: &str) {
@@ -278,6 +291,18 @@ impl Database {
         self.dag
             .add_documents(table, docs)
             .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))
+    }
+
+    pub(crate) fn bulk_ingest_active(&self, table: &str) -> bool {
+        self.dag.bulk_ingest_active(table)
+    }
+
+    pub(crate) fn ingest_record_batch(
+        &mut self,
+        table: &str,
+        batch: &arrow::record_batch::RecordBatch,
+    ) -> Result<usize, String> {
+        self.dag.ingest_record_batch(table, batch)
     }
 
     pub(crate) fn vector_dim(&self, table: &str) -> Option<usize> {
@@ -425,7 +450,90 @@ impl Database {
         }
     }
 
+    /// Start bulk ingest: defer per-batch dense rebuilds and table index writes until [`Self::finish_bulk_ingest`].
+    fn begin_bulk_ingest(&mut self, table: &str) {
+        self.dag.begin_bulk_ingest(table);
+    }
+
+    fn bulk_ingest_active(&self, table: &str) -> bool {
+        self.dag.bulk_ingest_active(table)
+    }
+
+    /// Finalize table indexes after bulk load. Optionally compact segments and reindex BM25.
+    #[pyo3(signature = (table, compact=false, reindex_bm25=false))]
+    fn finish_bulk_ingest(
+        &mut self,
+        table: &str,
+        compact: bool,
+        reindex_bm25: bool,
+    ) -> PyResult<()> {
+        self.dag
+            .finish_bulk_ingest(table, compact)
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))?;
+        if reindex_bm25 {
+            let _ = self.reindex(table, Some("BM25"), Some("text"))?;
+        }
+        Ok(())
+    }
+
+    /// Read on-disk index build progress without loading the full corpus.
+    fn index_build_status(&self, table: &str) -> PyResult<Option<IndexBuildStatusPy>> {
+        let Some(ref path) = self.dag.db_path() else {
+            return Ok(None);
+        };
+        Ok(persist::read_table_index_build_status(&path, table).map(IndexBuildStatusPy::from))
+    }
+
+    /// Resume or run index build after crash or partial finish.
+    fn resume_index_build(&mut self, table: &str, compact: bool) -> PyResult<()> {
+        self.dag
+            .resume_index_build(table, compact)
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))?;
+        Ok(())
+    }
+
     fn __repr__(&self) -> String {
         format!("Database({})", self.path)
+    }
+}
+
+#[derive(Clone)]
+#[pyclass(skip_from_py_object)]
+pub struct IndexBuildStatusPy {
+    #[pyo3(get)]
+    pub state: String,
+    #[pyo3(get)]
+    pub phase: Option<String>,
+    #[pyo3(get)]
+    pub segments_done: u32,
+    #[pyo3(get)]
+    pub segments_total: u32,
+    #[pyo3(get)]
+    pub message: Option<String>,
+    #[pyo3(get)]
+    pub updated_unix_secs: u64,
+}
+
+impl From<IndexBuildStatus> for IndexBuildStatusPy {
+    fn from(s: IndexBuildStatus) -> Self {
+        let state = match s.state {
+            IndexBuildState::Building => "building",
+            IndexBuildState::Ready => "ready",
+            IndexBuildState::Failed => "failed",
+        };
+        let phase = s.phase.map(|p| match p {
+            IndexBuildPhase::SegmentBm25 => "segment_bm25",
+            IndexBuildPhase::MergeBm25 => "merge_bm25",
+            IndexBuildPhase::TableIndexes => "table_indexes",
+            IndexBuildPhase::ReloadTexts => "reload_texts",
+        }.to_string());
+        Self {
+            state: state.into(),
+            phase,
+            segments_done: s.segments_done,
+            segments_total: s.segments_total,
+            message: s.message,
+            updated_unix_secs: s.updated_unix_secs,
+        }
     }
 }

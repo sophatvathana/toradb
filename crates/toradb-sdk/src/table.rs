@@ -97,9 +97,18 @@ impl Table {
 
     /// Ingest a PyArrow Table via the Arrow PyCapsule interface (zero-copy column read in Rust).
     fn add_arrow(&self, py: Python<'_>, table: PyTable) -> PyResult<usize> {
+        let mut db = self.db.borrow_mut(py);
+        if db.bulk_ingest_active(&self.name) {
+            let mut n = 0usize;
+            for batch in table.batches() {
+                n += db
+                    .ingest_record_batch(&self.name, batch)
+                    .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))?;
+            }
+            return Ok(n);
+        }
         let parsed = crate::arrow_ingest::ingest_pytable(table)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
-        let mut db = self.db.borrow_mut(py);
         db.add_documents(&self.name, parsed)
     }
 
@@ -148,7 +157,9 @@ impl Table {
         batch.graph_depth = depth.unwrap_or(2);
         batch.distributed_segments = matches!(strategy, Some("distributed"));
         let ctx = tune_ctx(exec_ctx(top_k, offset), query, strategy);
-        let metrics = db.run_retrieval(&mut batch, &ctx);
+        let metrics = db
+            .run_retrieval(&mut batch, &ctx)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         let page = batch
             .candidates
             .slice_range(offset.unwrap_or(0) as usize, top_k.unwrap_or(20) as usize);
