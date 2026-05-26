@@ -1,0 +1,74 @@
+---
+title: "SQL retrieval"
+description: "SPARSE SEARCH, VECTOR SEARCH, ORDER BY, EXPLAIN"
+---
+
+## Sparse search
+
+```sql
+SELECT id FROM articles
+SPARSE SEARCH body BM25('Nikola Tesla alternating current')
+LIMIT 3
+```
+
+## Vector search
+
+```sql
+SELECT id FROM papers
+VECTOR SEARCH embedding ANN([0.9, 0.1, 0.0, 0.0])
+LIMIT 2
+```
+
+`ANN(...)` accepts a float list or a text literal for lexical proxy embedding when no vector is stored.
+
+## Combined sparse + vector
+
+```sql
+SELECT id FROM papers
+SPARSE SEARCH title BM25('Tesla coil')
+VECTOR SEARCH embedding ANN([0.9, 0.1, 0.0, 0.0])
+LIMIT 5
+```
+
+## ORDER BY score
+
+```sql
+SELECT id FROM docs
+SPARSE SEARCH body BM25('Nikola Tesla motor')
+ORDER BY score DESC
+LIMIT 3
+```
+
+`ORDER BY score ASC` is also supported.
+
+## OFFSET / LIMIT
+
+```sql
+SELECT id FROM docs
+SPARSE SEARCH body BM25('Nikola Tesla')
+LIMIT 2 OFFSET 2
+```
+
+## EXPLAIN
+
+```sql
+EXPLAIN SELECT id FROM docs
+SPARSE SEARCH body BM25('Tesla')
+LIMIT 5
+```
+
+Returns a plan without executing retrieval (cannot combine with `STREAM`).
+
+## DISTRIBUTED
+
+```sql
+SELECT id FROM docs
+DISTRIBUTED SPARSE SEARCH body BM25('motor')
+LIMIT 10
+```
+
+Scans segment shards in parallel on a single node.
+
+## STREAM (Python)
+
+Use `Database.sql_stream` or `toradb.sql.sql_stream` to page results. Not a separate SQL keyword in all clients; the engine honors `LIMIT`/`OFFSET` per page.

@@ -1,5 +1,7 @@
 # Install
 
+> **Published docs:** [Mintlify site](https://toradb.mintlify.app/install) — source in [`mdx/install.mdx`](../mdx/install.mdx).
+
 ## Prerequisites
 
 - Rust stable toolchain (`rustup`, `cargo`)

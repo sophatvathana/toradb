@@ -1,0 +1,68 @@
+---
+title: "Ingest"
+description: "Add documents from Python, files, DataFrames, and Arrow"
+---
+
+## Python records
+
+Pass dicts with a `text` field, or plain strings:
+
+```python
+table.add([
+    {"text": "Nikola Tesla filed AC patents in 1888", "year": "1888", "tag": "patent"},
+    "A plain string becomes the document body",
+])
+```
+
+Other columns are stored as metadata for filtering and analytics.
+
+## Files
+
+```python
+from toradb.ingest import add_file
+
+count = add_file(table, "data/sample.txt", chunk_by="paragraph")
+```
+
+- `chunk_by="paragraph"` — split on blank lines (default)
+- `chunk_by="line"` — one document per non-empty line
+
+## Pandas
+
+```python
+from toradb.ingest import add_dataframe
+
+import pandas as pd
+df = pd.DataFrame([
+    {"text": "Nikola Tesla wireless experiments", "tag": "science"},
+])
+add_dataframe(table, df)
+```
+
+## PyArrow (zero-copy path)
+
+Requires `pyarrow`:
+
+```bash
+pip install pyarrow
+```
+
+```python
+import pyarrow as pa
+from toradb.ingest import add_arrow
+
+batch = pa.table({
+    "text": ["Nikola Tesla wireless energy vision"],
+    "tag": ["vision"],
+})
+add_arrow(table, batch)
+```
+
+When the Rust `Table.add_arrow` binding is available, ingestion uses the Arrow C Data interface directly.
+
+## Tips
+
+- Batch large loads, then [reindex](/guides/reindex-compact) if search quality lags.
+- Hybrid tables must include `embedding` vectors of the declared dimension for dense search.
+
+See [Ingest API](/api-reference/python/ingest).

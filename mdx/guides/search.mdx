@@ -1,0 +1,91 @@
+---
+title: "Search strategies"
+description: "BM25, dense ANN, hybrid, DiskANN, HYDE, and CRAG"
+---
+
+`table.search(query, ...)` runs retrieval against a table. Control behavior with `strategy` and related kwargs.
+
+## Basic search
+
+```python
+results = articles.search("Nikola Tesla alternating current", top_k=3)
+```
+
+## Strategy reference
+
+| `strategy` | Behavior |
+|------------|----------|
+| *(default)* | Hybrid-style: sparse + dense when vectors exist |
+| `"sparse"`, `"bm25"`, `"text"` | Lexical BM25 only |
+| `"dense"`, `"vector"`, `"hnsw"` | Dense ANN (HNSW); needs embeddings or proxy vector |
+| `"diskann"` | On-disk ANN graph |
+| `"hyde"` | HYDE expansion path |
+| `"crag"` | CRAG filtering path |
+| `"distributed"` | Parallel segment scan |
+| `"graph"`, `"hybrid"` | Enables graph expansion (see below) |
+
+## Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `top_k` | `20` | Max results returned |
+| `offset` | `0` | Skip first N hits (pagination) |
+| `explain` | `false` | Include plan/metrics string |
+| `graph_expand` | `false` | Graph neighbor expansion |
+| `depth` | `2` | Graph expansion depth |
+| `query_vector` | `None` | Query embedding for dense / DiskANN |
+
+## Examples
+
+**Metadata-style query** (field filters in query string):
+
+```python
+articles.search("year:1888", top_k=5)
+```
+
+**Hybrid with explain and graph expansion:**
+
+```python
+articles.search(
+    "Nikola Tesla wireless",
+    top_k=5,
+    strategy="hybrid",
+    explain=True,
+    graph_expand=True,
+    depth=2,
+)
+```
+
+**Dense search with explicit vector:**
+
+```python
+papers.search(
+    "Tesla coil resonant",
+    top_k=2,
+    strategy="dense",
+    query_vector=[0.9, 0.1, 0.0, 0.0],
+)
+```
+
+**DiskANN** (build graph with enough rows, typically 32+):
+
+```python
+ann.search(
+    "vector doc",
+    top_k=3,
+    strategy="diskann",
+    query_vector=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+    explain=True,
+)
+```
+
+## Stream search
+
+```python
+from toradb.table import stream_search
+
+for batch in stream_search(articles, "Nikola Tesla", batch_size=2):
+    print(batch.to_pandas())
+```
+
+See [Table API](/api-reference/python/table) for the full signature.

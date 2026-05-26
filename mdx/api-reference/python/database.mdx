@@ -1,0 +1,76 @@
+---
+title: "Database"
+description: "toradb.local, Database methods"
+---
+
+## Module functions
+
+### `toradb.local(path: str) -> Database`
+
+Open or create a database at `path`.
+
+```python
+import toradb
+db = toradb.local("./my_db")
+```
+
+### `toradb.connect(path: str) -> Database`
+
+Alias for `local`.
+
+---
+
+## `Database`
+
+### `Database(path: str)`
+
+Same as `toradb.local(path)`.
+
+### `create_table(name, mode=None, schema=None) -> Table`
+
+<ParamField path="name" type="str" required>
+  Table name.
+</ParamField>
+<ParamField path="mode" type="str" default="text">
+  `text` or `hybrid`.
+</ParamField>
+<ParamField path="schema" type="dict" optional>
+  Column definitions for hybrid tables, e.g. `{"embedding": "vector[8]"}`.
+</ParamField>
+
+```python
+docs = db.create_table("docs", mode="text")
+```
+
+### `table(name: str) -> Table`
+
+Open an existing table without running `CREATE TABLE`.
+
+### `list_tables() -> list[str]`
+
+Return table names in the database.
+
+### `sql(query: str) -> str | SearchResults | AnalyticsResults`
+
+Execute one SQL statement. Return type depends on the statement:
+
+- Retrieval `SELECT` → `SearchResults`
+- Analytics `SELECT` with `GROUP BY` → analytics object with `.to_pandas()`
+- DDL / catalog → `str` message
+
+### `sql_stream(query: str, batch_size=128) -> list[SearchResults]`
+
+Page through a retrieval `SELECT`. Does not support `GROUP BY` or `EXPLAIN`.
+
+### `reindex(table, using=None, column=None) -> str`
+
+<ParamField path="using" type="str" default="BM25">
+  Index type: `BM25`, `HNSW`, `DISKANN`, etc.
+</ParamField>
+<ParamField path="column" type="str" default="text">
+  Column to index.
+</ParamField>
+
+```python
+db.reindex("articles", using="BM25")
+```

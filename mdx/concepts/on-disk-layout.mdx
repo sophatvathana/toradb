@@ -1,0 +1,40 @@
+---
+title: "On-disk layout"
+description: "Database directory, segments, and index sidecars"
+---
+
+A ToraDB database is a **directory** you pass to `toradb.local("./my_db")`. Inside, each table has Parquet **segments** and optional **index sidecars**.
+
+## Inspect with DESCRIBE
+
+```bash
+toradb sql ./examples/_demo_db "DESCRIBE articles"
+```
+
+Typical output includes:
+
+- Row count and vector dimension (if any)
+- Segment count and paths
+- Sidecars: `bm25`, `vectors`, `hnsw`, `diskann`, `segment_*`
+
+## Components
+
+| Component | Purpose |
+|-----------|---------|
+| Parquet segments | Columnar document storage per flush |
+| WAL | Replay safety for recent writes |
+| `bm25` sidecar | Sparse lexical index |
+| `hnsw` sidecar | In-memory-style dense graph index |
+| `diskann` sidecar | On-disk ANN graph for large embedding tables |
+| Materialized views | Cached search/analytics results (see [SQL materialized views](/api-reference/sql/materialized-views)) |
+
+## Persistence model
+
+1. **Ingest** — documents append to the active segment; indexes update incrementally where supported.
+2. **Flush** — segments are written as Parquet under the table directory.
+3. **Reindex** — rebuild a specific index type (`BM25`, `HNSW`, `DISKANN`) after bulk loads or schema changes.
+4. **Compact** — merge small segments to reduce file count (`COMPACT TABLE`; see [Reindex and compact](/guides/reindex-compact)).
+
+<Tip>
+  Run `examples/full_example.py` once to populate `examples/_demo_db`, then use `DESCRIBE` on each table to see real sidecar names.
+</Tip>

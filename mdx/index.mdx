@@ -1,133 +1,49 @@
 ---
 title: "Introduction"
-description: "Welcome to the new home for your documentation"
-icon: 'star'
+description: "Retrieval-focused database for local text, vector, and hybrid search"
+icon: "database"
 ---
 
-## Setting up
+ToraDB is a **retrieval-focused database** for local workloads: on-disk tables, BM25 sparse search, dense ANN (HNSW / DiskANN), hybrid fusion, plus a Python SDK, CLI, and retrieval SQL.
 
-Get your documentation site up and running in minutes.
+## What you can do
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+- Store documents locally with Parquet segments and index sidecars
+- Run **text**, **vector**, and **hybrid** search from Python or SQL
+- Aggregate with `GROUP BY`, build indexes, and compact segments on disk
 
-## Make it yours
+## Get started
 
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Install" icon="download" href="/install">
+    Rust toolchain, Python venv, and `maturin develop`.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Create a table, ingest docs, and run your first query.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="SQL guide" icon="code" href="/guides/sql">
+    Sparse search, vector ANN, analytics, and catalog commands.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="API reference" icon="book" href="/api-reference/introduction">
+    Python SDK, SQL grammar, and CLI commands.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Example
 
-Everything you need to create world-class documentation.
+```python
+import toradb
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+db = toradb.local("./my_db")
+docs = db.create_table("docs", mode="text")
+docs.add([
+    "Nikola Tesla invented the alternating current induction motor",
+    "Marie Curie studied radioactivity",
+])
+results = docs.search("Nikola Tesla alternating current motor", top_k=3)
+print(results.to_pandas())
+```
 
-## Make your content agent ready
+## License
 
-Make your docs work for humans and AI agents alike.
-
-<Columns cols={2}>
-  <Card
-    title="Prompt component"
-    icon="robot"
-    href="/agent-ready/prompt"
-  >
-    Embed shareable AI prompts readers can copy or open in Cursor.
-  </Card>
-  <Card
-    title="Visibility"
-    icon="eye"
-    href="/agent-ready/visibility"
-  >
-    Show different content to humans and agents reading your docs.
-  </Card>
-  <Card
-    title="Contextual menu"
-    icon="bolt"
-    href="/agent-ready/contextual"
-  >
-    Give readers one-click access to Claude, ChatGPT, Cursor, and more.
-  </Card>
-  <Card
-    title="AI coding tools"
-    icon="wand-magic-sparkles"
-    href="/ai-tools/claude-code"
-  >
-    Set up Claude Code, Cursor, or Windsurf with Mintlify's skill.
-  </Card>
-</Columns>
-
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+ToraDB is licensed under the [Apache License, Version 2.0](https://github.com/sophatvathana/toradb/blob/main/LICENSE).

@@ -1,0 +1,27 @@
+---
+title: "Ingest helpers"
+description: "toradb.ingest module"
+---
+
+## `add_file(table, path, chunk_by="paragraph") -> int`
+
+Read a UTF-8 file and ingest chunks.
+
+<ParamField path="chunk_by" type="str" default="paragraph">
+  `paragraph` (split on blank lines) or `line`.
+</ParamField>
+
+```python
+from toradb.ingest import add_file
+add_file(table, "notes.txt", chunk_by="paragraph")
+```
+
+## `add_dataframe(table, df) -> int`
+
+Convert a pandas DataFrame with `to_dict(orient="records")` and call `table.add`.
+
+## `add_arrow(table, arrow_table) -> int`
+
+Prefer `table.add_arrow` when available; otherwise falls back to row-wise conversion. Requires `pyarrow`.
+
+See [Ingest guide](/guides/ingest).

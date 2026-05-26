@@ -1,0 +1,75 @@
+---
+title: "Install"
+description: "Prerequisites and local setup for ToraDB"
+icon: "download"
+---
+
+## Prerequisites
+
+- Rust stable toolchain (`rustup`, `cargo`)
+- Python 3.8+
+- `pip`
+- `maturin` (for building the Python extension)
+
+The repo pins Rust to stable via `rust-toolchain.toml`.
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/sophatvathana/toradb.git toradb
+    cd toradb
+    ```
+  </Step>
+  <Step title="Build the Rust workspace">
+    ```bash
+    cargo build
+    ```
+  </Step>
+  <Step title="Create a Python virtual environment">
+    ```bash
+    python3 -m venv .venv
+    source .venv/bin/activate
+    pip install --upgrade pip
+    pip install maturin
+    ```
+  </Step>
+  <Step title="Install the ToraDB Python package">
+    From the repo root:
+
+    ```bash
+    maturin develop
+    ```
+  </Step>
+  <Step title="Verify installation">
+    ```bash
+    python -c "import toradb; print('toradb import ok')"
+    toradb smoke
+    ```
+  </Step>
+</Steps>
+
+## Run tests
+
+Rust tests:
+
+```bash
+cargo test
+```
+
+Python smoke tests:
+
+```bash
+pytest tests/python_smoke.py -q
+```
+
+## Optional benchmark
+
+```bash
+cargo bench -p toradb-storage --bench segment_read
+```
+
+## Troubleshooting
+
+- If `maturin develop` fails, confirm the virtual environment is activated.
+- If Python cannot import `toradb`, rerun `maturin develop`.
+- If the `toradb` command is not found, ensure the venv `bin` directory is on your `PATH` (activation usually handles this).

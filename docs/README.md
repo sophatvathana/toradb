@@ -1,28 +1,32 @@
-# ToraDB Documentation
+# ToraDB documentation
 
-This directory contains user and contributor documentation for ToraDB.
+**Canonical user documentation** is published from [`mdx/`](../mdx/) via [Mintlify](https://mintlify.com).
 
-ToraDB is a retrieval-focused database with:
-- local on-disk tables
-- text, vector, and hybrid retrieval
-- SQL + Python SDK workflows
+| | |
+|---|---|
+| **Browse docs** | [https://toradb.mintlify.app](https://toradb.mintlify.app) *(update this URL after you connect Mintlify)* |
+| **Edit locally** | [`mdx/README.md`](../mdx/README.md) — `cd mdx && mint dev` |
 
-## Start Here
+## On GitHub
 
-- [Install](INSTALL.md): prerequisites and local setup
-- [Quickstart](QUICKSTART.md): create a local DB, ingest docs, and run queries
-- [Contributing](CONTRIBUTING.md): development workflow and pull request expectations
-- [Code of Conduct](CODE_OF_CONDUCT.md): community standards
-- [Security Policy](SECURITY.md): vulnerability reporting process
+These files remain for standard repository paths and GitHub discovery:
 
-## Repository Layout
+| Topic | Link |
+|-------|------|
+| Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Security | [SECURITY.md](SECURITY.md) |
+| Code of Conduct | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) |
 
-- `crates/`: Rust workspace crates
-- `python/`: Python package source
-- `tests/`: Python smoke tests
-- `examples/`: runnable Python examples
+Full guides (install, quickstart, SQL, API reference) live in the Mintlify site above.
+
+## Repository layout
+
+- `crates/` — Rust workspace
+- `python/` — Python package
+- `mdx/` — documentation site source
+- `examples/` — runnable Python examples
 
 ## Support
 
-- For usage and setup issues, open a GitHub issue with reproduction steps.
-- For security issues, follow the process in [Security Policy](SECURITY.md).
+- Usage and setup: [GitHub issues](https://github.com/sophatvathana/toradb/issues)
+- Security: [SECURITY.md](SECURITY.md) (do not file public issues for vulnerabilities)

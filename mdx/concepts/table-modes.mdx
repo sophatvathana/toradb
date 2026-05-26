@@ -1,0 +1,63 @@
+---
+title: "Table modes"
+description: "text vs hybrid tables and schemas"
+---
+
+## `text` mode
+
+Default for document-centric workloads. Documents need a `text` field (or a string passed to `add`).
+
+```python
+articles = db.create_table("articles", mode="text")
+articles.add([
+    {"text": "Nikola Tesla pioneered AC systems", "tag": "history"},
+    "Plain string documents are also accepted",
+])
+```
+
+BM25 sparse search uses the document body column. Metadata fields (for example `tag`, `year`) are stored and available in SQL `WHERE` / `GROUP BY`.
+
+## `hybrid` mode
+
+Use when you need **both** lexical and dense vector search on the same table.
+
+```python
+papers = db.create_table(
+    "papers",
+    mode="hybrid",
+    schema={
+        "id": "uuid",
+        "title": "text",
+        "embedding": "vector[4]",
+    },
+)
+papers.add([
+    {
+        "text": "Nikola Tesla high frequency resonant transformer",
+        "embedding": [0.9, 0.1, 0.0, 0.0],
+        "tag": "tesla",
+    },
+])
+```
+
+- **`text`** — primary body for BM25 / sparse search.
+- **`embedding`** — fixed-size float vector (`vector[N]`) for ANN.
+- Optional columns — tags, scores, or other metadata.
+
+## Opening existing tables
+
+If the database already exists on disk, open a table by name instead of creating it:
+
+```python
+articles = db.table("articles")
+```
+
+## Choosing a mode
+
+| Use case | Mode |
+|----------|------|
+| Notes, articles, logs with BM25 only | `text` |
+| RAG with embeddings + keyword fallback | `hybrid` |
+| Large embedding corpus with on-disk ANN | `hybrid` + DiskANN reindex |
+
+See [Search strategies](/guides/search) and [On-disk layout](/concepts/on-disk-layout).

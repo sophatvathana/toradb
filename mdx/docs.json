@@ -1,13 +1,13 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "theme": "luma",
-  "name": "toradb",
+  "name": "ToraDB",
   "colors": {
     "primary": "#16A34A",
     "light": "#07C983",
     "dark": "#15803D"
   },
-  "favicon": "/favicon.svg",
+  "favicon": "/favicon.png",
   "navigation": {
     "tabs": [
       {
@@ -17,36 +17,43 @@
             "group": "Getting started",
             "pages": [
               "index",
+              "install",
               "quickstart",
               "development"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/overview",
+              "concepts/table-modes",
+              "concepts/on-disk-layout"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Usage",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/components",
-              "essentials/reusable-snippets"
+              "guides/python",
+              "guides/ingest",
+              "guides/search",
+              "guides/sql",
+              "guides/cli",
+              "guides/reindex-compact"
             ]
           },
           {
-            "group": "Agent ready",
+            "group": "Integrations",
             "pages": [
-              "agent-ready/prompt",
-              "agent-ready/visibility",
-              "agent-ready/contextual",
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "guides/integrations/langchain",
+              "guides/integrations/llamaindex"
+            ]
+          },
+          {
+            "group": "Community",
+            "pages": [
+              "community/contributing",
+              "community/security",
+              "community/code-of-conduct"
             ]
           }
         ]
@@ -55,18 +62,35 @@
         "tab": "API reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Overview",
             "pages": [
               "api-reference/introduction"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Python SDK",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api-reference/python/database",
+              "api-reference/python/table",
+              "api-reference/python/search-results",
+              "api-reference/python/ingest",
+              "api-reference/python/sql-helpers"
+            ]
+          },
+          {
+            "group": "SQL",
+            "pages": [
+              "api-reference/sql/overview",
+              "api-reference/sql/ddl",
+              "api-reference/sql/retrieval",
+              "api-reference/sql/analytics",
+              "api-reference/sql/materialized-views"
+            ]
+          },
+          {
+            "group": "CLI",
+            "pages": [
+              "api-reference/cli/overview"
             ]
           }
         ]
@@ -75,52 +99,39 @@
     "global": {
       "anchors": [
         {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
+          "anchor": "GitHub",
+          "href": "https://github.com/sophatvathana/toradb",
+          "icon": "github"
         },
         {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
+          "anchor": "Report issue",
+          "href": "https://github.com/sophatvathana/toradb/issues",
+          "icon": "bug"
         }
       ]
     }
   },
   "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "light": "/logo/toradb.png",
+    "dark": "/logo/toradb.png",
+    "href": "/"
   },
   "navbar": {
     "links": [
       {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
+        "label": "GitHub",
+        "href": "https://github.com/sophatvathana/toradb"
       }
     ],
     "primary": {
       "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
+      "label": "Quickstart",
+      "href": "/quickstart"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/sophatvathana/toradb"
     }
   }
 }

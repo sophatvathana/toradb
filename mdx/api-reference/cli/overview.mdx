@@ -1,0 +1,69 @@
+---
+title: "CLI reference"
+description: "toradb command-line interface"
+---
+
+```
+toradb — local retrieval database CLI
+
+Commands:
+  smoke              Quick ingest + search sanity check
+  query PATH TABLE Q Run BM25 search and print ranked ids
+  sql PATH QUERY     Run a SQL statement (search or analytics)
+  tables PATH        List tables (DESCRIBE summary per table)
+  reindex PATH TABLE Rebuild indexes (CREATE INDEX; USING BM25, HNSW, DISKANN, …)
+```
+
+## `toradb smoke`
+
+Creates a temporary database, ingests sample docs, runs search and `GROUP BY` SQL.
+
+<ResponseField name="Exit code" type="int">
+  `0` on success, `1` on failure.
+</ResponseField>
+
+## `toradb query PATH TABLE Q`
+
+<ParamField path="PATH" type="str" required>
+  Database directory.
+</ParamField>
+<ParamField path="TABLE" type="str" required>
+  Table name.
+</ParamField>
+<ParamField path="Q" type="str" required>
+  Query string.
+</ParamField>
+<ParamField path="--top-k" type="int" default="10">
+  Number of results.
+</ParamField>
+
+Prints `id` and `score` tab-separated.
+
+## `toradb sql PATH QUERY`
+
+Runs any supported SQL statement. Prints text for DDL/`DESCRIBE`; tab-separated columns for analytics/search frames.
+
+## `toradb tables PATH`
+
+Runs `DESCRIBE` for each table in the database.
+
+## `toradb reindex PATH TABLE`
+
+<ParamField path="--using" type="str" default="BM25">
+  Index algorithm.
+</ParamField>
+<ParamField path="--column" type="str" default="text">
+  Indexed column.
+</ParamField>
+
+Executes `CREATE INDEX cli_reindex ON table (column) USING ...`.
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | Command failed (e.g. smoke check) |
+| `2` | Usage error (missing arguments) |
+
+See [CLI guide](/guides/cli).

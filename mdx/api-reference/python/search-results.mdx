@@ -1,0 +1,34 @@
+---
+title: "SearchResults"
+description: "Retrieval result object"
+---
+
+Returned by `Table.search`, retrieval `db.sql(...)`, and pages from `sql_stream`.
+
+## Methods
+
+### `to_pandas() -> DataFrame`
+
+Convert to a pandas-compatible dict structure (requires pandas for convenient use).
+
+```python
+frame = results.to_pandas()
+# columns typically include id, score
+```
+
+### `to_polars() -> DataFrame`
+
+Convert to Polars (requires `polars` installed).
+
+### `explain() -> str`
+
+Human-readable plan and metrics when `explain=True` was passed to search.
+
+```python
+results = table.search("Tesla", explain=True)
+print(results.explain())
+```
+
+## Analytics results
+
+`GROUP BY` queries return an analytics wrapper with the same `to_pandas()` / `to_polars()` methods and columns named after the group key and aggregate (for example `tag`, `count`).

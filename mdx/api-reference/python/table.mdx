@@ -1,0 +1,59 @@
+---
+title: "Table"
+description: "Ingest and search on a table"
+---
+
+## `Table.add(docs: list) -> int`
+
+Ingest documents. Each item is a `str` or `dict` with a `text` field.
+
+```python
+n = table.add([{"text": "Nikola Tesla AC motor", "tag": "history"}])
+```
+
+## `Table.add_arrow(arrow_table) -> int`
+
+Ingest a PyArrow table via the C Data interface. Requires `pyarrow`.
+
+## `Table.search(query, top_k=None, offset=None, strategy=None, explain=None, graph_expand=None, depth=None, query_vector=None) -> SearchResults`
+
+<ParamField path="query" type="str" required>
+  Query text (and metadata filter syntax when supported).
+</ParamField>
+<ParamField path="top_k" type="int" default="20">
+  Maximum hits to return.
+</ParamField>
+<ParamField path="offset" type="int" default="0">
+  Skip first N results.
+</ParamField>
+<ParamField path="strategy" type="str" optional>
+  `sparse`, `dense`, `diskann`, `hyde`, `crag`, `distributed`, `hybrid`, etc.
+</ParamField>
+<ParamField path="explain" type="bool" default="false">
+  Attach explain text to results.
+</ParamField>
+<ParamField path="graph_expand" type="bool" default="false">
+  Expand results via graph neighbors.
+</ParamField>
+<ParamField path="depth" type="int" default="2">
+  Graph expansion depth.
+</ParamField>
+<ParamField path="query_vector" type="list[float]" optional>
+  Dense query embedding for ANN strategies.
+</ParamField>
+
+```python
+results = table.search("Nikola Tesla", top_k=5, strategy="hybrid")
+```
+
+## `stream_search(table, query, batch_size=128, ...)`
+
+Module helper in `toradb.table` — yields `SearchResults` batches.
+
+```python
+from toradb.table import stream_search
+for batch in stream_search(table, "Tesla", batch_size=32):
+    print(batch.to_pandas())
+```
+
+See [Search strategies](/guides/search).

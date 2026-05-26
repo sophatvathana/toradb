@@ -1,0 +1,31 @@
+---
+title: "SQL overview"
+description: "Dialect summary for ToraDB SQL"
+---
+
+ToraDB SQL supports **catalog**, **DDL**, **retrieval SELECT**, and **analytics SELECT**. Statements are case-insensitive for keywords.
+
+## Statement types
+
+| Category | Examples |
+|----------|----------|
+| Catalog | `SHOW TABLES`, `DESCRIBE t`, `SHOW MATERIALIZED VIEWS` |
+| DDL | `CREATE TABLE`, `CREATE INDEX`, `DROP TABLE`, `COMPACT TABLE` |
+| Retrieval | `SELECT ... SPARSE SEARCH ...`, `VECTOR SEARCH ...` |
+| Analytics | `SELECT agg ... GROUP BY`, `WHERE` |
+| Views | `CREATE MATERIALIZED VIEW`, `REFRESH`, `DROP` |
+
+## Result shapes
+
+- Retrieval `SELECT` → ranked ids/scores (`SearchResults` in Python)
+- `GROUP BY` / aggregates → tabular analytics
+- DDL / `DESCRIBE` → text message
+
+## Pages
+
+- [DDL](/api-reference/sql/ddl)
+- [Retrieval](/api-reference/sql/retrieval)
+- [Analytics](/api-reference/sql/analytics)
+- [Materialized views](/api-reference/sql/materialized-views)
+
+Tutorial: [SQL guide](/guides/sql).

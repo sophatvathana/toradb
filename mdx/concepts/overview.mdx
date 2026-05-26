@@ -1,0 +1,39 @@
+---
+title: "Overview"
+description: "Mental model for databases, tables, indexes, and queries"
+---
+
+ToraDB organizes data as a **local database directory** containing **tables**. Each table holds documents (text and optional vectors/metadata), stored in Parquet **segments** with optional **index sidecars** for fast retrieval.
+
+## Flow
+
+```mermaid
+flowchart LR
+  DB[Database] --> T1[Table]
+  T1 --> Ingest[add / ingest]
+  Ingest --> Seg[Parquet segments]
+  Seg --> Idx[Index sidecars]
+  Idx --> Q[search / sql]
+```
+
+## Core objects
+
+| Object | Role |
+|--------|------|
+| `Database` | Open a path on disk (`toradb.local(path)`). |
+| `Table` | Named collection of documents; created with `mode="text"` or `mode="hybrid"`. |
+| `SearchResults` | Ranked hits from `table.search` or retrieval `SELECT`. |
+| Analytics result | Tabular output from `GROUP BY` / aggregates via `db.sql`. |
+
+## Two ways to query
+
+1. **Python SDK** — `table.search(...)` for retrieval; `db.sql(...)` for SQL.
+2. **CLI** — `toradb query`, `toradb sql`, `toradb tables`, `toradb reindex`.
+
+Indexes are built automatically on ingest where possible; use [reindex and compact](/guides/reindex-compact) to rebuild BM25, HNSW, or DiskANN after bulk changes.
+
+## Related
+
+- [Table modes](/concepts/table-modes)
+- [On-disk layout](/concepts/on-disk-layout)
+- [Python SDK guide](/guides/python)

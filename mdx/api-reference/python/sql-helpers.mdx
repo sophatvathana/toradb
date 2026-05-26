@@ -1,0 +1,27 @@
+---
+title: "SQL helpers"
+description: "toradb.sql module"
+---
+
+## `sql(db, statement)`
+
+Alias for `db.sql(statement)`.
+
+## `sql_stream(db, statement, batch_size=128)`
+
+Iterate retrieval pages:
+
+```python
+from toradb.sql import sql_stream
+
+for page in sql_stream(
+    db,
+    "SELECT id FROM docs SPARSE SEARCH body BM25('Tesla') LIMIT 100",
+    batch_size=32,
+):
+    print(page.to_pandas())
+```
+
+Restrictions match `Database.sql_stream`: retrieval `SELECT` only; no `GROUP BY` or `EXPLAIN`.
+
+See [SQL guide](/guides/sql) and [SQL reference](/api-reference/sql/overview).

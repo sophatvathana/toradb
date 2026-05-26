@@ -1,0 +1,43 @@
+---
+title: "CLI"
+description: "toradb smoke, query, sql, tables, and reindex"
+---
+
+The `toradb` command is installed with the Python package (`maturin develop`).
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `toradb smoke` | Quick ingest + search + SQL sanity check (temp DB) |
+| `toradb query PATH TABLE Q` | BM25 search; prints `id` and `score` |
+| `toradb sql PATH QUERY` | Run any SQL statement |
+| `toradb tables PATH` | List tables with `DESCRIBE` output |
+| `toradb reindex PATH TABLE` | Rebuild index via `CREATE INDEX` |
+
+## Examples
+
+```bash
+toradb smoke
+
+toradb query ./examples/_demo_db articles "Nikola Tesla motor"
+toradb query ./my_db docs "wireless power" --top-k 5
+
+toradb sql ./examples/_demo_db "SHOW TABLES"
+toradb sql ./examples/_demo_db "SELECT tag, COUNT(*) FROM articles GROUP BY tag"
+toradb sql ./examples/_demo_db "DESCRIBE articles"
+toradb sql ./examples/_demo_db "DROP TABLE logs"
+
+toradb tables ./examples/_demo_db
+
+toradb reindex ./my_db emb --using DISKANN --column embedding
+toradb reindex ./my_db articles --using BM25 --column text
+```
+
+## Help
+
+```bash
+toradb help
+```
+
+See [CLI API reference](/api-reference/cli/overview) for exit codes and arguments.

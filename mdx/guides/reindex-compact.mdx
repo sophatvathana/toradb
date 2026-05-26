@@ -1,0 +1,66 @@
+---
+title: "Reindex and compact"
+description: "Rebuild indexes and merge segments on disk"
+---
+
+## When to reindex
+
+Reindex after:
+
+- Bulk ingest of many documents
+- Changing embedding dimensions or index type
+- Search misses results you expect from a fresh index
+
+## Python / SQL
+
+```python
+db.sql("CREATE INDEX text_idx ON articles (text) USING BM25")
+db.sql("CREATE INDEX ann_idx ON papers (embedding) USING DISKANN")
+```
+
+Or:
+
+```python
+db.reindex("articles", using="BM25")
+db.reindex("emb", using="DISKANN", column="embedding")
+```
+
+## CLI
+
+```bash
+toradb reindex ./my_db articles --using BM25 --column text
+toradb reindex ./my_db emb --using DISKANN --column embedding
+```
+
+## Index types
+
+| `USING` | Use for |
+|---------|---------|
+| `BM25` | Sparse lexical search |
+| `HNSW` | In-memory dense graph |
+| `DISKANN` | On-disk ANN for large embedding tables |
+
+<Warning>
+  DiskANN graphs need enough embedded documents to build (typically **32+** rows with valid `embedding` vectors). Smaller tables may fall back or skip graph build.
+</Warning>
+
+## Compact segments
+
+Merge small Parquet segments to reduce file count:
+
+```sql
+COMPACT TABLE articles
+COMPACT TABLE articles FULL
+```
+
+```python
+db.sql("COMPACT TABLE articles FULL")
+```
+
+Optional environment tuning (advanced):
+
+- `TORADB_COMPACT_MAX_SEGMENTS`
+- `TORADB_COMPACT_MIN_MERGE`
+- `TORADB_COMPACT_SMALL_BYTES`
+
+After compacting, run `DESCRIBE table` to confirm segment counts. See [On-disk layout](/concepts/on-disk-layout).

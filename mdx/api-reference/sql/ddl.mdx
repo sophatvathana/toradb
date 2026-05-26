@@ -1,0 +1,58 @@
+---
+title: "SQL DDL"
+description: "CREATE, DROP, INDEX, COMPACT, ALTER"
+---
+
+## CREATE TABLE
+
+```sql
+CREATE TABLE articles USING text
+CREATE TABLE papers (id uuid, title text, embedding vector[4]) USING hybrid
+```
+
+## CREATE INDEX
+
+```sql
+CREATE INDEX text_idx ON articles (text) USING BM25
+CREATE INDEX ann_idx ON papers (embedding) USING HNSW
+CREATE INDEX disk_idx ON ann_corpus (embedding) USING DISKANN
+```
+
+Common `USING` values: `BM25`, `HNSW`, `DISKANN`.
+
+## DROP TABLE
+
+```sql
+DROP TABLE logs
+```
+
+## DESCRIBE
+
+```sql
+DESCRIBE articles
+```
+
+Returns row count, vector dimension, segment count, segment workers, and index sidecars.
+
+## COMPACT TABLE
+
+```sql
+COMPACT TABLE articles
+COMPACT TABLE articles FULL
+```
+
+Merges small Parquet segments. `FULL` forces a more aggressive merge policy.
+
+## ALTER segment workers
+
+```sql
+ALTER TABLE articles SET SEGMENT_WORKERS = 4
+```
+
+## SHOW TABLES
+
+```sql
+SHOW TABLES
+```
+
+Returns table names with row counts (analytics shape in Python).

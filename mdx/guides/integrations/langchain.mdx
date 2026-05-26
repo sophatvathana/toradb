@@ -1,0 +1,31 @@
+---
+title: "LangChain"
+description: "ToraDBVectorStore adapter"
+---
+
+ToraDB ships a minimal LangChain-compatible vector store in `toradb.integrations`.
+
+## Example
+
+```python
+import toradb
+from toradb.integrations import ToraDBVectorStore
+
+db = toradb.local("./my_db")
+articles = db.table("articles")
+
+store = ToraDBVectorStore.from_table(articles)
+store.add_texts([
+    "Nikola Tesla envisioned worldwide wireless power distribution",
+])
+hits = store.similarity_search("wireless power Tesla", k=2)
+print(hits)
+```
+
+The adapter delegates search to the underlying ToraDB table BM25 / hybrid pipeline.
+
+## Requirements
+
+Install ToraDB with [Install](/install). LangChain itself is optional; import only what your app needs.
+
+For a full walkthrough, run `python examples/full_example.py` (section 16).

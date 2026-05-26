@@ -1,0 +1,107 @@
+---
+title: "SQL"
+description: "Retrieval SQL, analytics, and catalog commands"
+---
+
+ToraDB supports a retrieval-oriented SQL dialect for search, analytics, and DDL. Run statements with `db.sql(...)` or `toradb sql PATH "..."`.
+
+## Sparse search
+
+```python
+db.sql(
+    "SELECT id FROM articles "
+    "SPARSE SEARCH body BM25('Nikola Tesla alternating current') LIMIT 3"
+)
+```
+
+Returns ranked `SearchResults` (use `.to_pandas()`).
+
+## Vector search
+
+```python
+db.sql(
+    "SELECT id FROM papers VECTOR SEARCH embedding "
+    "ANN([0.9, 0.1, 0.0, 0.0]) LIMIT 2"
+)
+```
+
+## Hybrid retrieval in one query
+
+```python
+db.sql(
+    "SELECT tag, COUNT(*) FROM papers "
+    "SPARSE SEARCH title BM25('Tesla coil') "
+    "VECTOR SEARCH embedding ANN([0.9, 0.1, 0.0, 0.0]) "
+    "GROUP BY tag"
+)
+```
+
+## Analytics
+
+```python
+db.sql("SELECT tag, COUNT(*) FROM articles GROUP BY tag").to_pandas()
+db.sql(
+    "SELECT tag, COUNT(*) FROM articles WHERE tag = 'patent' GROUP BY tag"
+).to_pandas()
+```
+
+Aggregates: `COUNT(*)`, `SUM(col)`, `AVG`, `MIN`, `MAX`. `WHERE` supports comparisons and `IN (...)`.
+
+## Ordering and paging
+
+```sql
+SELECT id FROM docs
+SPARSE SEARCH body BM25('Nikola Tesla motor')
+ORDER BY score DESC
+LIMIT 3 OFFSET 2
+```
+
+## EXPLAIN
+
+```sql
+EXPLAIN SELECT id FROM docs SPARSE SEARCH body BM25('Tesla') LIMIT 5
+```
+
+## DISTRIBUTED
+
+Adds parallel segment scanning to a retrieval `SELECT`:
+
+```sql
+SELECT id FROM docs
+DISTRIBUTED SPARSE SEARCH body BM25('motor')
+LIMIT 10
+```
+
+## Streaming results
+
+```python
+from toradb.sql import sql_stream
+
+for page in sql_stream(db, "SELECT id FROM docs SPARSE SEARCH body BM25('Tesla') LIMIT 100", batch_size=32):
+    print(page.to_pandas())
+```
+
+## Catalog and DDL
+
+```python
+db.sql("SHOW TABLES")
+db.sql("DESCRIBE articles")
+db.sql("CREATE TABLE logs USING text")
+db.sql("CREATE INDEX text_idx ON articles (text) USING BM25")
+db.sql("CREATE INDEX ann_idx ON papers (embedding) USING DISKANN")
+db.sql("DROP TABLE logs")
+db.sql("COMPACT TABLE articles FULL")
+```
+
+## Materialized views
+
+```sql
+CREATE MATERIALIZED VIEW top_tags AS
+SELECT tag, COUNT(*) FROM articles GROUP BY tag;
+
+REFRESH MATERIALIZED VIEW top_tags;
+SHOW MATERIALIZED VIEWS;
+DROP MATERIALIZED VIEW top_tags;
+```
+
+See the [SQL API reference](/api-reference/sql/overview) for grammar details.

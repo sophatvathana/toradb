@@ -1,5 +1,7 @@
 # Quickstart
 
+> **Published docs:** [Mintlify site](https://toradb.mintlify.app/quickstart) — source in [`mdx/quickstart.mdx`](../mdx/quickstart.mdx).
+
 This guide gets you from install to your first retrieval query.
 
 ## 1) Install locally

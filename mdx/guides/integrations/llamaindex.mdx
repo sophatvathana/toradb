@@ -1,0 +1,33 @@
+---
+title: "LlamaIndex"
+description: "ToraDBLlamaIndexStore adapter"
+---
+
+ToraDB provides a LlamaIndex-style store in `toradb.integrations`.
+
+## Example
+
+```python
+import toradb
+from toradb.integrations import ToraDBLlamaIndexStore
+
+db = toradb.local("./my_db")
+articles = db.table("articles")
+li_store = ToraDBLlamaIndexStore.from_table(articles)
+
+class SimpleNode:
+    def __init__(self, text: str):
+        self.text = text
+
+li_store.add([
+    SimpleNode("Summary of Nikola Tesla AC motor patents and demonstrations"),
+])
+result = li_store.query("AC motor Tesla", similarity_top_k=2)
+print(result.to_pandas())
+```
+
+## Requirements
+
+Install ToraDB with [Install](/install). LlamaIndex packages are optional depending on your integration layer.
+
+For a full walkthrough, run `python examples/full_example.py` (section 17).

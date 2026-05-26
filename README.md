@@ -21,18 +21,18 @@ toradb smoke
 python examples/full_example.py
 ```
 
-See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a full walkthrough.
-
 ## Documentation
 
 | Topic | Link |
 |-------|------|
-| Overview | [docs/README.md](docs/README.md) |
-| Install | [docs/INSTALL.md](docs/INSTALL.md) |
-| Quickstart | [docs/QUICKSTART.md](docs/QUICKSTART.md) |
+| **Docs site** | [toradb.mintlify.app](https://toradb.mintlify.app) *(Mintlify; update URL after deploy)* |
+| GitHub hub | [docs/README.md](docs/README.md) |
+| Install | [mdx/install](mdx/install.mdx) or published `/install` |
+| Quickstart | [mdx/quickstart](mdx/quickstart.mdx) or published `/quickstart` |
 | Contributing | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) |
-| Code of Conduct | [docs/CODE_OF_CONDUCT.md](docs/CODE_OF_CONDUCT.md) |
 | Security | [docs/SECURITY.md](docs/SECURITY.md) |
+
+Edit the docs site: `cd mdx && mint dev` — see [mdx/README.md](mdx/README.md).
 
 ## Development
 

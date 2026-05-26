@@ -1,0 +1,57 @@
+---
+title: "SQL analytics"
+description: "GROUP BY, aggregates, WHERE"
+---
+
+## GROUP BY
+
+```sql
+SELECT tag, COUNT(*) FROM articles GROUP BY tag
+```
+
+## WHERE
+
+```sql
+SELECT tag, COUNT(*) FROM articles
+WHERE tag = 'patent'
+GROUP BY tag
+```
+
+Comparison operators: `=`, `!=`, `<`, `<=`, `>`, `>=`.
+
+## IN
+
+```sql
+SELECT tag, COUNT(*) FROM articles
+WHERE tag IN ('patent', 'science')
+GROUP BY tag
+```
+
+## Aggregates
+
+| Function | Example |
+|----------|---------|
+| `COUNT(*)` | `SELECT tag, COUNT(*) FROM t GROUP BY tag` |
+| `SUM(col)` | `SELECT tag, SUM(score) FROM t GROUP BY tag` |
+| `AVG(col)` | `SELECT tag, AVG(score) FROM t GROUP BY tag` |
+| `MIN(col)` | `SELECT tag, MIN(score) FROM t GROUP BY tag` |
+| `MAX(col)` | `SELECT tag, MAX(score) FROM t GROUP BY tag` |
+
+## Retrieval + analytics
+
+Apply search first, then aggregate:
+
+```sql
+SELECT tag, COUNT(*) FROM articles
+SPARSE SEARCH body BM25('Nikola Tesla')
+GROUP BY tag
+```
+
+Hybrid example:
+
+```sql
+SELECT tag, COUNT(*) FROM papers
+SPARSE SEARCH title BM25('Tesla coil')
+VECTOR SEARCH embedding ANN([0.9, 0.1, 0.0, 0.0])
+GROUP BY tag
+```

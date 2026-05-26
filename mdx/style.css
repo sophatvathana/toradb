@@ -1,0 +1,16 @@
+/* Navbar logo + wordmark — Mintlify scales small by default */
+.nav-logo {
+  height: 42px !important;
+  width: auto !important;
+  max-height: none !important;
+}
+
+.nav-logo a {
+  display: flex;
+  align-items: center;
+}
+
+/* Mobile header */
+#mobile-nav .nav-logo {
+  height: 44px !important;
+}

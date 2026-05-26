@@ -1,0 +1,37 @@
+---
+title: "Materialized views"
+description: "CREATE, REFRESH, SHOW, DROP"
+---
+
+Materialized views cache the results of a `SELECT` (search or analytics) on disk. They require a local on-disk database path.
+
+## CREATE
+
+```sql
+CREATE MATERIALIZED VIEW top_tags AS
+SELECT tag, COUNT(*) FROM articles GROUP BY tag
+```
+
+## REFRESH
+
+```sql
+REFRESH MATERIALIZED VIEW top_tags
+```
+
+Recomputes cached rows from the current table data.
+
+## SHOW
+
+```sql
+SHOW MATERIALIZED VIEWS
+```
+
+## DROP
+
+```sql
+DROP MATERIALIZED VIEW top_tags
+```
+
+## DESCRIBE
+
+`DESCRIBE view_name` reports row count and notes that the object is a materialized view.

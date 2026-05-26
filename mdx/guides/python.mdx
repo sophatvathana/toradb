@@ -1,0 +1,78 @@
+---
+title: "Python SDK"
+description: "Open a database, manage tables, search, and run SQL"
+---
+
+Install the package with [Install](/install), then `import toradb`.
+
+## Open a database
+
+```python
+import toradb
+
+db = toradb.local("./my_db")
+```
+
+`toradb.connect(...)` is an alias for the same local opener in current releases.
+
+## Create or open tables
+
+```python
+docs = db.create_table("docs", mode="text")
+existing = db.table("docs")
+```
+
+## Ingest documents
+
+```python
+n = docs.add([
+    {"text": "Nikola Tesla alternating current motor", "tag": "history"},
+    "Marie Curie studied radioactivity",
+])
+print(f"added {n} documents")
+```
+
+See [Ingest](/guides/ingest) for files, DataFrames, and Arrow.
+
+## Search
+
+```python
+results = docs.search("Nikola Tesla motor", top_k=5)
+frame = results.to_pandas()
+print(frame[["id", "score"]])
+```
+
+See [Search strategies](/guides/search) for `strategy`, `query_vector`, and `explain`.
+
+## SQL
+
+```python
+out = db.sql(
+    "SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla') LIMIT 5"
+)
+if hasattr(out, "to_pandas"):
+    print(out.to_pandas())
+else:
+    print(out)  # DDL / DESCRIBE text
+```
+
+## Reindex
+
+```python
+msg = db.sql("CREATE INDEX idx ON docs (text) USING BM25")
+# or
+db.reindex("docs", using="BM25")
+```
+
+## Export results
+
+```python
+results.to_pandas()
+results.to_polars()  # requires polars
+```
+
+## API reference
+
+- [Database](/api-reference/python/database)
+- [Table](/api-reference/python/table)
+- [SearchResults](/api-reference/python/search-results)
