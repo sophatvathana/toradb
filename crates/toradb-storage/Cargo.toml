@@ -10,6 +10,7 @@ harness = false
 
 [dependencies]
 toradb-core = { workspace = true }
+toradb-index = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

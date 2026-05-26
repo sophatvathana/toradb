@@ -13,6 +13,13 @@ pub enum IndexMode {
     SegmentOnly,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SegmentIdRange {
+    pub file: String,
+    pub min_id: u64,
+    pub max_id: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TableManifestFile {
     pub schema_version: u32,
@@ -25,6 +32,8 @@ pub struct TableManifestFile {
     pub compression: Option<toradb_core::CompressionConfig>,
     #[serde(default)]
     pub index_mode: IndexMode,
+    #[serde(default)]
+    pub segment_id_ranges: Vec<SegmentIdRange>,
 }
 
 impl Default for TableManifestFile {
@@ -35,6 +44,7 @@ impl Default for TableManifestFile {
             segment_workers: None,
             compression: None,
             index_mode: IndexMode::Merged,
+            segment_id_ranges: Vec::new(),
         }
     }
 }
@@ -42,6 +52,48 @@ impl Default for TableManifestFile {
 impl TableManifestFile {
     pub fn set_index_mode(&mut self, mode: IndexMode) {
         self.index_mode = mode;
+    }
+
+    pub fn record_segment_id_range(&mut self, file: &str, min_id: u64, max_id: u64) {
+        if let Some(r) = self.segment_id_ranges.iter_mut().find(|r| r.file == file) {
+            r.min_id = min_id;
+            r.max_id = max_id;
+            return;
+        }
+        self.segment_id_ranges.push(SegmentIdRange {
+            file: file.to_string(),
+            min_id,
+            max_id,
+        });
+    }
+
+    pub fn id_range_for_segment(&self, file: &str) -> Option<(u64, u64)> {
+        self.segment_id_ranges
+            .iter()
+            .find(|r| r.file == file)
+            .map(|r| (r.min_id, r.max_id))
+    }
+
+    pub fn segments_for_ids<'a>(&'a self, ids: &[u64]) -> Vec<&'a str> {
+        if self.segment_id_ranges.is_empty() {
+            return self.segments.iter().map(|s| s.as_str()).collect();
+        }
+        let mut out: Vec<&str> = Vec::new();
+        for id in ids {
+            for r in &self.segment_id_ranges {
+                if *id >= r.min_id && *id <= r.max_id {
+                    let name = r.file.as_str();
+                    if !out.contains(&name) {
+                        out.push(name);
+                    }
+                }
+            }
+        }
+        if out.is_empty() {
+            self.segments.iter().map(|s| s.as_str()).collect()
+        } else {
+            out
+        }
     }
 }
 

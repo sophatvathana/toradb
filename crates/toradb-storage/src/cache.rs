@@ -1,8 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use memmap2::Mmap;
+use toradb_index::sparse::bm25::Bm25Index;
 
 use crate::columnar::ColumnarDoc;
 use crate::numa::{NumaConfig, prefetch_mmap_sequential};
@@ -170,10 +171,76 @@ impl IndexBlobCache {
     }
 }
 
+/// LRU of decoded per-segment BM25 indexes (thread-safe for parallel segment scans).
+#[derive(Debug)]
+pub struct SegmentBm25Cache {
+    byte_budget: usize,
+    bytes_used: usize,
+    order: VecDeque<PathBuf>,
+    map: HashMap<PathBuf, Arc<Bm25Index>>,
+    pub stats: CacheHierarchy,
+}
+
+impl SegmentBm25Cache {
+    pub fn new(byte_budget: usize) -> Self {
+        Self {
+            byte_budget: byte_budget.max(1024),
+            bytes_used: 0,
+            order: VecDeque::new(),
+            map: HashMap::new(),
+            stats: CacheHierarchy::default(),
+        }
+    }
+
+    fn estimate_index_bytes(index: &Bm25Index) -> usize {
+        index.doc_count() as usize * 48 + 4096
+    }
+
+    pub fn get_or_insert<F>(&mut self, path: &Path, load: F) -> Result<Arc<Bm25Index>, String>
+    where
+        F: FnOnce() -> Result<Bm25Index, String>,
+    {
+        let key = path.to_path_buf();
+        if let Some(hit) = self.map.get(&key).cloned() {
+            self.stats.hits += 1;
+            self.touch(&key);
+            return Ok(hit);
+        }
+        self.stats.misses += 1;
+        let index = load()?;
+        let size = Self::estimate_index_bytes(&index);
+        if self.map.contains_key(&key) {
+            if let Some(old) = self.map.remove(&key) {
+                self.bytes_used = self.bytes_used.saturating_sub(Self::estimate_index_bytes(&old));
+            }
+            self.order.retain(|p| p != &key);
+        }
+        while self.bytes_used + size > self.byte_budget && !self.order.is_empty() {
+            if let Some(old_key) = self.order.pop_front() {
+                if let Some(old) = self.map.remove(&old_key) {
+                    self.bytes_used =
+                        self.bytes_used.saturating_sub(Self::estimate_index_bytes(&old));
+                }
+            }
+        }
+        self.bytes_used += size;
+        self.order.push_back(key.clone());
+        let arc = Arc::new(index);
+        self.map.insert(key, Arc::clone(&arc));
+        Ok(arc)
+    }
+
+    fn touch(&mut self, key: &PathBuf) {
+        self.order.retain(|p| p != key);
+        self.order.push_back(key.clone());
+    }
+}
+
 #[derive(Debug)]
 pub struct StorageCaches {
     pub segments: SegmentCache,
     pub index_blobs: IndexBlobCache,
+    pub segment_bm25: Mutex<SegmentBm25Cache>,
     pub numa: NumaConfig,
 }
 
@@ -182,6 +249,7 @@ impl StorageCaches {
         Self {
             segments: SegmentCache::new(config.segment_entries),
             index_blobs: IndexBlobCache::new(config.index_bytes),
+            segment_bm25: Mutex::new(SegmentBm25Cache::new(config.index_bytes)),
             numa: NumaConfig::from_env(),
         }
     }
@@ -191,9 +259,14 @@ impl StorageCaches {
     }
 
     pub fn combined_stats(&self) -> CacheHierarchy {
+        let bm25 = self
+            .segment_bm25
+            .lock()
+            .map(|c| c.stats.clone())
+            .unwrap_or_default();
         CacheHierarchy {
-            hits: self.segments.stats.hits + self.index_blobs.stats.hits,
-            misses: self.segments.stats.misses + self.index_blobs.stats.misses,
+            hits: self.segments.stats.hits + self.index_blobs.stats.hits + bm25.hits,
+            misses: self.segments.stats.misses + self.index_blobs.stats.misses + bm25.misses,
         }
     }
 
