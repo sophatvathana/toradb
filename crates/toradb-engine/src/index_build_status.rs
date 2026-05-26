@@ -228,7 +228,14 @@ pub fn segment_sparse_up_to_date(
     manifest: &IndexBuildManifest,
 ) -> bool {
     let bm25_path = segment_bm25_path(base, table, segment);
-    if !bm25_path.exists() {
+    let v2 = base
+        .join(table)
+        .join("indexes")
+        .join(format!(
+            "{}.bm25.v2.bin",
+            segment.strip_suffix(".parquet").unwrap_or(segment)
+        ));
+    if !bm25_path.exists() && !v2.exists() {
         return false;
     }
     let pq_mtime = parquet_mtime_secs(parquet_path);

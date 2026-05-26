@@ -5,14 +5,18 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use rayon::prelude::*;
 use toradb_index::dense::{diskann_codec, hnsw_codec, quant_codec, vector_codec};
 use toradb_index::sparse::bm25_codec;
+use toradb_index::sparse::bm25_lexicon::{self, Bm25LexiconView};
+use toradb_index::sparse::bm25_route::{self, Bm25RouteView};
+use toradb_index::sparse::bm25_tbm3::TBM3_MAGIC;
+use toradb_index::sparse::bm25::tokenize;
 use toradb_core::CandidateSet;
 use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
 use toradb_storage::columnar::{
     parquet_row_count, read_segment, read_segment_id_bounds, read_segment_matching_ids,
     read_segment_texts, write_segment_with_compression,
-    ColumnarDoc, IndexMode, TableManifestFile,
+    ColumnarDoc, IndexMode, QueryMode, TableManifestFile, ROUTED_QUERY_MIN_SEGMENTS,
 };
-use toradb_storage::cache::{get_or_mmap, read_segment_cached, StorageCaches};
+use toradb_storage::cache::{get_or_mmap, read_segment_cached, CachedBm25Segment, StorageCaches};
 use toradb_storage::compaction::{self, CompactMode, CompactPolicy, CompactReport};
 use toradb_storage::wal;
 
@@ -110,6 +114,25 @@ fn segment_bm25_v2_bin_path(base: &Path, table: &str, segment_parquet: &str) -> 
         .strip_suffix(".parquet")
         .unwrap_or(segment_parquet);
     indexes_dir(base, table).join(format!("{stem}.bm25.v2.bin"))
+}
+
+fn segment_bm25_lex_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
+    let stem = segment_parquet
+        .strip_suffix(".parquet")
+        .unwrap_or(segment_parquet);
+    indexes_dir(base, table).join(format!("{stem}.bm25.lex.bin"))
+}
+
+pub fn table_bm25_route_path(base: &Path, table: &str) -> PathBuf {
+    indexes_dir(base, table).join("bm25.route.bin")
+}
+
+pub fn table_query_mode(base: &Path, table: &str) -> Result<QueryMode, String> {
+    let path = TableManifestFile::path_for_table(base, table);
+    if !path.exists() {
+        return Ok(QueryMode::default());
+    }
+    Ok(TableManifestFile::load(&path)?.query_mode)
 }
 
 fn table_vectors_bin_path(base: &Path, table: &str) -> PathBuf {
@@ -291,6 +314,15 @@ pub fn save_segment_bm25_sidecar(
     bm25_codec::write_snapshot_file(
         &segment_bm25_bin_path(base, table, segment_parquet),
         snap,
+    )?;
+    toradb_index::sparse::bm25_tbm3::write_tbm3_file(
+        &segment_bm25_v2_bin_path(base, table, segment_parquet),
+        snap,
+    )?;
+    let terms = bm25_lexicon::terms_from_posting_keys(snap.postings.keys().map(|s| s.as_str()));
+    bm25_lexicon::write_lexicon_file(
+        &segment_bm25_lex_path(base, table, segment_parquet),
+        &terms,
     )
 }
 
@@ -479,6 +511,15 @@ pub fn list_segment_bm25_bins(base: &Path, table: &str) -> Result<Vec<Option<Pat
         .collect())
 }
 
+fn load_cached_bm25_segment(bin_path: &Path) -> Result<CachedBm25Segment, String> {
+    let mmap = get_or_mmap(bin_path, None)?;
+    if mmap.len() >= 4 && &mmap[..4] == TBM3_MAGIC {
+        return Ok(CachedBm25Segment::Tbm3(mmap));
+    }
+    let snap = bm25_codec::decode_snapshot(mmap.as_ref())?;
+    Ok(CachedBm25Segment::Snapshot(std::sync::Arc::new(snap)))
+}
+
 /// BM25 search against one on-disk segment sidecar path.
 pub fn search_segment_bm25_at_path(
     bin_path: &Path,
@@ -495,25 +536,103 @@ pub fn search_segment_bm25_at_path(
             .read()
             .map_err(|_| "segment_bm25 cache lock poisoned".to_string())
         {
-            if let Some(snap) = guard.get(bin_path) {
-                return Ok(snap.search(query, k));
+            if let Some(entry) = guard.get(bin_path) {
+                return entry.search(query, k);
             }
         }
-        let snap = {
+        let entry = {
             let mut guard = caches
                 .segment_bm25
                 .write()
                 .map_err(|_| "segment_bm25 cache lock poisoned".to_string())?;
-            guard.get_or_insert(bin_path, || {
-                let mmap = get_or_mmap(bin_path, None)?;
-                bm25_codec::decode_snapshot(mmap.as_ref())
-            })?
+            let path = bin_path.to_path_buf();
+            guard.get_or_insert(bin_path, || load_cached_bm25_segment(&path))?
         };
-        return Ok(snap.search(query, k));
+        return entry.search(query, k);
     }
-    let mmap = get_or_mmap(bin_path, None)?;
-    let snap = bm25_codec::decode_snapshot(mmap.as_ref())?;
-    Ok(snap.search(query, k))
+    load_cached_bm25_segment(bin_path)?.search(query, k)
+}
+
+/// Segment indices to scan for BM25 given query terms and optional route/lexicon pruning.
+pub fn filter_bm25_segment_indices(
+    base: &Path,
+    table: &str,
+    num_segments: u32,
+    query: &str,
+) -> Result<Vec<u32>, String> {
+    let terms: Vec<String> = tokenize(query);
+    if terms.is_empty() {
+        return Ok((0..num_segments).collect());
+    }
+    let query_mode = table_query_mode(base, table)?;
+    if query_mode == QueryMode::Routed {
+        let route_path = table_bm25_route_path(base, table);
+        if route_path.exists() {
+            let bytes = std::fs::read(&route_path).map_err(|e| e.to_string())?;
+            if let Ok(route) = Bm25RouteView::open(&bytes) {
+                let segs = route.segments_for_query(terms.iter().map(|s| s.as_str()));
+                if !segs.is_empty() {
+                    return Ok(segs);
+                }
+            }
+        }
+    }
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok((0..num_segments).collect());
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    let mut out = Vec::new();
+    for (idx, seg) in manifest.segments.iter().enumerate() {
+        if idx >= num_segments as usize {
+            break;
+        }
+        let lex_path = segment_bm25_lex_path(base, table, seg);
+        if !lex_path.exists() {
+            out.push(idx as u32);
+            continue;
+        }
+        let bytes = std::fs::read(&lex_path).map_err(|e| e.to_string())?;
+        if let Ok(lex) = Bm25LexiconView::parse(&bytes) {
+            if lex.intersects_query_terms(terms.iter().map(|s| s.as_str())) {
+                out.push(idx as u32);
+            }
+        } else {
+            out.push(idx as u32);
+        }
+    }
+    if out.is_empty() {
+        Ok((0..num_segments).collect())
+    } else {
+        Ok(out)
+    }
+}
+
+/// Build `indexes/bm25.route.bin` from per-segment lexicons.
+pub fn build_bm25_route_index(base: &Path, table: &str) -> Result<(), String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(());
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    let mut lexicons = Vec::new();
+    for (idx, seg) in manifest.segments.iter().enumerate() {
+        let lex_path = segment_bm25_lex_path(base, table, seg);
+        if !lex_path.exists() {
+            continue;
+        }
+        let bytes = std::fs::read(&lex_path).map_err(|e| e.to_string())?;
+        let view = Bm25LexiconView::parse(&bytes)?;
+        let terms: Vec<String> = view.terms.iter().map(|s| s.to_string()).collect();
+        lexicons.push((idx as u32, terms));
+    }
+    let entries = bm25_route::merge_lexicons_into_route(lexicons.into_iter());
+    bm25_route::write_route_file(&table_bm25_route_path(base, table), &entries)?;
+    let mut manifest = manifest;
+    if manifest.segments.len() as u32 >= ROUTED_QUERY_MIN_SEGMENTS {
+        manifest.query_mode = QueryMode::Routed;
+    }
+    manifest.save(&manifest_path)
 }
 
 /// BM25 search against one segment sidecar (mmap + decoded index LRU when `caches` is set).
@@ -1455,6 +1574,10 @@ pub fn rebuild_segment_sidecars_with_progress(
     }
     write_build_manifest(base, table, &build_manifest)?;
 
+    if report_progress {
+        mark_index_ready(base, table)?;
+    }
+
     Ok(())
 }
 
@@ -1601,6 +1724,9 @@ pub fn finalize_bulk_table_indexes(
         finalize_bulk_wal(base, table)?;
         let vectors = store.table(table).is_some_and(|t| t.has_vectors());
         rebuild_segment_sidecars_with_progress(base, table, true, vectors, true, true)?;
+        if table_index_mode(base, table)? == IndexMode::SegmentOnly {
+            let _ = build_bm25_route_index(base, table);
+        }
 
         let index_mode = table_index_mode(base, table)?;
         if index_mode != IndexMode::SegmentOnly {

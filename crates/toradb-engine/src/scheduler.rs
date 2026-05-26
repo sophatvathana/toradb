@@ -23,7 +23,7 @@ impl SegmentScheduler {
         }
     }
 
-    fn merge_local(into: &mut CandidateSet, local: CandidateSet) {
+    pub fn merge_local(into: &mut CandidateSet, local: CandidateSet) {
         for (i, id) in local.ids.iter().enumerate() {
             into.push(*id, local.scores[i]);
         }

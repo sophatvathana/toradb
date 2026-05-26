@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use rayon::prelude::*;
+
 use toradb_core::{Batch, CandidateSet, DocId, ExecCtx, IngestOptions, QueryMetrics};
 use toradb_index::RetrievalRuntime;
 use toradb_storage::columnar::IndexMode;
@@ -482,7 +484,6 @@ impl DagRunner {
                     || (segment_only && num_segments > 1 && workers > 1);
                 let scheduler =
                     SegmentScheduler::new_with_numa(workers as usize, self.caches.numa);
-                metrics.segments_scanned = num_segments;
                 metrics.segment_workers = if parallel && num_segments > 1 && workers > 1 {
                     workers
                 } else {
@@ -504,25 +505,88 @@ impl DagRunner {
                     } else {
                         Arc::new(Vec::new())
                     };
-                let seg_merged = scheduler.run_for_segments(num_segments, parallel, |seg| {
-                    if use_disk_segments {
-                        if let Some(bin_path) = seg_bins
-                            .get(seg as usize)
-                            .and_then(|p| p.as_ref())
-                        {
-                            return persist::search_segment_bm25_at_path(
-                                bin_path,
+                let active_segments: Vec<u32> = if use_disk_segments {
+                    self.db_path
+                        .as_ref()
+                        .map(|p| {
+                            persist::filter_bm25_segment_indices(
+                                p.as_path(),
+                                &table,
+                                num_segments,
                                 &query,
-                                seg_k,
-                                Some(caches),
                             )
-                            .unwrap_or_default();
-                        }
-                        return CandidateSet::default();
+                            .unwrap_or_else(|_| (0..num_segments).collect())
+                        })
+                        .unwrap_or_else(|| (0..num_segments).collect())
+                } else {
+                    (0..num_segments).collect()
+                };
+                metrics.segments_scanned = active_segments.len() as u32;
+                let seg_merged = if parallel && workers > 1 && active_segments.len() > 1 {
+                    let bins = Arc::clone(&seg_bins);
+                    let table_c = table.clone();
+                    let query_c = query.clone();
+                    let scan = || -> Vec<CandidateSet> {
+                        active_segments
+                            .par_iter()
+                            .map(|&seg| {
+                                if use_disk_segments {
+                                    if let Some(bin_path) =
+                                        bins.get(seg as usize).and_then(|p| p.as_ref())
+                                    {
+                                        return persist::search_segment_bm25_at_path(
+                                            bin_path,
+                                            &query_c,
+                                            seg_k,
+                                            Some(caches),
+                                        )
+                                        .unwrap_or_default();
+                                    }
+                                    return CandidateSet::default();
+                                }
+                                self.retrieval.segment_candidates(
+                                    &table_c, seg, &query_c, ctx,
+                                )
+                            })
+                            .collect()
+                    };
+                    let locals = match rayon::ThreadPoolBuilder::new()
+                        .num_threads(workers as usize)
+                        .build()
+                    {
+                        Ok(pool) => pool.install(scan),
+                        Err(_) => scan(),
+                    };
+                    let mut merged = CandidateSet::with_capacity(1024);
+                    for local in locals {
+                        SegmentScheduler::merge_local(&mut merged, local);
                     }
-                    self.retrieval
-                        .segment_candidates(&table, seg, &query, ctx)
-                });
+                    merged
+                } else {
+                    let mut merged = CandidateSet::with_capacity(1024);
+                    for seg in active_segments {
+                        let local = if use_disk_segments {
+                            if let Some(bin_path) =
+                                seg_bins.get(seg as usize).and_then(|p| p.as_ref())
+                            {
+                                persist::search_segment_bm25_at_path(
+                                    bin_path,
+                                    &query,
+                                    seg_k,
+                                    Some(caches),
+                                )
+                                .unwrap_or_default()
+                            } else {
+                                CandidateSet::default()
+                            }
+                        } else {
+                            self.retrieval
+                                .segment_candidates(&table, seg, &query, ctx)
+                        };
+                        SegmentScheduler::merge_local(&mut merged, local);
+                    }
+                    merged
+                };
                 if !seg_merged.is_empty() {
                     batch.candidates = seg_merged;
                     SegmentScheduler::local_top_k(&mut batch.candidates, ctx.tier2_budget as usize);

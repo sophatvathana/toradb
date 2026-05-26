@@ -488,6 +488,12 @@ impl Database {
         Ok(())
     }
 
+    /// LRU cache hits/misses for segment BM25, segment parquet, and index blobs.
+    fn cache_stats(&self) -> (u64, u64) {
+        let s = self.dag.cache_stats();
+        (s.hits, s.misses)
+    }
+
     /// Read on-disk index build progress without loading the full corpus.
     fn index_build_status(&self, table: &str) -> PyResult<Option<IndexBuildStatusPy>> {
         let Some(ref path) = self.dag.db_path() else {

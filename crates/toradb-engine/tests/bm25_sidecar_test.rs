@@ -2,6 +2,7 @@ use toradb_engine::index_build_status::{
     segment_bm25_path, segment_sparse_up_to_date, IndexBuildManifest,
 };
 use toradb_engine::{persist, DagRunner};
+use toradb_index::sparse::bm25_tbm3::Bm25Tbm3View;
 use toradb_index::IngestDoc;
 
 #[test]
@@ -72,6 +73,34 @@ fn segment_sparse_up_to_date_without_build_manifest_entry() {
         &parquet_path,
         &empty_manifest
     ));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tbm3_sidecar_search_after_flush() {
+    let dir = std::env::temp_dir().join("toradb_tbm3_sidecar");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    {
+        let mut dag = DagRunner::open(&dir).expect("open");
+        dag.add_documents(
+            "docs",
+            vec![IngestDoc {
+                text: "Nikola Tesla alternating current motor".into(),
+                metadata: Default::default(),
+                vector: None,
+            }],
+        )
+        .expect("add");
+    }
+
+    let v2 = dir.join("docs/indexes/seg_00001.bm25.v2.bin");
+    assert!(v2.exists(), "TBM3 v2 sidecar should exist after flush");
+    let bytes = std::fs::read(&v2).expect("read");
+    let view = Bm25Tbm3View::open(&bytes).expect("parse");
+    let hits = view.search("Nikola motor", 5);
+    assert!(!hits.is_empty());
 
     let _ = std::fs::remove_dir_all(&dir);
 }

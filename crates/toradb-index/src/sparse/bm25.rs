@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use toradb_core::{CandidateSet, DocId};
 
-const K1: f32 = 1.2;
-const B: f32 = 0.75;
+pub(crate) const K1: f32 = 1.2;
+pub(crate) const B: f32 = 0.75;
 
 #[derive(Debug, Default)]
 pub struct Bm25Index {

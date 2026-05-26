@@ -55,6 +55,12 @@ fn msmarco_segment_only_search_warm_cache() {
         second <= first.saturating_mul(3),
         "warm search should not be much slower than first"
     );
+    if std::env::var("TORADB_MSMARCO_PERF_STRICT").is_ok() {
+        assert!(
+            second.as_secs() < 5,
+            "warm msmarco search should be under 5s with TORADB_MSMARCO_PERF_STRICT"
+        );
+    }
 
     let hit_ids: Vec<u64> = batch
         .candidates

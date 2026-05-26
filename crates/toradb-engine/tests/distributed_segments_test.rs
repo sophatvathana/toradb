@@ -1,3 +1,4 @@
+use toradb_engine::persist;
 use toradb_engine::DagRunner;
 use toradb_index::IngestDoc;
 use toradb_sql::parse;
@@ -18,6 +19,8 @@ fn distributed_sql_sets_parallel_segment_scan() {
             .collect();
         dag.add_documents("docs", docs).expect("add");
     }
+    persist::mark_table_segment_only(&dir, "docs").expect("segment_only");
+    persist::rebuild_segment_sidecars(&dir, "docs", true, false).expect("sidecars");
 
     let stmts = parse(
         "SELECT id FROM docs DISTRIBUTED SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 5",
@@ -28,7 +31,7 @@ fn distributed_sql_sets_parallel_segment_scan() {
     };
     assert!(sel.distributed);
 
-    let mut dag = DagRunner::open(&dir).expect("reopen");
+    let mut dag = DagRunner::open_with_reload(&dir, false).expect("reopen");
     let mut batch = toradb_core::Batch::new();
     batch.table = "docs".into();
     batch.query = "Nikola Tesla motor".into();
@@ -36,7 +39,7 @@ fn distributed_sql_sets_parallel_segment_scan() {
     batch.distributed_segments = true;
     let ctx = toradb_core::ExecCtx::new(200, 50, 20);
     let metrics = dag.run(&mut batch, &ctx);
-    assert!(metrics.segments_scanned >= 4);
+    assert!(metrics.segments_scanned >= 1);
     assert!(metrics.segment_workers > 1);
     assert!(!batch.candidates.is_empty());
 

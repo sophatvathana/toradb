@@ -23,7 +23,9 @@ Typical output includes:
 |-----------|---------|
 | Parquet segments | Columnar document storage per flush |
 | WAL | Replay safety for recent writes |
-| `bm25` sidecar | Sparse lexical index |
+| `bm25` sidecar | Sparse lexical index (TBM2 legacy + TBM3 mmap-friendly) |
+| `{seg}.bm25.lex.bin` | Per-segment term lexicon for query pruning |
+| `bm25.route.bin` | Table-level term → segment routing index |
 | `hnsw` sidecar | In-memory-style dense graph index |
 | `diskann` sidecar | On-disk ANN graph for large embedding tables |
 | Materialized views | Cached search/analytics results (see [SQL materialized views](/api-reference/sql/materialized-views)) |
@@ -34,6 +36,18 @@ Typical output includes:
 2. **Flush** — segments are written as Parquet under the table directory.
 3. **Reindex** — rebuild a specific index type (`BM25`, `HNSW`, `DISKANN`) after bulk loads or schema changes.
 4. **Compact** — merge small segments to reduce file count (`COMPACT TABLE`; see [Reindex and compact](/guides/reindex-compact)).
+
+## Segment-only bulk ingest
+
+Large tables use `index_mode: segment_only` in `manifest.json`: per-segment `*.bm25.v2.bin` (TBM3) and lexicons are built at finish; optional `query_mode: routed` uses `bm25.route.bin` to skip irrelevant segments at query time.
+
+Environment variables for the demo and CLI:
+
+| Variable | Purpose |
+|----------|---------|
+| `TORADB_CACHE_INDEX_BYTES` | LRU budget for decoded segment BM25 / mmap blobs (default 8GB in `demo/run.sh`) |
+| `TORADB_WARMUP_ON_START` | Background search warmup after API start (`1` in demo) |
+| `TORADB_INGEST_THREADS` | Parallelism for index build |
 
 <Tip>
   Run `examples/full_example.py` once to populate `examples/_demo_db`, then use `DESCRIBE` on each table to see real sidecar names.

@@ -81,6 +81,7 @@ export TORADB_HOST="${TORADB_HOST:-127.0.0.1}"
 export TORADB_PORT="${TORADB_PORT:-8787}"
 # ~45 segment BM25 sidecars @ ~130MB each; default 256MB cache causes constant eviction.
 export TORADB_CACHE_INDEX_BYTES="${TORADB_CACHE_INDEX_BYTES:-8589934592}"
+export TORADB_WARMUP_ON_START="${TORADB_WARMUP_ON_START:-1}"
 
 cleanup() {
   [[ -n "${API_PID:-}" ]] && kill "$API_PID" 2>/dev/null || true

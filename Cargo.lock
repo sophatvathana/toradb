@@ -1679,6 +1679,7 @@ dependencies = [
 name = "toradb-index"
 version = "0.1.0"
 dependencies = [
+ "memmap2",
  "rkyv",
  "serde",
  "toradb-core",

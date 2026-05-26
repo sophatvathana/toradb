@@ -13,6 +13,20 @@ pub enum IndexMode {
     SegmentOnly,
 }
 
+/// How sparse queries choose segments at runtime.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryMode {
+    /// Scan every segment BM25 sidecar (legacy fan-out).
+    #[default]
+    SegmentFanout,
+    /// Use `indexes/bm25.route.bin` to skip segments with no query-term overlap.
+    Routed,
+}
+
+/// Tables with at least this many segments default to `QueryMode::Routed` after index build.
+pub const ROUTED_QUERY_MIN_SEGMENTS: u32 = 8;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SegmentIdRange {
     pub file: String,
@@ -34,6 +48,8 @@ pub struct TableManifestFile {
     pub index_mode: IndexMode,
     #[serde(default)]
     pub segment_id_ranges: Vec<SegmentIdRange>,
+    #[serde(default)]
+    pub query_mode: QueryMode,
 }
 
 impl Default for TableManifestFile {
@@ -45,6 +61,7 @@ impl Default for TableManifestFile {
             compression: None,
             index_mode: IndexMode::Merged,
             segment_id_ranges: Vec::new(),
+            query_mode: QueryMode::default(),
         }
     }
 }

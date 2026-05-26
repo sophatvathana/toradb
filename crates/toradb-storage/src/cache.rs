@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use memmap2::Mmap;
+use toradb_core::CandidateSet;
 use toradb_index::sparse::bm25::Bm25Snapshot;
+use toradb_index::sparse::bm25_tbm3::Bm25Tbm3View;
 
 use crate::columnar::ColumnarDoc;
 use crate::numa::{NumaConfig, prefetch_mmap_sequential};
@@ -171,13 +173,41 @@ impl IndexBlobCache {
     }
 }
 
-/// LRU of decoded per-segment BM25 snapshots (thread-safe for parallel segment scans).
+/// Cached per-segment BM25: mmap TBM3 (preferred) or decoded TBM2 snapshot.
+#[derive(Debug)]
+pub enum CachedBm25Segment {
+    Snapshot(Arc<Bm25Snapshot>),
+    Tbm3(Arc<Mmap>),
+}
+
+impl CachedBm25Segment {
+    pub fn search(&self, query: &str, k: usize) -> Result<CandidateSet, String> {
+        match self {
+            Self::Snapshot(s) => Ok(s.search(query, k)),
+            Self::Tbm3(m) => {
+                let view = Bm25Tbm3View::from_mmap(m)?;
+                Ok(view.search(query, k))
+            }
+        }
+    }
+
+    fn entry_bytes(path: &Path, entry: &Self) -> usize {
+        std::fs::metadata(path)
+            .map(|m| m.len() as usize)
+            .unwrap_or_else(|_| match entry {
+                Self::Snapshot(s) => s.num_docs as usize * 64 + 4096,
+                Self::Tbm3(_) => 64 * 1024 * 1024,
+            })
+    }
+}
+
+/// LRU of per-segment BM25 indexes (thread-safe for parallel segment scans).
 #[derive(Debug)]
 pub struct SegmentBm25Cache {
     byte_budget: usize,
     bytes_used: usize,
     order: VecDeque<PathBuf>,
-    map: HashMap<PathBuf, Arc<Bm25Snapshot>>,
+    map: HashMap<PathBuf, Arc<CachedBm25Segment>>,
     pub stats: CacheHierarchy,
 }
 
@@ -192,24 +222,13 @@ impl SegmentBm25Cache {
         }
     }
 
-    fn entry_bytes(path: &Path, snap: &Bm25Snapshot) -> usize {
-        std::fs::metadata(path)
-            .map(|m| m.len() as usize)
-            .unwrap_or_else(|_| snap.num_docs as usize * 64 + 4096)
-            .max(snap.num_docs as usize * 64 + 4096)
+    pub fn get(&self, path: &Path) -> Option<Arc<CachedBm25Segment>> {
+        self.map.get(&path.to_path_buf()).cloned()
     }
 
-    pub fn get(&self, path: &Path) -> Option<Arc<Bm25Snapshot>> {
-        let key = path.to_path_buf();
-        if self.map.contains_key(&key) {
-            return self.map.get(&key).cloned();
-        }
-        None
-    }
-
-    pub fn get_or_insert<F>(&mut self, path: &Path, load: F) -> Result<Arc<Bm25Snapshot>, String>
+    pub fn get_or_insert<F>(&mut self, path: &Path, load: F) -> Result<Arc<CachedBm25Segment>, String>
     where
-        F: FnOnce() -> Result<Bm25Snapshot, String>,
+        F: FnOnce() -> Result<CachedBm25Segment, String>,
     {
         let key = path.to_path_buf();
         if let Some(hit) = self.map.get(&key).cloned() {
@@ -218,28 +237,28 @@ impl SegmentBm25Cache {
             return Ok(hit);
         }
         self.stats.misses += 1;
-        let snap = load()?;
-        let size = Self::entry_bytes(path, &snap);
+        let entry = load()?;
+        let size = CachedBm25Segment::entry_bytes(path, &entry);
         if self.map.contains_key(&key) {
             if let Some(old) = self.map.remove(&key) {
                 self.bytes_used = self
                     .bytes_used
-                    .saturating_sub(Self::entry_bytes(&key, &old));
+                    .saturating_sub(CachedBm25Segment::entry_bytes(&key, &old));
             }
             self.order.retain(|p| p != &key);
         }
         while self.bytes_used + size > self.byte_budget && !self.order.is_empty() {
             if let Some(old_key) = self.order.pop_front() {
                 if let Some(old) = self.map.remove(&old_key) {
-                    self.bytes_used = self
-                        .bytes_used
-                        .saturating_sub(Self::entry_bytes(&old_key, &old));
+                    self.bytes_used = self.bytes_used.saturating_sub(
+                        CachedBm25Segment::entry_bytes(&old_key, &old),
+                    );
                 }
             }
         }
         self.bytes_used += size;
         self.order.push_back(key.clone());
-        let arc = Arc::new(snap);
+        let arc = Arc::new(entry);
         self.map.insert(key, Arc::clone(&arc));
         Ok(arc)
     }

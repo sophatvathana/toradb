@@ -38,6 +38,14 @@ fn bulk_finish_segment_only_skips_merged_bm25() {
     assert!(
         toradb_engine::persist::table_has_segment_bm25_sidecars(&dir, "docs").expect("check")
     );
+    assert!(
+        dir.join("docs/indexes/seg_00001.bm25.v2.bin").exists(),
+        "TBM3 sidecar"
+    );
+    assert!(
+        dir.join("docs/indexes/seg_00001.bm25.lex.bin").exists(),
+        "lexicon sidecar"
+    );
 
     let mut dag2 = DagRunner::open_with_reload(&dir, true).expect("reopen");
     let mut batch = toradb_core::Batch::new();
