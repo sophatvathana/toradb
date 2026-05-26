@@ -6,7 +6,6 @@ use rayon::prelude::*;
 use toradb_index::dense::{diskann_codec, hnsw_codec, quant_codec, vector_codec};
 use toradb_index::sparse::bm25_codec;
 use toradb_core::CandidateSet;
-use toradb_index::sparse::bm25::Bm25Index;
 use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
 use toradb_storage::columnar::{
     parquet_row_count, read_segment, read_segment_id_bounds, read_segment_matching_ids,
@@ -455,6 +454,68 @@ pub fn mark_table_segment_only(base: &Path, table: &str) -> Result<(), String> {
     manifest.save(&path)
 }
 
+/// Resolve per-segment BM25 sidecar paths in manifest order (one manifest read per query).
+pub fn list_segment_bm25_bins(base: &Path, table: &str) -> Result<Vec<Option<PathBuf>>, String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(Vec::new());
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    Ok(manifest
+        .segments
+        .iter()
+        .map(|seg| {
+            let v2 = segment_bm25_v2_bin_path(base, table, seg);
+            if v2.exists() {
+                return Some(v2);
+            }
+            let bin = segment_bm25_bin_path(base, table, seg);
+            if bin.exists() {
+                Some(bin)
+            } else {
+                None
+            }
+        })
+        .collect())
+}
+
+/// BM25 search against one on-disk segment sidecar path.
+pub fn search_segment_bm25_at_path(
+    bin_path: &Path,
+    query: &str,
+    k: usize,
+    caches: Option<&StorageCaches>,
+) -> Result<CandidateSet, String> {
+    if !bin_path.exists() {
+        return Ok(CandidateSet::default());
+    }
+    if let Some(caches) = caches {
+        if let Ok(guard) = caches
+            .segment_bm25
+            .read()
+            .map_err(|_| "segment_bm25 cache lock poisoned".to_string())
+        {
+            if let Some(snap) = guard.get(bin_path) {
+                return Ok(snap.search(query, k));
+            }
+        }
+        let snap = {
+            let mut guard = caches
+                .segment_bm25
+                .write()
+                .map_err(|_| "segment_bm25 cache lock poisoned".to_string())?;
+            guard.get_or_insert(bin_path, || {
+                let mmap = get_or_mmap(bin_path, None)?;
+                bm25_codec::decode_snapshot(mmap.as_ref())
+            })?
+        };
+        return Ok(snap.search(query, k));
+    }
+    let mmap = get_or_mmap(bin_path, None)?;
+    let snap = bm25_codec::decode_snapshot(mmap.as_ref())?;
+    Ok(snap.search(query, k))
+}
+
 /// BM25 search against one segment sidecar (mmap + decoded index LRU when `caches` is set).
 pub fn search_segment_bm25_sidecar(
     base: &Path,
@@ -472,33 +533,13 @@ pub fn search_segment_bm25_sidecar(
     let Some(seg) = manifest.segments.get(segment_index as usize) else {
         return Ok(CandidateSet::default());
     };
-    let bin_path = segment_bm25_v2_bin_path(base, table, seg);
-    let bin_path = if bin_path.exists() {
-        bin_path
+    let v2 = segment_bm25_v2_bin_path(base, table, seg);
+    let bin_path = if v2.exists() {
+        v2
     } else {
         segment_bm25_bin_path(base, table, seg)
     };
-    if !bin_path.exists() {
-        return Ok(CandidateSet::default());
-    }
-    if let Some(caches) = caches {
-        let index = {
-            let mut guard = caches
-                .segment_bm25
-                .lock()
-                .map_err(|_| "segment_bm25 cache lock poisoned".to_string())?;
-            guard.get_or_insert(&bin_path, || {
-                let snap = load_segment_bm25_sidecar(base, table, seg, None)?
-                    .ok_or_else(|| format!("missing bm25 sidecar for {seg}"))?;
-                Ok(Bm25Index::from_snapshot(snap))
-            })?
-        };
-        return Ok(index.search(query, k));
-    }
-    let Some(snap) = load_segment_bm25_sidecar(base, table, seg, None)? else {
-        return Ok(CandidateSet::default());
-    };
-    Ok(Bm25Index::from_snapshot(snap).search(query, k))
+    search_segment_bm25_at_path(&bin_path, query, k, caches)
 }
 
 /// True when merged BM25 is loaded in memory for this table (skip redundant segment fan-out).

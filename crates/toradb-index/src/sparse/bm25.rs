@@ -44,30 +44,15 @@ impl Bm25Index {
     }
 
     pub fn search(&self, query: &str, k: usize) -> CandidateSet {
-        let mut scores: HashMap<DocId, f32> = HashMap::new();
-        let n = self.num_docs.max(1) as f32;
-        for term in tokenize(query) {
-            let Some(postings) = self.postings.get(&term) else {
-                continue;
-            };
-            let df = *self.doc_freq.get(&term).unwrap_or(&0) as f32;
-            let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
-            for &(doc_id, tf) in postings {
-                let dl = *self.doc_len.get(&doc_id).unwrap_or(&0) as f32;
-                let tf = tf as f32;
-                let denom = tf + K1 * (1.0 - B + B * dl / self.avg_dl.max(1.0));
-                let score = idf * (tf * (K1 + 1.0)) / denom;
-                *scores.entry(doc_id).or_default() += score;
-            }
-        }
-        let mut ranked: Vec<(DocId, f32)> = scores.into_iter().collect();
-        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        ranked.truncate(k);
-        let mut out = CandidateSet::with_capacity(ranked.len());
-        for (id, score) in ranked {
-            out.push(id, score);
-        }
-        out
+        bm25_search(
+            &self.postings,
+            &self.doc_len,
+            &self.doc_freq,
+            self.num_docs,
+            self.avg_dl,
+            query,
+            k,
+        )
     }
 
     pub fn snapshot(&self) -> Bm25Snapshot {
@@ -101,6 +86,18 @@ pub struct Bm25Snapshot {
 }
 
 impl Bm25Snapshot {
+    pub fn search(&self, query: &str, k: usize) -> CandidateSet {
+        bm25_search(
+            &self.postings,
+            &self.doc_len,
+            &self.doc_freq,
+            self.num_docs,
+            self.avg_dl,
+            query,
+            k,
+        )
+    }
+
     /// Build a snapshot for a disjoint document set (e.g. one Parquet segment).
     pub fn from_documents(docs: impl IntoIterator<Item = (DocId, impl AsRef<str>)>) -> Self {
         let mut index = Bm25Index::default();
@@ -151,6 +148,41 @@ impl Bm25Snapshot {
         }
         snaps.pop()
     }
+}
+
+fn bm25_search(
+    postings: &HashMap<String, Vec<(DocId, u32)>>,
+    doc_len: &HashMap<DocId, u32>,
+    doc_freq: &HashMap<String, u32>,
+    num_docs: u32,
+    avg_dl: f32,
+    query: &str,
+    k: usize,
+) -> CandidateSet {
+    let mut scores: HashMap<DocId, f32> = HashMap::new();
+    let n = num_docs.max(1) as f32;
+    for term in tokenize(query) {
+        let Some(posts) = postings.get(&term) else {
+            continue;
+        };
+        let df = *doc_freq.get(&term).unwrap_or(&0) as f32;
+        let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
+        for &(doc_id, tf) in posts {
+            let dl = *doc_len.get(&doc_id).unwrap_or(&0) as f32;
+            let tf = tf as f32;
+            let denom = tf + K1 * (1.0 - B + B * dl / avg_dl.max(1.0));
+            let score = idf * (tf * (K1 + 1.0)) / denom;
+            *scores.entry(doc_id).or_default() += score;
+        }
+    }
+    let mut ranked: Vec<(DocId, f32)> = scores.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.truncate(k);
+    let mut out = CandidateSet::with_capacity(ranked.len());
+    for (id, score) in ranked {
+        out.push(id, score);
+    }
+    out
 }
 
 fn is_khmer(c: char) -> bool {

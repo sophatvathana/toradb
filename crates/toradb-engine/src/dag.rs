@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use toradb_core::{Batch, DocId, ExecCtx, IngestOptions, QueryMetrics};
+use toradb_core::{Batch, CandidateSet, DocId, ExecCtx, IngestOptions, QueryMetrics};
 use toradb_index::RetrievalRuntime;
 use toradb_storage::columnar::IndexMode;
 use toradb_storage::SegmentManager;
@@ -490,19 +491,34 @@ impl DagRunner {
                 let use_disk_segments = segment_only;
                 let seg_k = segment_bm25_per_segment_k(ctx);
                 let caches = &self.caches;
+                let seg_bins: Arc<Vec<Option<PathBuf>>> =
+                    if use_disk_segments {
+                        self.db_path
+                            .as_ref()
+                            .map(|p| {
+                                persist::list_segment_bm25_bins(p.as_path(), &table)
+                                    .unwrap_or_default()
+                            })
+                            .map(Arc::new)
+                            .unwrap_or_else(|| Arc::new(Vec::new()))
+                    } else {
+                        Arc::new(Vec::new())
+                    };
                 let seg_merged = scheduler.run_for_segments(num_segments, parallel, |seg| {
                     if use_disk_segments {
-                        if let Some(ref path) = self.db_path {
-                            return persist::search_segment_bm25_sidecar(
-                                path.as_path(),
-                                &table,
-                                seg,
+                        if let Some(bin_path) = seg_bins
+                            .get(seg as usize)
+                            .and_then(|p| p.as_ref())
+                        {
+                            return persist::search_segment_bm25_at_path(
+                                bin_path,
                                 &query,
                                 seg_k,
                                 Some(caches),
                             )
                             .unwrap_or_default();
                         }
+                        return CandidateSet::default();
                     }
                     self.retrieval
                         .segment_candidates(&table, seg, &query, ctx)
