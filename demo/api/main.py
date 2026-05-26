@@ -6,19 +6,21 @@ Environment:
   TORADB_CORS      Comma-separated origins (default: *)
   TORADB_HOST      Bind host (default: 127.0.0.1)
   TORADB_PORT      Bind port (default: 8787)
+  TORADB_DEBUG     Set to 1/true/yes to print bottleneck timings to stderr
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sys
 import threading
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +33,52 @@ DB_PATH = Path(os.environ.get("TORADB_DB_PATH", str(DEFAULT_DB))).resolve()
 DOC_CACHE: dict[tuple[str, int], dict[str, Any]] = {}
 MAX_DOC_CACHE = 50_000
 _APP_DB: Any = None
+_INIT_LOCK = threading.Lock()
+
+_DEBUG_LOG = logging.getLogger("toradb.demo")
+if not _DEBUG_LOG.handlers:
+    _h = logging.StreamHandler(sys.stderr)
+    _h.setFormatter(logging.Formatter("[toradb-demo] %(message)s"))
+    _DEBUG_LOG.addHandler(_h)
+    _DEBUG_LOG.propagate = False
+
+
+def _debug_enabled() -> bool:
+    return os.environ.get("TORADB_DEBUG", "").lower() in ("1", "true", "yes")
+
+
+def _debug(msg: str, **fields: Any) -> None:
+    if not _debug_enabled():
+        return
+    if fields:
+        extra = " ".join(f"{k}={v}" for k, v in fields.items())
+        _DEBUG_LOG.info("%s %s", msg, extra)
+    else:
+        _DEBUG_LOG.info("%s", msg)
+
+
+@contextmanager
+def _debug_span(label: str, **fields: Any) -> Iterator[None]:
+    if not _debug_enabled():
+        yield
+        return
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        ms = (time.perf_counter() - t0) * 1000
+        _debug(f"{label}", ms=f"{ms:.2f}", **fields)
+
+
+def _debug_env_snapshot() -> dict[str, str]:
+    keys = (
+        "TORADB_DB_PATH",
+        "TORADB_CACHE_INDEX_BYTES",
+        "TORADB_CACHE_SEGMENT_ENTRIES",
+        "TORADB_WARMUP_ON_START",
+        "TORADB_LIGHTWEIGHT",
+    )
+    return {k: os.environ.get(k, "") for k in keys if os.environ.get(k)}
 
 
 def _ensure_toradb() -> None:
@@ -75,10 +123,67 @@ def _tables_on_disk() -> list[str]:
     )
 
 
+def _read_table_manifest(table: str) -> dict[str, Any] | None:
+    path = DB_PATH / table / "manifest.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _is_segment_only_table(table: str) -> bool:
+    manifest = _read_table_manifest(table)
+    return bool(manifest and manifest.get("index_mode") == "segment_only")
+
+
+def _bm25_sidecar_is_tbm3(path: Path) -> bool:
+    try:
+        with path.open("rb") as f:
+            return f.read(4) == b"TBM3"
+    except OSError:
+        return False
+
+
+def _indexes_need_rebuild() -> list[str]:
+    """Tables with missing or non-TBM3 segment BM25 sidecars."""
+    need: list[str] = []
+    for table in _tables_on_disk():
+        indexes = DB_PATH / table / "indexes"
+        if not indexes.is_dir():
+            continue
+        bins = list(indexes.glob("seg_*.bm25.bin"))
+        if not bins:
+            continue
+        lex_count = len(list(indexes.glob("*.bm25.lex.bin")))
+        tbm3_count = sum(1 for p in bins if _bm25_sidecar_is_tbm3(p))
+        if tbm3_count < len(bins) or lex_count < len(bins):
+            need.append(table)
+    return need
+
+
+def _manifest_row_count(table: str) -> int | None:
+    manifest = _read_table_manifest(table)
+    if not manifest:
+        return None
+    ranges = manifest.get("segment_id_ranges") or []
+    if ranges:
+        return sum(
+            int(r["max_id"]) - int(r["min_id"]) + 1
+            for r in ranges
+            if "min_id" in r and "max_id" in r
+        )
+    return None
+
+
 def _use_lightweight_tables() -> bool:
     if os.environ.get("TORADB_LIGHTWEIGHT", "").lower() in ("1", "true", "yes"):
         return True
-    return bool(_scan_indexing_tables())
+    if _scan_indexing_tables():
+        return True
+    tables = _tables_on_disk()
+    return bool(tables) and all(_is_segment_only_table(t) for t in tables)
 
 
 def _open_db(*, reload: bool) -> Any:
@@ -93,43 +198,59 @@ def _open_db(*, reload: bool) -> Any:
                 "hint": "Run: python examples/full_example.py",
             },
         )
-    return toradb.local(str(DB_PATH), reload=reload)
+    with _debug_span("toradb.local", reload=reload, path=str(DB_PATH)):
+        return toradb.local(str(DB_PATH), reload=reload)
 
 
 def _init_app_db() -> None:
     global _APP_DB
-    if _scan_indexing_tables():
-        _APP_DB = None
-        return
-    _APP_DB = _open_db(reload=False)
+    with _INIT_LOCK:
+        if _APP_DB is not None:
+            _debug("init_app_db", status="already_open")
+            return
+        if _scan_indexing_tables():
+            _APP_DB = None
+            _debug("init_app_db", status="skipped_index_building")
+            return
+        with _debug_span("init_app_db"):
+            _APP_DB = _open_db(reload=False)
 
 
 def _warmup_searchable_tables() -> None:
     if os.environ.get("TORADB_WARMUP_ON_START", "").lower() not in ("1", "true", "yes"):
         return
+    _debug("warmup_start", env=_debug_env_snapshot())
     indexing = set(_scan_indexing_tables())
     try:
-        db = _db()
+        with _debug_span("warmup_open_db"):
+            db = _open_db(reload=False)
     except HTTPException:
+        _debug("warmup_open_db", status="failed")
         return
     for name in _tables_on_disk():
         if name in indexing:
             continue
         try:
-            db.table(name).search("warmup", top_k=1)
-        except Exception:
-            pass
+            with _debug_span("warmup_search", table=name):
+                db.table(name).search("warmup", top_k=1)
+        except Exception as exc:
+            _debug("warmup_search", table=name, error=str(exc))
+    _debug("warmup_done")
 
 
 def _db(*, reload: bool = False) -> Any:
     global _APP_DB
     if reload:
-        _APP_DB = _open_db(reload=True)
+        with _debug_span("_db", mode="reload"):
+            _APP_DB = _open_db(reload=True)
         return _APP_DB
     if _APP_DB is None:
-        _init_app_db()
+        with _debug_span("_db", mode="init_app_db"):
+            _init_app_db()
     if _APP_DB is None:
+        _debug("_db", mode="ephemeral_open")
         return _open_db(reload=False)
+    _debug("_db", mode="cached")
     return _APP_DB
 
 
@@ -214,8 +335,24 @@ def _sql_result_to_table(frame: Any) -> tuple[list[str], list[dict[str, Any]]]:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     _ensure_toradb()
-    _init_app_db()
-    threading.Thread(target=_warmup_searchable_tables, daemon=True).start()
+    if _debug_enabled():
+        _DEBUG_LOG.setLevel(logging.INFO)
+        _debug("api_start", env=_debug_env_snapshot(), db_path=str(DB_PATH))
+    rebuild = _indexes_need_rebuild()
+    if rebuild:
+        _DEBUG_LOG.warning(
+            "indexes need rebuild (TBM3 .bm25.bin + .bm25.lex.bin): %s — "
+            "run: cargo build -p toradb-cli --release && "
+            "./target/release/toradb-ingest resume --db %s --table %s",
+            ", ".join(rebuild),
+            DB_PATH,
+            rebuild[0],
+        )
+    if os.environ.get("TORADB_WARMUP_ON_START", "").lower() in ("1", "true", "yes"):
+        # Separate process: toradb.local()/search hold the GIL and would block /api/health.
+        import multiprocessing
+
+        multiprocessing.Process(target=_warmup_searchable_tables, daemon=True).start()
     yield
     _invalidate_app_db()
 
@@ -264,6 +401,7 @@ class SearchResponse(BaseModel):
     search_ms: float = 0.0
     fetch_ms: float = 0.0
     total_ms: float = 0.0
+    debug: str | None = None
 
 
 class TableInfo(BaseModel):
@@ -296,6 +434,7 @@ class IndexStatusResponse(BaseModel):
 
 @app.get("/api/health", response_model=HealthResponse)
 def health() -> HealthResponse:
+    t0 = time.perf_counter()
     toradb_ok = True
     try:
         _ensure_toradb()
@@ -303,18 +442,17 @@ def health() -> HealthResponse:
         toradb_ok = False
 
     exists = DB_PATH.is_dir()
-    indexing_tables = _scan_indexing_tables() if exists else []
-    tables: list[str] = _tables_on_disk() if exists else []
+    with _debug_span("health_scan_indexing"):
+        indexing_tables = _scan_indexing_tables() if exists else []
+    with _debug_span("health_tables_on_disk"):
+        tables: list[str] = _tables_on_disk() if exists else []
     hint = None
     if not exists:
         hint = "Run: python examples/full_example.py"
-    elif toradb_ok and not indexing_tables:
-        try:
-            tables = _db().list_tables()
-        except Exception:
-            hint = "Database path exists but could not be opened."
     elif indexing_tables:
         hint = "Index build in progress — search is disabled until finish completes."
+    elif toradb_ok and exists and not tables:
+        hint = "Database path exists but no tables were found."
 
     status: Literal["ok", "degraded"] = (
         "ok" if exists and toradb_ok and (tables or indexing_tables) else "degraded"
@@ -323,11 +461,13 @@ def health() -> HealthResponse:
     cache_misses: int | None = None
     if toradb_ok and _APP_DB is not None and not indexing_tables:
         try:
-            hits, misses = _APP_DB.cache_stats()
+            with _debug_span("health_cache_stats"):
+                hits, misses = _APP_DB.cache_stats()
             cache_hits = int(hits)
             cache_misses = int(misses)
         except Exception:
             pass
+    _debug("health", total_ms=f"{(time.perf_counter() - t0) * 1000:.2f}", app_db_open=_APP_DB is not None)
     return HealthResponse(
         status=status,
         db_path=str(DB_PATH),
@@ -365,12 +505,26 @@ def index_status(table: str = Query(..., min_length=1)) -> IndexStatusResponse:
 
 @app.get("/api/tables", response_model=list[TableInfo])
 def list_tables() -> list[TableInfo]:
+    t0 = time.perf_counter()
     if _use_lightweight_tables():
-        return [
-            TableInfo(name=name, rows=0, describe=None) for name in _tables_on_disk()
-        ]
+        names = _tables_on_disk()
+        out = []
+        for name in names:
+            rows = _manifest_row_count(name) or 0
+            describe = None
+            if _debug_enabled():
+                manifest = _read_table_manifest(name) or {}
+                describe = (
+                    f"index_mode={manifest.get('index_mode', '?')} "
+                    f"query_mode={manifest.get('query_mode', '?')} "
+                    f"segments={len(manifest.get('segments') or [])}"
+                )
+            out.append(TableInfo(name=name, rows=rows, describe=describe))
+        _debug("list_tables", mode="lightweight", count=len(out), ms=f"{(time.perf_counter() - t0) * 1000:.2f}")
+        return out
 
-    db = _db()
+    with _debug_span("list_tables_open_db"):
+        db = _db()
     row_counts: dict[str, int] = {}
     try:
         agg = db.sql("SHOW TABLES").to_pandas()
@@ -392,6 +546,7 @@ def list_tables() -> list[TableInfo]:
         except Exception:
             describe = None
         out.append(TableInfo(name=name, rows=rows, describe=describe))
+    _debug("list_tables", mode="full", count=len(out), ms=f"{(time.perf_counter() - t0) * 1000:.2f}")
     return out
 
 
@@ -417,8 +572,9 @@ def sample_queries(table_name: str) -> dict[str, list[str]]:
 @app.post("/api/db/reload")
 def reload_database() -> dict[str, str]:
     """Reload on-disk tables into the cached Database (after index build)."""
-    _invalidate_app_db()
-    _init_app_db()
+    with _debug_span("db_reload"):
+        _invalidate_app_db()
+        _init_app_db()
     return {"status": "ok", "path": str(DB_PATH)}
 
 
@@ -426,14 +582,18 @@ def reload_database() -> dict[str, str]:
 def search(req: SearchRequest) -> SearchResponse:
     _require_searchable(req.table)
     t_total = time.perf_counter()
+    timings: dict[str, float] = {}
 
     t_open = time.perf_counter()
     db = _db()
+    timings["db_ms"] = (time.perf_counter() - t_open) * 1000
     try:
+        t_table = time.perf_counter()
         table = db.table(req.table)
+        timings["table_ms"] = (time.perf_counter() - t_table) * 1000
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Table not found: {req.table}") from e
-    open_ms = (time.perf_counter() - t_open) * 1000
+    open_ms = timings["db_ms"] + timings.get("table_ms", 0.0)
 
     kwargs: dict[str, Any] = {
         "top_k": req.top_k,
@@ -451,24 +611,33 @@ def search(req: SearchRequest) -> SearchResponse:
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     search_ms = (time.perf_counter() - t_search) * 1000
+    timings["search_ms"] = search_ms
 
+    t_pandas = time.perf_counter()
     _, rows = _sql_result_to_table(results.to_pandas())
+    timings["to_pandas_ms"] = (time.perf_counter() - t_pandas) * 1000
     ids = [int(r["id"]) for r in rows]
     scores = [float(r["score"]) for r in rows]
 
     warm_cache: dict[int, dict[str, Any]] = {}
     missing_ids: list[int] = []
+    t_cache = time.perf_counter()
     for doc_id in ids:
         cached = _cache_get(req.table, doc_id)
         if cached:
             warm_cache[doc_id] = cached
         else:
             missing_ids.append(doc_id)
+    timings["doc_cache_lookup_ms"] = (time.perf_counter() - t_cache) * 1000
+    timings["doc_cache_hits"] = float(len(warm_cache))
+    timings["doc_cache_misses"] = float(len(missing_ids))
+
     t_fetch = time.perf_counter()
     fetched: dict[int, Any] = {}
     if missing_ids:
         fetched = db.fetch_documents(req.table, missing_ids)
     fetch_ms = (time.perf_counter() - t_fetch) * 1000
+    timings["fetch_ms"] = fetch_ms
     docs: dict[int, dict[str, Any]] = {}
     for doc_id in ids:
         if doc_id in warm_cache:
@@ -494,6 +663,7 @@ def search(req: SearchRequest) -> SearchResponse:
             )
         )
 
+    t_assemble = time.perf_counter()
     explain_text = None
     if req.explain:
         try:
@@ -501,13 +671,30 @@ def search(req: SearchRequest) -> SearchResponse:
         except Exception:
             explain_text = None
         try:
-            hits, misses = db.cache_stats()
-            cache_line = f"cache_hits={hits} cache_misses={misses}"
+            index_hits, index_misses = db.cache_stats()
+            cache_line = f"cache_hits={index_hits} cache_misses={index_misses}"
             explain_text = f"{explain_text}\n{cache_line}" if explain_text else cache_line
+            timings["index_cache_hits"] = float(index_hits)
+            timings["index_cache_misses"] = float(index_misses)
         except Exception:
             pass
+    timings["assemble_ms"] = (time.perf_counter() - t_assemble) * 1000
 
     total_ms = (time.perf_counter() - t_total) * 1000
+    timings["total_ms"] = total_ms
+    debug_line = (
+        " ".join(f"{k}={v:.2f}" if k.endswith("_ms") else f"{k}={int(v)}"
+                 for k, v in sorted(timings.items()))
+    )
+    _debug(
+        "search_bottleneck",
+        table=req.table,
+        query_len=len(req.query),
+        strategy=req.strategy or "default",
+        hits=len(hits),
+        **{k: (f"{v:.2f}" if k.endswith("_ms") else str(int(v))) for k, v in timings.items()},
+    )
+
     return SearchResponse(
         table=req.table,
         query=req.query,
@@ -519,18 +706,30 @@ def search(req: SearchRequest) -> SearchResponse:
         search_ms=round(search_ms, 2),
         fetch_ms=round(fetch_ms, 2),
         total_ms=round(total_ms, 2),
+        debug=debug_line if _debug_enabled() else None,
     )
 
 
 @app.post("/api/sql")
 def run_sql(req: SqlRequest) -> dict[str, Any]:
+    t_total = time.perf_counter()
+    t_db = time.perf_counter()
     db = _db()
+    db_ms = (time.perf_counter() - t_db) * 1000
     t0 = time.perf_counter()
     try:
         out = db.sql(req.query)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    latency_ms = (time.perf_counter() - t0) * 1000
+    sql_ms = (time.perf_counter() - t0) * 1000
+    latency_ms = (time.perf_counter() - t_total) * 1000
+    _debug(
+        "sql_bottleneck",
+        db_ms=f"{db_ms:.2f}",
+        sql_ms=f"{sql_ms:.2f}",
+        total_ms=f"{latency_ms:.2f}",
+        query_preview=req.query[:80],
+    )
 
     if hasattr(out, "to_pandas"):
         try:

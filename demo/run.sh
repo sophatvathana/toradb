@@ -81,6 +81,7 @@ export TORADB_HOST="${TORADB_HOST:-127.0.0.1}"
 export TORADB_PORT="${TORADB_PORT:-8787}"
 # ~45 segment BM25 sidecars @ ~130MB each; default 256MB cache causes constant eviction.
 export TORADB_CACHE_INDEX_BYTES="${TORADB_CACHE_INDEX_BYTES:-8589934592}"
+# Warmup runs in a subprocess after bind (see demo/api/main.py); hides ~20s first-search latency.
 export TORADB_WARMUP_ON_START="${TORADB_WARMUP_ON_START:-1}"
 
 cleanup() {
@@ -96,8 +97,10 @@ echo "    db:     $DB_PATH"
 API_PID=$!
 
 echo "==> Waiting for API..."
+# Large segment_only DBs can take 20–30s to open with a multi-GB index cache.
+READY_WAIT_SECS="${TORADB_API_READY_SECS:-90}"
 ready=0
-for _ in $(seq 1 30); do
+for _ in $(seq 1 $((READY_WAIT_SECS * 2))); do
   if curl -sf "http://${TORADB_HOST}:${TORADB_PORT}/api/health" >/dev/null 2>&1; then
     ready=1
     break
@@ -114,6 +117,10 @@ if [[ "$ready" -ne 1 ]]; then
   echo "error: API did not become ready on port ${TORADB_PORT}"
   kill "$API_PID" 2>/dev/null || true
   exit 1
+fi
+
+if [[ "${TORADB_WARMUP_ON_START}" == "1" ]]; then
+  echo "==> BM25 cache warmup running in background (first search faster after ~20s)"
 fi
 
 echo "==> Web http://127.0.0.1:5173"
