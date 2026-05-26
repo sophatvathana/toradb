@@ -100,6 +100,17 @@ db.begin_bulk_ingest("docs")
 db.finish_bulk_ingest("docs", compact=True)
 ```
 
+### `fetch_documents(table: str, ids: list[int]) -> dict[int, dict]`
+
+Load **text** and **metadata** for specific document ids. Uses the in-memory corpus when loaded; otherwise reads only the Parquet segments that can contain those ids (via `segment_id_ranges` in the table manifest). On disk, ToraDB maps contiguous ids to row offsets and uses Parquet row selection (plus optional page indexes) instead of scanning whole segments. Pairs with [`segment_only`](#) bulk ingest when search returns ids without loading the full table into RAM.
+
+```python
+results = db.table("passages").search("diabetes treatment", top_k=10)
+ids = [int(r["id"]) for r in results.to_pandas()["id"]]
+docs = db.fetch_documents("passages", ids)
+print(docs[ids[0]]["text"])
+```
+
 ### `index_build_status(table: str) -> dict | None`
 
 Read `{table}/indexes/build_status.json` without loading the full corpus. Returns `None` when no build is in progress and no status file exists.
