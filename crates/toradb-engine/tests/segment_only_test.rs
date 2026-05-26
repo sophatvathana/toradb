@@ -44,11 +44,31 @@ fn bulk_finish_segment_only_skips_merged_bm25() {
     batch.table = "docs".into();
     batch.query = "Nikola Tesla motor".into();
     batch.tier1_enable_sparse = true;
-    batch.distributed_segments = true;
-    // segment_only tables query via distributed segment sidecars when corpus is empty in RAM
+    // segment_only auto-enables parallel segment scan (no strategy required)
     let ctx = toradb_core::ExecCtx::new(20, 10, 10);
+    let t0 = std::time::Instant::now();
     dag2.run(&mut batch, &ctx);
+    let first = t0.elapsed();
     assert!(!batch.candidates.is_empty());
+
+    batch.candidates = toradb_core::CandidateSet::default();
+    let t1 = std::time::Instant::now();
+    dag2.run(&mut batch, &ctx);
+    let second = t1.elapsed();
+    assert!(!batch.candidates.is_empty());
+    assert!(
+        second <= first.saturating_mul(2),
+        "second query should hit BM25 cache (first {:?}, second {:?})",
+        first,
+        second
+    );
+
+    let manifest =
+        TableManifestFile::load(&TableManifestFile::path_for_table(&dir, "docs")).expect("manifest");
+    assert!(
+        !manifest.segment_id_ranges.is_empty(),
+        "finish should record segment id ranges"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
