@@ -20,7 +20,9 @@ impl Bm25Index {
         self.num_docs += 1;
         let mut tf_map: HashMap<String, u32> = HashMap::new();
         let mut len = 0u32;
-        for term in tokenize(text) {
+        let mut terms_buf = Vec::new();
+        tokenize_into(text, &mut terms_buf);
+        for term in terms_buf {
             len += 1;
             *tf_map.entry(term).or_default() += 1;
         }
@@ -121,6 +123,30 @@ impl Bm25Snapshot {
             0.0
         };
     }
+
+    /// Balanced tree merge of disjoint segment snapshots
+    pub fn merge_snapshots_tree(mut snaps: Vec<Bm25Snapshot>) -> Option<Bm25Snapshot> {
+        if snaps.is_empty() {
+            return None;
+        }
+        while snaps.len() > 1 {
+            let mut next = Vec::new();
+            let mut i = 0;
+            while i < snaps.len() {
+                if i + 1 < snaps.len() {
+                    let mut left = snaps[i].clone();
+                    left.merge(snaps[i + 1].clone());
+                    next.push(left);
+                    i += 2;
+                } else {
+                    next.push(snaps[i].clone());
+                    i += 1;
+                }
+            }
+            snaps = next;
+        }
+        snaps.pop()
+    }
 }
 
 fn is_khmer(c: char) -> bool {
@@ -143,45 +169,58 @@ fn script_of(c: char) -> Option<Script> {
     }
 }
 
-/// Tokenize for BM25. Khmer vowel marks are not alphanumeric in Unicode, so we group
-/// contiguous Khmer script into terms and split Latin words separately.
+#[inline]
+fn fold_char(c: char) -> char {
+    if c.is_ascii_uppercase() {
+        c.to_ascii_lowercase()
+    } else {
+        c
+    }
+}
+
+/// Tokenize for BM25 without allocating a lowercased copy of the full text.
 pub fn tokenize(text: &str) -> Vec<String> {
-    let lower = text.to_lowercase();
     let mut tokens = Vec::new();
+    tokenize_into(text, &mut tokens);
+    tokens
+}
+
+/// Append tokens from `text` into `out` (reuses allocation in `out` only).
+pub fn tokenize_into(text: &str, out: &mut Vec<String>) {
     let mut buf = String::new();
     let mut active: Option<Script> = None;
 
-    let flush = |buf: &mut String, tokens: &mut Vec<String>| {
+    let flush = |buf: &mut String, out: &mut Vec<String>| {
         if !buf.is_empty() {
-            tokens.push(buf.clone());
+            out.push(buf.clone());
             buf.clear();
         }
     };
 
-    for c in lower.chars() {
+    for c in text.chars() {
+        let c = fold_char(c);
         match script_of(c) {
             Some(script) => {
                 if active == Some(script) || active.is_none() {
                     active = Some(script);
                     buf.push(c);
                 } else {
-                    flush(&mut buf, &mut tokens);
+                    flush(&mut buf, out);
                     active = Some(script);
                     buf.push(c);
                 }
             }
             None if c.is_whitespace() => {
-                flush(&mut buf, &mut tokens);
+                flush(&mut buf, out);
                 active = None;
             }
             None => {
-                flush(&mut buf, &mut tokens);
+                flush(&mut buf, out);
                 active = None;
             }
         }
     }
-    flush(&mut buf, &mut tokens);
-    tokens
+    flush(&mut buf, out);
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use toradb_core::{CandidateSet, DocId};
+use toradb_core::{CandidateSet, DocId, IngestOptions};
 use toradb_simd::dot_f32;
 
 use crate::dense::hnsw_index::{should_use_hnsw, should_use_segment_hnsw, HnswIndex};
@@ -39,9 +39,39 @@ impl TableCorpus {
         self.vector_dim
     }
 
+    pub fn has_vectors(&self) -> bool {
+        if self.vector_dim.is_some() {
+            return true;
+        }
+        self.docs.values().any(|d| d.vector.is_some())
+    }
+
     pub fn add(&mut self, doc: IngestDoc, num_segments: u32) -> DocId {
+        self.add_with_options(doc, num_segments, IngestOptions::default())
+    }
+
+    pub fn add_with_options(
+        &mut self,
+        doc: IngestDoc,
+        num_segments: u32,
+        opts: IngestOptions,
+    ) -> DocId {
         let id = self.next_id;
         self.next_id += 1;
+        self.insert_at(id, doc, num_segments, opts);
+        id
+    }
+
+    pub fn insert_at(
+        &mut self,
+        id: DocId,
+        doc: IngestDoc,
+        num_segments: u32,
+        opts: IngestOptions,
+    ) {
+        if id >= self.next_id {
+            self.next_id = id + 1;
+        }
         let segment = (id % num_segments as u64) as u32;
         if let Some(ref v) = doc.vector {
             match self.vector_dim {
@@ -50,10 +80,14 @@ impl TableCorpus {
                 _ => {}
             }
         }
-        self.bm25.add_document(id, &doc.text);
-        if id > 0 {
-            self.graph.edges.push((id - 1, id));
-            self.graph.edges.push((id, id - 1));
+        if !opts.defer_bm25 {
+            self.bm25.add_document(id, &doc.text);
+        }
+        if !opts.defer_graph {
+            if id > 0 {
+                self.graph.edges.push((id - 1, id));
+                self.graph.edges.push((id, id - 1));
+            }
         }
         self.docs.insert(
             id,
@@ -64,7 +98,6 @@ impl TableCorpus {
                 segment,
             },
         );
-        id
     }
 
     pub fn bm25_search(&self, query: &str, k: usize) -> CandidateSet {
@@ -452,18 +485,27 @@ impl CorpusStore {
         self.table(table).map(|t| t.next_id()).unwrap_or(0)
     }
 
-    pub fn add_documents(&mut self, table: &str, docs: Vec<IngestDoc>, num_segments: u32) -> usize {
+    pub fn add_documents(
+        &mut self,
+        table: &str,
+        docs: Vec<IngestDoc>,
+        num_segments: u32,
+        opts: IngestOptions,
+    ) -> usize {
         let t = self.ensure_table(table);
         let mut n = 0;
         for doc in docs {
-            t.add(doc, num_segments);
+            t.add_with_options(doc, num_segments, opts);
             n += 1;
         }
-        if should_use_hnsw(t.docs.len()) {
+        let rebuild_dense = !opts.defer_dense_rebuild && t.has_vectors();
+        if rebuild_dense && should_use_hnsw(t.docs.len()) {
             t.rebuild_hnsw();
             t.rebuild_diskann();
         }
-        t.rebuild_segment_hnsw(num_segments);
+        if rebuild_dense {
+            t.rebuild_segment_hnsw(num_segments);
+        }
         n
     }
 
@@ -549,6 +591,24 @@ impl CorpusStore {
 
     pub fn insert_stored(&mut self, table: &str, id: DocId, doc: IngestDoc, num_segments: u32) {
         self.ensure_table(table).insert_stored(id, doc, num_segments);
+    }
+
+    /// Assign ids starting at `since_id` without scanning `docs_with_ids_since` on flush.
+    pub fn ingest_bulk_batch(
+        &mut self,
+        table: &str,
+        since_id: DocId,
+        docs: Vec<IngestDoc>,
+        num_segments: u32,
+        opts: IngestOptions,
+    ) -> usize {
+        let n = docs.len();
+        let t = self.ensure_table(table);
+        for (offset, doc) in docs.into_iter().enumerate() {
+            let id = since_id + offset as u64;
+            t.insert_at(id, doc, num_segments, opts);
+        }
+        n
     }
 
     pub fn rebuild_bm25(&mut self, table: &str) {

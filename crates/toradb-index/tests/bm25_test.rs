@@ -1,6 +1,6 @@
 //! BM25 ranking tests with English documents about Nikola Tesla.
 
-use toradb_core::{Batch, ExecCtx};
+use toradb_core::{Batch, ExecCtx, IngestOptions};
 use toradb_index::{IngestDoc, RetrievalRuntime};
 
 #[test]
@@ -21,6 +21,7 @@ fn bm25_ranks_matching_document_first() {
             },
         ],
         4,
+        IngestOptions::default(),
     );
     let mut batch = Batch::new();
     batch.table = "papers".into();

@@ -1,6 +1,6 @@
 //! Tier-1 budget tests with a Nikola Tesla themed corpus.
 
-use toradb_core::{Batch, ExecCtx};
+use toradb_core::{Batch, ExecCtx, IngestOptions};
 use toradb_index::{IngestDoc, RetrievalRuntime};
 
 #[test]
@@ -15,6 +15,7 @@ fn tier1_respects_budget() {
                 vector: None,
             }],
             4,
+            IngestOptions::default(),
         );
     }
     let mut batch = Batch::new();

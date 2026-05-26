@@ -1,9 +1,9 @@
-//! Compact on-disk BM25 snapshot format (magic `TBM1` + rkyv payload).
+//! BM25 sidecar on-disk format (`TBM2` + rkyv payload).
 
 use crate::index_blob;
 use crate::sparse::bm25::Bm25Snapshot;
 
-pub const BM25_MAGIC: &[u8; 4] = b"TBM1";
+pub const BM25_MAGIC: &[u8; 4] = b"TBM2";
 
 pub fn encode_snapshot(snap: &Bm25Snapshot) -> Result<Vec<u8>, String> {
     index_blob::encode(BM25_MAGIC, snap)
