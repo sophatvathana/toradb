@@ -25,7 +25,7 @@ fn checkpoint_trims_flush_log_when_manifest_matches() {
         }],
     )
     .expect("write");
-    append_flush(base, table, seg_name, 0, 1).expect("wal");
+    append_flush(base, table, seg_name, 0, 1, true).expect("wal");
 
     let mut manifest = TableManifestFile::default();
     manifest.push_segment(seg_name.to_string());

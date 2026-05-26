@@ -2,6 +2,17 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// How sparse indexes are stored and queried for this table.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexMode {
+    /// Merged `bm25.bin` loaded into memory at open.
+    #[default]
+    Merged,
+    /// Per-segment `*.bm25.bin` only; query fans out without merging postings into RAM.
+    SegmentOnly,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TableManifestFile {
     pub schema_version: u32,
@@ -12,6 +23,8 @@ pub struct TableManifestFile {
     /// Parquet compression for new segments (optional).
     #[serde(default)]
     pub compression: Option<toradb_core::CompressionConfig>,
+    #[serde(default)]
+    pub index_mode: IndexMode,
 }
 
 impl Default for TableManifestFile {
@@ -21,7 +34,14 @@ impl Default for TableManifestFile {
             segments: Vec::new(),
             segment_workers: None,
             compression: None,
+            index_mode: IndexMode::Merged,
         }
+    }
+}
+
+impl TableManifestFile {
+    pub fn set_index_mode(&mut self, mode: IndexMode) {
+        self.index_mode = mode;
     }
 }
 

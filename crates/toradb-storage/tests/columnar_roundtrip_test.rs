@@ -1,5 +1,7 @@
 use std::collections::HashMap;
-use toradb_storage::columnar::{read_segment, write_segment, ColumnarDoc, TableManifestFile};
+use toradb_storage::columnar::{
+    read_segment, read_segment_texts, write_segment, ColumnarDoc, TableManifestFile,
+};
 
 #[test]
 fn parquet_segment_roundtrip() {
@@ -28,6 +30,11 @@ fn parquet_segment_roundtrip() {
         ],
     )
     .expect("write");
+
+    let texts = read_segment_texts(&seg_path).expect("read texts");
+    assert_eq!(texts.len(), 2);
+    assert_eq!(texts[0].0, 0);
+    assert_eq!(texts[0].1, "Nikola Tesla alternating current motor");
 
     let docs = read_segment(&seg_path).expect("read");
     assert_eq!(docs.len(), 2);

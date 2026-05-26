@@ -95,13 +95,14 @@ pub fn truncate_compactions(base: &Path, table: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Append one flush record and fsync the log file.
+/// Append one flush record. When `sync` is true, fsync the log file.
 pub fn append_flush(
     base: &Path,
     table: &str,
     segment: &str,
     since_id: u64,
     doc_count: usize,
+    sync: bool,
 ) -> Result<(), String> {
     if doc_count == 0 {
         return Ok(());
@@ -122,8 +123,23 @@ pub fn append_flush(
         .open(&path)
         .map_err(|e| e.to_string())?;
     writeln!(file, "{line}").map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())?;
+    if sync {
+        file.sync_all().map_err(|e| e.to_string())?;
+    }
     Ok(())
+}
+
+/// Fsync the flush WAL after buffered bulk appends.
+pub fn sync_flush_log(base: &Path, table: &str) -> Result<(), String> {
+    let path = flush_log_path(base, table);
+    if !path.exists() {
+        return Ok(());
+    }
+    let file = OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())
 }
 
 /// Read all flush records in append order.

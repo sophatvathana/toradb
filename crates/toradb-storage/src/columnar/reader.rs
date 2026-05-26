@@ -12,6 +12,25 @@ pub fn read_segment(path: &Path) -> Result<Vec<ColumnarDoc>, String> {
     read_segment_with_compression(path, None)
 }
 
+pub fn parquet_row_count(path: &Path) -> Result<usize, String> {
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file).map_err(|e| e.to_string())?;
+    Ok(builder.metadata().file_metadata().num_rows() as usize)
+}
+
+pub fn read_segment_texts(path: &Path) -> Result<Vec<(u64, String)>, String> {
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file).map_err(|e| e.to_string())?;
+    let mut reader = builder.build().map_err(|e| e.to_string())?;
+
+    let mut rows = Vec::new();
+    for batch in reader.by_ref() {
+        let batch: RecordBatch = batch.map_err(|e| e.to_string())?;
+        rows.extend(batch_to_text_rows(&batch)?);
+    }
+    Ok(rows)
+}
+
 pub fn read_segment_with_compression(
     path: &Path,
     _compression: Option<&CompressionConfig>,
@@ -33,6 +52,27 @@ pub fn decode_segment_bytes(bytes: &[u8]) -> Result<Vec<ColumnarDoc>, String> {
     let path = dir.path().join("seg.parquet");
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
     read_segment(&path)
+}
+
+fn batch_to_text_rows(batch: &RecordBatch) -> Result<Vec<(u64, String)>, String> {
+    let ids = batch
+        .column_by_name("id")
+        .ok_or("missing id column")?
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or("id type")?;
+    let texts = batch
+        .column_by_name("text")
+        .ok_or("missing text column")?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or("text type")?;
+
+    let mut out = Vec::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        out.push((ids.value(row), texts.value(row).to_string()));
+    }
+    Ok(out)
 }
 
 fn batch_to_docs(batch: &RecordBatch) -> Result<Vec<ColumnarDoc>, String> {
