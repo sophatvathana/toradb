@@ -39,6 +39,64 @@ fn sql_select_runs_sparse_search() {
     };
     assert!(!out.ids.is_empty());
     assert_eq!(out.ids[0], 0);
+    let id_col = out
+        .projected
+        .iter()
+        .find(|(n, _)| n == "id")
+        .expect("id column");
+    let toradb_engine::sql_exec::SqlProjectedColumn::U64(ids) = &id_col.1 else {
+        panic!("id type");
+    };
+    assert_eq!(ids[0], 0);
+    assert!(
+        !out
+            .projected
+            .iter()
+            .any(|(n, _)| n == "score"),
+        "SELECT id should not include score"
+    );
+
+    let stmts = parse(
+        "SELECT id, score, text FROM docs SPARSE SEARCH body BM25('Nikola') LIMIT 5",
+    )
+    .unwrap();
+    let toradb_sql::ast::Stmt::Select(sel2) = &stmts[0] else {
+        panic!("select");
+    };
+    let sql_exec::SqlSelectResult::Search(out2) =
+        sql_exec::run_select(&mut dag, sel2).expect("run")
+    else {
+        panic!("search");
+    };
+    assert_eq!(out2.projected.len(), 3);
+    let text_col = out2
+        .projected
+        .iter()
+        .find(|(n, _)| n == "text")
+        .expect("text");
+    let toradb_engine::sql_exec::SqlProjectedColumn::Str(texts) = &text_col.1 else {
+        panic!("text type");
+    };
+    assert!(texts[0].contains("Nikola"));
+
+    let stmts = parse(
+        "SELECT * FROM docs SPARSE SEARCH body BM25('Nikola') LIMIT 5",
+    )
+    .unwrap();
+    let toradb_sql::ast::Stmt::Select(sel3) = &stmts[0] else {
+        panic!("select");
+    };
+    assert!(sel3
+        .select_items
+        .iter()
+        .any(|e| matches!(e, toradb_sql::ast::SelectExpr::All)));
+    let sql_exec::SqlSelectResult::Search(out3) =
+        sql_exec::run_select(&mut dag, sel3).expect("run")
+    else {
+        panic!("search");
+    };
+    let names: Vec<_> = out3.projected.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["id", "score", "text"]);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -17,6 +17,7 @@ pub enum Token {
     Lte,
     Gt,
     Gte,
+    Star,
     Eof,
 }
 
@@ -109,6 +110,7 @@ pub fn tokenize(input: &str) -> Vec<Token> {
             b'<' => tokens.push(Token::Lt),
             b'>' => tokens.push(Token::Gt),
             b'=' => tokens.push(Token::Eq),
+            b'*' => tokens.push(Token::Star),
             _ => {}
         }
         i += 1;
@@ -125,5 +127,15 @@ mod tests {
     fn parses_quoted_sparse_query() {
         let t = tokenize("BM25('Nikola Tesla motor')");
         assert!(t.iter().any(|tok| matches!(tok, Token::String(s) if s.contains("Nikola"))));
+    }
+
+    #[test]
+    fn count_star_tokenizes_star_inside_parens() {
+        let t = tokenize("COUNT(*)");
+        assert!(matches!(
+            &t[..],
+            [Token::Ident(f), Token::LParen, Token::Star, Token::RParen, Token::Eof]
+            if f == "COUNT"
+        ));
     }
 }

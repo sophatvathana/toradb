@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use toradb_core::{Batch, ExecCtx, QueryMetrics};
 use toradb_index::dense::query_embed::lexical_proxy_vector;
-use toradb_sql::ast::SelectStmt;
+use toradb_sql::ast::{SelectExpr, SelectStmt};
 
 use crate::dag::DagRunner;
 use crate::join::apply_metadata_join;
@@ -8,11 +10,102 @@ use crate::materialized;
 use crate::olap::{run_aggregate, SqlAggregateResult};
 use crate::persist;
 
+#[derive(Clone, Debug)]
+pub enum SqlProjectedColumn {
+    U64(Vec<u64>),
+    F32(Vec<f32>),
+    Str(Vec<String>),
+}
+
 pub struct SqlSearchResult {
     pub ids: Vec<u64>,
     pub scores: Vec<f32>,
+    /// Columns in SELECT order (`id`, `score`, `text`, or metadata keys).
+    pub projected: Vec<(String, SqlProjectedColumn)>,
     pub metrics: QueryMetrics,
     pub explain_text: Option<String>,
+}
+
+fn resolve_retrieval_columns(sel: &SelectStmt) -> Result<Vec<String>, String> {
+    if sel.select_items.is_empty() {
+        return Ok(vec!["id".into(), "score".into()]);
+    }
+    let mut cols = Vec::new();
+    for item in &sel.select_items {
+        match item {
+            SelectExpr::All => {
+                for name in ["id", "score", "text"] {
+                    if !cols.iter().any(|c| c == name) {
+                        cols.push(name.into());
+                    }
+                }
+            }
+            SelectExpr::Column(name) => {
+                if !cols.iter().any(|c| c == name) {
+                    cols.push(name.clone());
+                }
+            }
+            SelectExpr::Aggregate { .. } => {
+                return Err(
+                    "aggregates in SELECT require GROUP BY (use GROUP BY ... SELECT COUNT(*) ...)"
+                        .into(),
+                );
+            }
+        }
+    }
+    Ok(cols)
+}
+
+fn needs_document_fetch(columns: &[String]) -> bool {
+    columns.iter().any(|c| c != "id" && c != "score")
+}
+
+pub fn project_retrieval_columns(
+    dag: &mut DagRunner,
+    table: &str,
+    sel: &SelectStmt,
+    ids: &[u64],
+    scores: &[f32],
+) -> Result<Vec<(String, SqlProjectedColumn)>, String> {
+    let columns = resolve_retrieval_columns(sel)?;
+    let docs_by_id: HashMap<u64, toradb_index::IngestDoc> = if needs_document_fetch(&columns) {
+        dag.fetch_documents(table, ids)?
+            .into_iter()
+            .collect()
+    } else {
+        HashMap::new()
+    };
+
+    let mut out = Vec::with_capacity(columns.len());
+    for col in columns {
+        let data = match col.as_str() {
+            "id" => SqlProjectedColumn::U64(ids.to_vec()),
+            "score" => SqlProjectedColumn::F32(scores.to_vec()),
+            "text" => SqlProjectedColumn::Str(
+                ids.iter()
+                    .map(|id| {
+                        docs_by_id
+                            .get(id)
+                            .map(|d| d.text.clone())
+                            .unwrap_or_default()
+                    })
+                    .collect(),
+            ),
+            meta_key => SqlProjectedColumn::Str(
+                ids.iter()
+                    .map(|id| {
+                        docs_by_id
+                            .get(id)
+                            .and_then(|d| d.metadata.get(meta_key))
+                            .cloned()
+                            .unwrap_or_default()
+                    })
+                    .collect(),
+            ),
+        };
+        out.push((col, data));
+    }
+    Ok(out)
 }
 
 pub enum SqlSelectResult {
@@ -29,14 +122,15 @@ pub fn run_select(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSelectResu
         return Ok(SqlSelectResult::Search(SqlSearchResult {
             ids: Vec::new(),
             scores: Vec::new(),
+            projected: Vec::new(),
             metrics: QueryMetrics::default(),
             explain_text: Some(text),
         }));
     }
-    if let Some(base) = dag.db_path() {
-        if materialized::is_materialized_view(base, &sel.table) {
+    if let Some(base) = dag.db_path().map(|p| p.to_path_buf()) {
+        if materialized::is_materialized_view(&base, &sel.table) {
             return Ok(SqlSelectResult::Search(materialized::query_materialized_view(
-                base, &sel.table, sel,
+                dag, &base, &sel.table, sel,
             )?));
         }
     }
@@ -209,10 +303,13 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
         candidates.sort_by_score(desc);
     }
     let page = candidates.slice_range(offset as usize, limit as usize);
+    let projected =
+        project_retrieval_columns(dag, &sel.table, sel, &page.ids, &page.scores)?;
 
     Ok(SqlSearchResult {
         ids: page.ids,
         scores: page.scores,
+        projected,
         metrics,
         explain_text: None,
     })

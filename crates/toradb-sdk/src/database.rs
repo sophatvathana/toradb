@@ -240,7 +240,13 @@ impl Database {
                         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
                     return match out {
                         sql_exec::SqlSelectResult::Search(s) => Ok(SqlOutcome::Search(
-                            SearchResults::from_sql(s.ids, s.scores, s.metrics, s.explain_text),
+                            SearchResults::from_sql(
+                                s.ids,
+                                s.scores,
+                                s.projected,
+                                s.metrics,
+                                s.explain_text,
+                            ),
                         )),
                         sql_exec::SqlSelectResult::Aggregate(a) => Ok(SqlOutcome::Aggregate(
                             AnalyticsResults::new(
@@ -386,7 +392,13 @@ impl Database {
                 break;
             }
             let results =
-                SearchResults::from_sql(page.ids, page.scores, page.metrics, None);
+                SearchResults::from_sql(
+                    page.ids,
+                    page.scores,
+                    page.projected,
+                    page.metrics,
+                    None,
+                );
             list.append(results.into_pyobject(py)?)?;
             offset += n as u32;
             if n < page_size as usize {

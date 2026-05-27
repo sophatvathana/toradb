@@ -46,6 +46,7 @@ pub enum AggFunc {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelectExpr {
+    All,
     Column(String),
     Aggregate {
         func: AggFunc,

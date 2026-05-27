@@ -37,6 +37,11 @@ fn parse_aggregate(tokens: &[Token], i: &mut usize) -> Result<SelectExpr, String
             if !matches!(func, AggFunc::CountStar) {
                 return Err("aggregate requires column argument".into());
             }
+        } else if matches!(tokens.get(*i), Some(Token::Star)) {
+            if !matches!(func, AggFunc::CountStar) {
+                return Err("aggregate * only supported for COUNT".into());
+            }
+            *i += 1;
         } else if let Some(col) = ident_at(tokens, *i) {
             column = Some(col.to_lowercase());
             *i += 1;
@@ -65,6 +70,9 @@ fn parse_select_exprs(tokens: &[Token], i: &mut usize) -> Result<Vec<SelectExpr>
             Some(Token::Ident(k)) if matches!(k.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
         ) {
             items.push(parse_aggregate(tokens, i)?);
+        } else if matches!(tokens.get(*i), Some(Token::Star)) {
+            items.push(SelectExpr::All);
+            *i += 1;
         } else if let Some(col) = ident_at(tokens, *i) {
             items.push(SelectExpr::Column(col.to_lowercase()));
             *i += 1;

@@ -26,7 +26,7 @@ export default function App() {
   const [table, setTable] = useState("articles");
   const [query, setQuery] = useState("Nikola Tesla alternating current");
   const [topK, setTopK] = useState(10);
-  const [strategy, setStrategy] = useState("");
+  const [strategy, setStrategy] = useState("sparse");
   const [explain, setExplain] = useState(false);
   const [graphExpand, setGraphExpand] = useState(false);
   const [searchResult, setSearchResult] = useState<SearchResponse | null>(null);

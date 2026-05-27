@@ -206,6 +206,7 @@ impl Table {
         Ok(SearchResults {
             ids: page.ids,
             scores: page.scores,
+            projected: Vec::new(),
             metrics,
             explain_text,
         })
@@ -216,10 +217,28 @@ impl Table {
     }
 }
 
+#[derive(Clone)]
+pub(crate) enum SearchColumn {
+    U64(Vec<u64>),
+    F32(Vec<f32>),
+    Str(Vec<String>),
+}
+
+impl From<toradb_engine::sql_exec::SqlProjectedColumn> for SearchColumn {
+    fn from(col: toradb_engine::sql_exec::SqlProjectedColumn) -> Self {
+        match col {
+            toradb_engine::sql_exec::SqlProjectedColumn::U64(v) => SearchColumn::U64(v),
+            toradb_engine::sql_exec::SqlProjectedColumn::F32(v) => SearchColumn::F32(v),
+            toradb_engine::sql_exec::SqlProjectedColumn::Str(v) => SearchColumn::Str(v),
+        }
+    }
+}
+
 #[pyclass]
 pub struct SearchResults {
     ids: Vec<u64>,
     scores: Vec<f32>,
+    projected: Vec<(String, SearchColumn)>,
     metrics: toradb_core::QueryMetrics,
     explain_text: Option<String>,
 }
@@ -228,12 +247,17 @@ impl SearchResults {
     pub(crate) fn from_sql(
         ids: Vec<u64>,
         scores: Vec<f32>,
+        projected: Vec<(String, toradb_engine::sql_exec::SqlProjectedColumn)>,
         metrics: toradb_core::QueryMetrics,
         explain_text: Option<String>,
     ) -> Self {
         Self {
             ids,
             scores,
+            projected: projected
+                .into_iter()
+                .map(|(name, col)| (name, col.into()))
+                .collect(),
             metrics,
             explain_text,
         }
@@ -244,8 +268,18 @@ impl SearchResults {
 impl SearchResults {
     fn to_pandas<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let dict = pyo3::types::PyDict::new(py);
-        dict.set_item("id", self.ids.clone())?;
-        dict.set_item("score", self.scores.clone())?;
+        if self.projected.is_empty() {
+            dict.set_item("id", self.ids.clone())?;
+            dict.set_item("score", self.scores.clone())?;
+        } else {
+            for (name, col) in &self.projected {
+                match col {
+                    SearchColumn::U64(v) => dict.set_item(name, v.clone())?,
+                    SearchColumn::F32(v) => dict.set_item(name, v.clone())?,
+                    SearchColumn::Str(v) => dict.set_item(name, v.clone())?,
+                }
+            }
+        }
         Ok(dict.into_any())
     }
 

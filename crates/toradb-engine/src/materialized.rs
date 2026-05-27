@@ -5,7 +5,7 @@ use toradb_core::{CandidateSet, QueryMetrics};
 use toradb_sql::{format_select, parse, ast::Stmt};
 
 use crate::dag::DagRunner;
-use crate::sql_exec::{run_search, SqlSearchResult};
+use crate::sql_exec::{project_retrieval_columns, run_search, SqlSearchResult};
 
 const VIEWS_DIR: &str = "_views";
 
@@ -112,7 +112,21 @@ pub fn refresh_materialized_view(dag: &mut DagRunner, base: &Path, name: &str) -
     create_materialized_view(dag, base, name, &sel)
 }
 
+fn source_table_from_view_query(base: &Path, view_name: &str) -> Result<String, String> {
+    let stored = load_view(base, view_name)?;
+    let stmts = parse(&stored.query)?;
+    let Stmt::Select(sel) = stmts
+        .into_iter()
+        .next()
+        .ok_or("materialized view query must be a single SELECT")?
+    else {
+        return Err("materialized view query must be SELECT".into());
+    };
+    Ok(sel.table)
+}
+
 pub fn query_materialized_view(
+    dag: &mut DagRunner,
     base: &Path,
     view_name: &str,
     sel: &toradb_sql::ast::SelectStmt,
@@ -134,9 +148,18 @@ pub fn query_materialized_view(
         candidates.sort_by_score(desc);
     }
     let page = candidates.slice_range(sel.offset as usize, sel.limit.max(1) as usize);
+    let source_table = source_table_from_view_query(base, view_name)?;
+    let projected = project_retrieval_columns(
+        dag,
+        &source_table,
+        sel,
+        &page.ids,
+        &page.scores,
+    )?;
     Ok(SqlSearchResult {
         ids: page.ids,
         scores: page.scores,
+        projected,
         metrics: QueryMetrics::default(),
         explain_text: None,
     })

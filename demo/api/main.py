@@ -600,8 +600,11 @@ def search(req: SearchRequest) -> SearchResponse:
         "offset": req.offset,
         "explain": req.explain,
     }
-    if req.strategy:
-        kwargs["strategy"] = req.strategy
+    strategy = req.strategy
+    if not strategy and _is_segment_only_table(req.table):
+        strategy = "sparse"
+    if strategy:
+        kwargs["strategy"] = strategy
     if req.graph_expand:
         kwargs["graph_expand"] = True
 
@@ -698,7 +701,7 @@ def search(req: SearchRequest) -> SearchResponse:
     return SearchResponse(
         table=req.table,
         query=req.query,
-        strategy=req.strategy,
+        strategy=strategy,
         hits=hits,
         explain=explain_text,
         latency_ms=round(search_ms, 2),
