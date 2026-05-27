@@ -45,9 +45,15 @@ Environment variables for the demo and CLI:
 
 | Variable | Purpose |
 |----------|---------|
-| `TORADB_CACHE_INDEX_BYTES` | LRU budget for mmap segment BM25 blobs (default 8GB in `demo/run.sh`) |
-| `TORADB_WARMUP_ON_START` | Background search warmup after API start (`1` in demo) |
+| `TORADB_CACHE_INDEX_BYTES` | Fixed LRU budget for mmap segment BM25 blobs |
+| `TORADB_CACHE_AUTO` | Set `1` to size cache from RAM fraction (serving profile) |
+| `TORADB_CACHE_INDEX_FRACTION` | RAM fraction for auto cache (default `0.20`) |
+| `TORADB_CACHE_AUTO_CAP_BYTES` | Max auto cache bytes (default 8GB) |
+| `TORADB_WARMUP_ON_START` | Background search warmup after API start (`1` in serving demo) |
 | `TORADB_INGEST_THREADS` | Parallelism for index build |
+| `TORADB_PROFILE` | Demo preset: `ingest` or `serving` (`demo/run.sh`) |
+
+See [Production serving profiles](/guides/production-serving) for ingest vs serving presets.
 
 <Tip>
   Run `examples/full_example.py` once to populate `examples/_demo_db`, then use `DESCRIBE` on each table to see real sidecar names.

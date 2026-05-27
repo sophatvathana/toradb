@@ -1,0 +1,48 @@
+---
+title: "Production serving profiles"
+description: "Environment presets for bulk ingest vs query serving"
+---
+
+ToraDB uses the same binaries for ingest and serving; tune behavior with environment variables. The demo applies presets via `TORADB_PROFILE` in `demo/run.sh`.
+
+## Profiles
+
+| Profile | `TORADB_CACHE_*` | `TORADB_WARMUP_ON_START` | Typical workload |
+|---------|------------------|--------------------------|------------------|
+| **ingest** | `TORADB_CACHE_INDEX_BYTES=256MB` (low) | `0` | `toradb-ingest`, `resume`, bulk load |
+| **serving** | `TORADB_CACHE_AUTO=1` or explicit 4–8GB | `1` | API, repeated queries |
+
+### Ingest
+
+- Keep index cache small so ingest does not compete with segment writes.
+- Disable warmup; no query path yet.
+- After bulk load, run `toradb-ingest resume --db PATH --table TABLE` to build TBM3 sidecars, lexicons, and optional route index.
+
+```bash
+export TORADB_PROFILE=ingest
+./target/release/toradb-ingest resume --db ./data/my_table --table passages
+```
+
+### Serving
+
+- Use `TORADB_CACHE_AUTO=1` to size the mmap BM25 cache from available RAM (`TORADB_CACHE_INDEX_FRACTION`, default `0.20`, capped by `TORADB_CACHE_AUTO_CAP_BYTES`, default 8GB).
+- Override with `TORADB_CACHE_INDEX_BYTES` when you need a fixed budget.
+- Enable `TORADB_WARMUP_ON_START=1` for APIs so the first user query is not cold.
+
+```bash
+export TORADB_PROFILE=serving
+export TORADB_CACHE_AUTO=1
+TORADB_DEBUG=1 ./demo/run.sh
+```
+
+## Cache variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `TORADB_CACHE_INDEX_BYTES` | 256MB | Fixed LRU budget for segment BM25 mmap blobs |
+| `TORADB_CACHE_AUTO` | off | Set `1` to derive `index_bytes` from system RAM |
+| `TORADB_CACHE_INDEX_FRACTION` | `0.20` | Fraction of RAM for auto budget |
+| `TORADB_CACHE_AUTO_CAP_BYTES` | 8GB | Upper cap for auto budget |
+| `TORADB_CACHE_DEBUG` | off | Log chosen cache budget at startup |
+
+See also [Search strategies](/guides/search) and [On-disk layout](/concepts/on-disk-layout).

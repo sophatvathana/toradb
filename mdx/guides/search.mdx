@@ -83,9 +83,9 @@ ann.search(
 
 After bulk ingest, the first search may mmap many segment indexes (cold start). Mitigations:
 
-- Set `TORADB_CACHE_INDEX_BYTES` high enough to hold hot segment sidecars (demo defaults to 8GB).
+- Use **serving** profile settings: `TORADB_CACHE_AUTO=1` or set `TORADB_CACHE_INDEX_BYTES` high enough to hold hot segment sidecars (see [Production serving profiles](/guides/production-serving)).
 - Enable `TORADB_WARMUP_ON_START=1` so the API warms indexes in the background.
-- Run `toradb-ingest resume` after ingest so TBM3, lexicons, and `bm25.route.bin` exist.
+- Run `toradb-ingest resume` after ingest so TBM3 block-max sidecars, lexicons, and `bm25.route.bin` exist (required once after upgrading index format).
 - Use `explain=True` to see `cache_hits` / `cache_misses` in the demo API.
 
 ## Stream search
