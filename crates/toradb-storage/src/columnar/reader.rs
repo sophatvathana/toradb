@@ -180,6 +180,21 @@ pub fn parquet_row_count(path: &Path) -> Result<usize, String> {
     Ok(builder.metadata().file_metadata().num_rows() as usize)
 }
 
+/// Build a per-segment BM25 snapshot by streaming Parquet batches (no full-text Vec).
+pub fn bm25_snapshot_from_segment(path: &Path) -> Result<toradb_index::Bm25Snapshot, String> {
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file).map_err(|e| e.to_string())?;
+    let mut reader = builder.build().map_err(|e| e.to_string())?;
+    let mut index = toradb_index::Bm25Builder::default();
+    for batch in reader.by_ref() {
+        let batch: RecordBatch = batch.map_err(|e| e.to_string())?;
+        for (id, text) in batch_to_text_rows(&batch)? {
+            index.add(id, &text);
+        }
+    }
+    Ok(index.finish())
+}
+
 pub fn read_segment_texts(path: &Path) -> Result<Vec<(u64, String)>, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file).map_err(|e| e.to_string())?;

@@ -4,4 +4,3 @@ pub mod bm25_route;
 pub mod bm25_tbm3;
 pub mod seismic;
 pub mod splade;
-pub mod wand;

@@ -12,6 +12,7 @@ pub struct Bm25Index {
     doc_len: HashMap<DocId, u32>,
     doc_freq: HashMap<String, u32>,
     num_docs: u32,
+    total_doc_len: u64,
     avg_dl: f32,
 }
 
@@ -31,12 +32,8 @@ impl Bm25Index {
             *tf_map.entry(term).or_default() += 1;
         }
         self.doc_len.insert(id, len);
-        let total_len: u32 = self.doc_len.values().sum();
-        self.avg_dl = if self.num_docs > 0 {
-            total_len as f32 / self.num_docs as f32
-        } else {
-            0.0
-        };
+        self.total_doc_len += u64::from(len);
+        self.avg_dl = self.total_doc_len as f32 / self.num_docs as f32;
         for (term, tf) in tf_map {
             *self.doc_freq.entry(term.clone()).or_default() += 1;
             self.postings.entry(term).or_default().push((id, tf));
@@ -66,13 +63,29 @@ impl Bm25Index {
     }
 
     pub fn from_snapshot(snap: Bm25Snapshot) -> Self {
+        let total_doc_len = snap.doc_len.values().map(|&l| u64::from(l)).sum();
         Self {
             postings: snap.postings,
             doc_len: snap.doc_len,
             doc_freq: snap.doc_freq,
             num_docs: snap.num_docs,
+            total_doc_len,
             avg_dl: snap.avg_dl,
         }
+    }
+}
+
+/// Incremental BM25 build (e.g. streaming one Parquet segment at a time).
+#[derive(Debug, Default)]
+pub struct Bm25Builder(Bm25Index);
+
+impl Bm25Builder {
+    pub fn add(&mut self, id: DocId, text: &str) {
+        self.0.add_document(id, text);
+    }
+
+    pub fn finish(self) -> Bm25Snapshot {
+        self.0.snapshot()
     }
 }
 
@@ -100,11 +113,11 @@ impl Bm25Snapshot {
 
     /// Build a snapshot for a disjoint document set (e.g. one Parquet segment).
     pub fn from_documents(docs: impl IntoIterator<Item = (DocId, impl AsRef<str>)>) -> Self {
-        let mut index = Bm25Index::default();
+        let mut builder = Bm25Builder::default();
         for (id, text) in docs {
-            index.add_document(id, text.as_ref());
+            builder.add(id, text.as_ref());
         }
-        index.snapshot()
+        builder.finish()
     }
 
     /// Merge another snapshot whose document ids do not overlap with this one.
@@ -117,7 +130,7 @@ impl Bm25Snapshot {
             *self.doc_freq.entry(term).or_default() += df;
         }
         self.num_docs += other.num_docs;
-        let total_len: u32 = self.doc_len.values().sum();
+        let total_len: u64 = self.doc_len.values().map(|&l| u64::from(l)).sum();
         self.avg_dl = if self.num_docs > 0 {
             total_len as f32 / self.num_docs as f32
         } else {
