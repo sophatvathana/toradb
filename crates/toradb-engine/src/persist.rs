@@ -11,8 +11,8 @@ use toradb_index::sparse::bm25::tokenize;
 use toradb_core::CandidateSet;
 use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
 use toradb_storage::columnar::{
-    parquet_row_count, read_segment, read_segment_id_bounds, read_segment_matching_ids,
-    read_segment_texts, write_segment_with_compression,
+    bm25_snapshot_from_segment, parquet_row_count, read_segment, read_segment_id_bounds,
+    read_segment_matching_ids, write_segment_with_compression,
     ColumnarDoc, IndexMode, QueryMode, TableManifestFile, ROUTED_QUERY_MIN_SEGMENTS,
 };
 use toradb_storage::cache::{get_or_mmap, read_segment_cached, CachedBm25Segment, StorageCaches};
@@ -695,10 +695,7 @@ fn snapshot_for_columnar_docs(docs: &[ColumnarDoc]) -> Bm25Snapshot {
 }
 
 fn snapshot_for_segment_bm25(path: &Path) -> Result<Bm25Snapshot, String> {
-    let rows = read_segment_texts(path)?;
-    Ok(Bm25Snapshot::from_documents(
-        rows.into_iter().map(|(id, text)| (id, text)),
-    ))
+    bm25_snapshot_from_segment(path)
 }
 
 fn snapshot_for_columnar_quant(docs: &[ColumnarDoc]) -> Option<quant_codec::QuantVectorSnapshot> {
@@ -804,6 +801,41 @@ pub fn read_table_documents(
         }
     }
     Ok(out)
+}
+
+pub fn table_row_count_on_disk(
+    store: &CorpusStore,
+    base: &Path,
+    table: &str,
+) -> Result<usize, String> {
+    if let Some(t) = store.table(table) {
+        let n = t.len();
+        if n > 0 {
+            return Ok(n);
+        }
+    }
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(0);
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    if !manifest.segment_id_ranges.is_empty() {
+        let n: u64 = manifest
+            .segment_id_ranges
+            .iter()
+            .map(|r| r.max_id.saturating_sub(r.min_id) + 1)
+            .sum();
+        return Ok(n as usize);
+    }
+    let seg_dir = TableManifestFile::segments_dir(base, table);
+    let mut n = 0usize;
+    for seg in &manifest.segments {
+        let path = seg_dir.join(seg);
+        if path.exists() {
+            n += parquet_row_count(&path)?;
+        }
+    }
+    Ok(n)
 }
 
 /// In-memory corpus first; fall back to columnar Parquet scan when empty.

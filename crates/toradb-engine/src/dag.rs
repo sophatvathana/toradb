@@ -415,6 +415,24 @@ impl DagRunner {
         )
     }
 
+    /// Row count without loading full Parquet when the table is segment-only on disk.
+    pub fn table_row_count(&self, table: &str) -> Result<usize, String> {
+        if let Some(t) = self.retrieval.store.table(table) {
+            let n = t.len();
+            if n > 0 {
+                return Ok(n);
+            }
+        }
+        if let Some(ref path) = self.db_path {
+            return crate::persist::table_row_count_on_disk(
+                &self.retrieval.store,
+                path.as_path(),
+                table,
+            );
+        }
+        Ok(0)
+    }
+
     /// Fetch stored text/metadata for specific doc ids (lazy Parquet read when not in RAM).
     pub fn fetch_documents(
         &mut self,
