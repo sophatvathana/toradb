@@ -79,10 +79,26 @@ fi
 export TORADB_DB_PATH="$DB_PATH"
 export TORADB_HOST="${TORADB_HOST:-127.0.0.1}"
 export TORADB_PORT="${TORADB_PORT:-8787}"
-# ~45 segment BM25 sidecars @ ~130MB each; default 256MB cache causes constant eviction.
-export TORADB_CACHE_INDEX_BYTES="${TORADB_CACHE_INDEX_BYTES:-8589934592}"
+
+# ingest vs serving presets (see mdx/guides/production-serving.mdx)
+case "${TORADB_PROFILE:-serving}" in
+  ingest)
+    export TORADB_CACHE_INDEX_BYTES="${TORADB_CACHE_INDEX_BYTES:-268435456}"
+    export TORADB_WARMUP_ON_START="${TORADB_WARMUP_ON_START:-0}"
+    ;;
+  serving)
+    if [[ -z "${TORADB_CACHE_INDEX_BYTES:-}" ]]; then
+      export TORADB_CACHE_AUTO=1
+    fi
+    export TORADB_WARMUP_ON_START="${TORADB_WARMUP_ON_START:-1}"
+    ;;
+  *)
+    echo "error: unknown TORADB_PROFILE=${TORADB_PROFILE} (use ingest or serving)"
+    exit 1
+    ;;
+esac
+
 # Warmup runs in a subprocess after bind (see demo/api/main.py); hides ~20s first-search latency.
-export TORADB_WARMUP_ON_START="${TORADB_WARMUP_ON_START:-1}"
 
 cleanup() {
   [[ -n "${API_PID:-}" ]] && kill "$API_PID" 2>/dev/null || true

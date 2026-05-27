@@ -1,0 +1,3 @@
+# Optional deps for demo/scripts/ingest_open_data.py
+pyarrow>=14.0.0
+datasets>=2.19.0
