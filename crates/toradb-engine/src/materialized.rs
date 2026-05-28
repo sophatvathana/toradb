@@ -81,7 +81,7 @@ pub fn create_materialized_view(
     name: &str,
     select: &toradb_sql::ast::SelectStmt,
 ) -> Result<usize, String> {
-    if select.group_by.is_some() {
+    if !select.group_by.is_empty() {
         return Err("materialized views support retrieval SELECT only (no GROUP BY)".into());
     }
     let query = format_select(select);
@@ -131,7 +131,7 @@ pub fn query_materialized_view(
     view_name: &str,
     sel: &toradb_sql::ast::SelectStmt,
 ) -> Result<SqlSearchResult, String> {
-    if sel.group_by.is_some() {
+    if !sel.group_by.is_empty() {
         return Err("SELECT from materialized view does not support GROUP BY".into());
     }
     if sel.sparse_query.is_some() || sel.vector {

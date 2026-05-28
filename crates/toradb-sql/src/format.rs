@@ -34,6 +34,9 @@ pub fn format_select(sel: &SelectStmt) -> String {
             "ORDER BY score ASC".into()
         });
     }
+    if !sel.group_by.is_empty() {
+        parts.push(format!("GROUP BY {}", sel.group_by.join(", ")));
+    }
     parts.push(format!("LIMIT {}", sel.limit));
     if sel.offset > 0 {
         parts.push(format!("OFFSET {}", sel.offset));

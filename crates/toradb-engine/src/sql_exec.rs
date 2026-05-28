@@ -10,6 +10,49 @@ use crate::materialized;
 use crate::olap::{run_aggregate, SqlAggregateResult};
 use crate::persist;
 
+fn expand_cte_select(sel: &SelectStmt) -> Result<SelectStmt, String> {
+    if sel.ctes.is_empty() {
+        return Ok(sel.clone());
+    }
+    let cte = sel
+        .ctes
+        .iter()
+        .find(|cte| cte.name == sel.table)
+        .ok_or("WITH currently supports selecting from a defined CTE table name only")?;
+    if sel.join.is_some() {
+        return Err("WITH + JOIN is not supported yet".into());
+    }
+    let mut expanded = (*cte.query).clone();
+    if !expanded.ctes.is_empty() {
+        return Err("nested WITH clauses are not supported yet".into());
+    }
+    expanded.select_items = sel.select_items.clone();
+    expanded.group_by = sel.group_by.clone();
+    expanded.where_clause = sel.where_clause.clone();
+    expanded.having_clause = sel.having_clause.clone();
+    expanded.limit = sel.limit;
+    expanded.offset = sel.offset;
+    expanded.order_by_score_desc = sel.order_by_score_desc;
+    expanded.stream |= sel.stream;
+    expanded.explain |= sel.explain;
+    expanded.distributed |= sel.distributed;
+    expanded.hyde |= sel.hyde;
+    expanded.crag |= sel.crag;
+    if sel.sparse_query.is_some() {
+        expanded.sparse_query = sel.sparse_query.clone();
+    }
+    if sel.sparse.is_some() {
+        expanded.sparse = sel.sparse.clone();
+    }
+    if sel.vector || sel.vector_query.is_some() || sel.vector_text.is_some() {
+        expanded.vector = sel.vector;
+        expanded.vector_query = sel.vector_query.clone();
+        expanded.vector_text = sel.vector_text.clone();
+    }
+    expanded.ctes.clear();
+    Ok(expanded)
+}
+
 #[derive(Clone, Debug)]
 pub enum SqlProjectedColumn {
     U64(Vec<u64>),
@@ -114,11 +157,12 @@ pub enum SqlSelectResult {
 }
 
 pub fn run_select(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSelectResult, String> {
+    let sel = expand_cte_select(sel)?;
     if sel.explain {
         if sel.stream {
             return Err("EXPLAIN does not support STREAM".into());
         }
-        let text = explain_plan(dag, sel)?;
+        let text = explain_plan(dag, &sel)?;
         return Ok(SqlSelectResult::Search(SqlSearchResult {
             ids: Vec::new(),
             scores: Vec::new(),
@@ -130,14 +174,14 @@ pub fn run_select(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSelectResu
     if let Some(base) = dag.db_path().map(|p| p.to_path_buf()) {
         if materialized::is_materialized_view(&base, &sel.table) {
             return Ok(SqlSelectResult::Search(materialized::query_materialized_view(
-                dag, &base, &sel.table, sel,
+                dag, &base, &sel.table, &sel,
             )?));
         }
     }
-    if is_analytics_select(sel) {
-        return Ok(SqlSelectResult::Aggregate(run_aggregate(dag, sel)?));
+    if is_analytics_select(&sel) {
+        return Ok(SqlSelectResult::Aggregate(run_aggregate(dag, &sel)?));
     }
-    Ok(SqlSelectResult::Search(run_search(dag, sel)?))
+    Ok(SqlSelectResult::Search(run_search(dag, &sel)?))
 }
 
 pub fn explain_plan(dag: &DagRunner, sel: &SelectStmt) -> Result<String, String> {
@@ -154,7 +198,7 @@ pub fn explain_plan(dag: &DagRunner, sel: &SelectStmt) -> Result<String, String>
         }
     }
     if is_analytics_select(sel) {
-        if sel.group_by.is_none()
+        if sel.group_by.is_empty()
             && sel.where_clause.is_none()
             && !has_sparse(sel)
             && !has_vector(sel)
@@ -258,6 +302,8 @@ fn is_analytics_select(sel: &SelectStmt) -> bool {
     sel.select_items
         .iter()
         .any(|item| matches!(item, SelectExpr::Aggregate { .. }))
+        || !sel.group_by.is_empty()
+        || sel.having_clause.is_some()
 }
 
 pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSearchResult, String> {

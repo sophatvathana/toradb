@@ -90,7 +90,14 @@ pub struct JoinClause {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Cte {
+    pub name: String,
+    pub query: Box<SelectStmt>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SelectStmt {
+    pub ctes: Vec<Cte>,
     pub table: String,
     pub join: Option<JoinClause>,
     pub select_items: Vec<SelectExpr>,
@@ -120,6 +127,7 @@ pub struct SelectStmt {
     pub stream: bool,
     /// When true, return a plan only (`EXPLAIN`); do not execute retrieval.
     pub explain: bool,
-    pub group_by: Option<String>,
+    pub group_by: Vec<String>,
     pub where_clause: Option<WherePred>,
+    pub having_clause: Option<WherePred>,
 }

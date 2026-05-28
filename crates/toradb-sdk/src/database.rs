@@ -67,10 +67,10 @@ impl Database {
                         row_counts.push(n as f64);
                     }
                     return Ok(SqlOutcome::Aggregate(AnalyticsResults::new(
-                        "view".into(),
+                        vec!["view".into()],
                         view_names,
-                        "rows".into(),
-                        row_counts,
+                        vec!["rows".into()],
+                        row_counts.into_iter().map(|v| vec![v]).collect(),
                     )));
                 }
                 Stmt::ShowTables => {
@@ -86,10 +86,10 @@ impl Database {
                         row_counts.push(n as f64);
                     }
                     return Ok(SqlOutcome::Aggregate(AnalyticsResults::new(
-                        "table".into(),
+                        vec!["table".into()],
                         table_names,
-                        "rows".into(),
-                        row_counts,
+                        vec!["rows".into()],
+                        row_counts.into_iter().map(|v| vec![v]).collect(),
                     )));
                 }
                 Stmt::CreateTable(t) => {
@@ -299,10 +299,10 @@ impl Database {
                         )),
                         sql_exec::SqlSelectResult::Aggregate(a) => Ok(SqlOutcome::Aggregate(
                             AnalyticsResults::new(
-                                a.group_by_column,
+                                a.group_by_columns,
                                 a.group_keys,
-                                a.value_column,
-                                a.values,
+                                a.value_columns,
+                                a.value_rows,
                             ),
                         )),
                     };
@@ -412,7 +412,7 @@ impl Database {
                 "sql_stream requires a retrieval SELECT",
             ));
         };
-        if sel.group_by.is_some() {
+        if !sel.group_by.is_empty() {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "sql_stream does not support GROUP BY",
             ));

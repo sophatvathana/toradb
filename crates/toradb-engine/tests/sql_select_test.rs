@@ -100,3 +100,40 @@ fn sql_select_runs_sparse_search() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn sql_select_with_cte_supports_analytics() {
+    let dir = std::env::temp_dir().join("toradb_sql_select_cte");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut dag = DagRunner::open(&dir).expect("open");
+    dag.add_documents(
+        "docs",
+        vec![
+            IngestDoc {
+                text: "Nikola Tesla".into(),
+                metadata: [("tag".into(), "science".into())].into(),
+                vector: None,
+            },
+            IngestDoc {
+                text: "Marie Curie".into(),
+                metadata: [("tag".into(), "science".into())].into(),
+                vector: None,
+            },
+        ],
+    )
+    .expect("add");
+    let stmts = parse(
+        "WITH filtered AS (SELECT id, tag FROM docs WHERE tag = 'science') SELECT tag, COUNT(*) FROM filtered GROUP BY tag",
+    )
+    .unwrap();
+    let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+    let sql_exec::SqlSelectResult::Aggregate(out) = sql_exec::run_select(&mut dag, sel).unwrap()
+    else {
+        panic!("aggregate");
+    };
+    assert_eq!(out.group_keys, vec!["science".to_string()]);
+    assert_eq!(out.value_rows, vec![vec![2.0]]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

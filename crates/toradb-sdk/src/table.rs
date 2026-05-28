@@ -309,24 +309,24 @@ impl SearchResults {
 
 #[pyclass]
 pub struct AnalyticsResults {
-    group_by_column: String,
+    group_by_columns: Vec<String>,
     group_keys: Vec<String>,
-    value_column: String,
-    values: Vec<f64>,
+    value_columns: Vec<String>,
+    value_rows: Vec<Vec<f64>>,
 }
 
 impl AnalyticsResults {
     pub(crate) fn new(
-        group_by_column: String,
+        group_by_columns: Vec<String>,
         group_keys: Vec<String>,
-        value_column: String,
-        values: Vec<f64>,
+        value_columns: Vec<String>,
+        value_rows: Vec<Vec<f64>>,
     ) -> Self {
         Self {
-            group_by_column,
+            group_by_columns,
             group_keys,
-            value_column,
-            values,
+            value_columns,
+            value_rows,
         }
     }
 }
@@ -335,8 +335,30 @@ impl AnalyticsResults {
 impl AnalyticsResults {
     fn to_pandas<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let dict = pyo3::types::PyDict::new(py);
-        dict.set_item(&self.group_by_column, self.group_keys.clone())?;
-        dict.set_item(&self.value_column, self.values.clone())?;
+        if self.group_by_columns.is_empty() {
+            dict.set_item("_all", self.group_keys.clone())?;
+        } else if self.group_by_columns.len() == 1 {
+            dict.set_item(&self.group_by_columns[0], self.group_keys.clone())?;
+        } else {
+            let mut columns = vec![Vec::with_capacity(self.group_keys.len()); self.group_by_columns.len()];
+            for key in &self.group_keys {
+                let parts = key.split('|').collect::<Vec<_>>();
+                for (idx, col_values) in columns.iter_mut().enumerate() {
+                    col_values.push(parts.get(idx).copied().unwrap_or("_null").to_string());
+                }
+            }
+            for (name, values) in self.group_by_columns.iter().zip(columns.into_iter()) {
+                dict.set_item(name, values)?;
+            }
+        }
+        for (col_idx, col_name) in self.value_columns.iter().enumerate() {
+            let values = self
+                .value_rows
+                .iter()
+                .map(|row| row.get(col_idx).copied().unwrap_or(0.0))
+                .collect::<Vec<_>>();
+            dict.set_item(col_name, values)?;
+        }
         Ok(dict.into_any())
     }
 

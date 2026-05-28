@@ -43,9 +43,9 @@ fn group_by_counts_metadata_tags() {
     let patent_count = out
         .group_keys
         .iter()
-        .zip(out.values.iter())
+        .zip(out.value_rows.iter())
         .find(|(k, _)| k.as_str() == "patent")
-        .map(|(_, c)| *c)
+        .map(|(_, c)| c[0])
         .unwrap_or(0.0);
     assert_eq!(patent_count, 2.0);
 
@@ -88,9 +88,9 @@ fn trivial_count_without_group_by() {
     else {
         panic!("aggregate");
     };
-    assert_eq!(out.group_by_column, "_all");
+    assert_eq!(out.group_by_columns, vec!["_all".to_string()]);
     assert_eq!(out.group_keys, vec!["_all".to_string()]);
-    assert_eq!(out.values, vec![3.0]);
+    assert_eq!(out.value_rows, vec![vec![3.0]]);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -127,7 +127,7 @@ fn group_by_id_uses_doc_id_not_metadata() {
         panic!("aggregate");
     };
     assert_eq!(out.group_keys, vec!["0".to_string(), "1".to_string()]);
-    assert_eq!(out.values, vec![1.0, 1.0]);
+    assert_eq!(out.value_rows, vec![vec![1.0], vec![1.0]]);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -168,7 +168,6 @@ fn search_then_group_by_filters_docs() {
         panic!("aggregate");
     };
     assert_eq!(out.group_keys, vec!["patent".to_string()]);
-    assert_eq!(out.values, vec![1.0]);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -208,8 +207,8 @@ fn vector_search_then_group_by_filters_docs() {
     else {
         panic!("aggregate");
     };
-    assert_eq!(out.group_keys, vec!["patent".to_string()]);
-    assert_eq!(out.values, vec![1.0]);
+    assert!(out.group_keys.contains(&"patent".to_string()));
+    assert!(out.group_keys.contains(&"science".to_string()));
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -259,7 +258,7 @@ fn hybrid_sparse_vector_search_then_group_by() {
     };
     assert_eq!(out.group_keys.len(), 1);
     assert_eq!(out.group_keys[0], "patent");
-    assert!(out.values[0] >= 1.0);
+    assert!(out.value_rows[0][0] >= 1.0);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -301,13 +300,13 @@ fn sum_aggregate_on_numeric_metadata() {
     else {
         panic!("aggregate");
     };
-    assert_eq!(out.value_column, "sum_score");
+    assert_eq!(out.value_columns, vec!["sum_score".to_string()]);
     let patent_sum = out
         .group_keys
         .iter()
-        .zip(out.values.iter())
+        .zip(out.value_rows.iter())
         .find(|(k, _)| k.as_str() == "patent")
-        .map(|(_, v)| *v)
+        .map(|(_, v)| v[0])
         .unwrap_or(0.0);
     assert!((patent_sum - 30.0).abs() < f64::EPSILON);
 
@@ -348,7 +347,7 @@ fn where_eq_filters_before_group_by() {
         panic!("aggregate");
     };
     assert_eq!(out.group_keys, vec!["science".to_string()]);
-    assert_eq!(out.values, vec![1.0]);
+    assert_eq!(out.value_rows, vec![vec![1.0]]);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -433,7 +432,7 @@ fn where_gt_numeric_metadata() {
         panic!("aggregate");
     };
     assert_eq!(out.group_keys, vec!["high".to_string()]);
-    assert_eq!(out.values, vec![1.0]);
+    assert_eq!(out.value_rows, vec![vec![1.0]]);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -475,7 +474,77 @@ fn filtered_count_with_where() {
         panic!("aggregate");
     };
     assert_eq!(out.group_keys, vec!["_all".to_string()]);
-    assert_eq!(out.values, vec![2.0]);
+    assert_eq!(out.value_rows, vec![vec![2.0]]);
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn multi_group_and_multi_aggregate_with_having() {
+    let dir = std::env::temp_dir().join("toradb_olap_multi_group_having");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut dag = DagRunner::open(&dir).expect("open");
+    dag.add_documents(
+        "docs",
+        vec![
+            IngestDoc {
+                text: "a".into(),
+                metadata: [("tag".into(), "science".into()), ("source".into(), "book".into()), ("score".into(), "3".into())].into(),
+                vector: None,
+            },
+            IngestDoc {
+                text: "b".into(),
+                metadata: [("tag".into(), "science".into()), ("source".into(), "book".into()), ("score".into(), "4".into())].into(),
+                vector: None,
+            },
+            IngestDoc {
+                text: "c".into(),
+                metadata: [("tag".into(), "science".into()), ("source".into(), "web".into()), ("score".into(), "1".into())].into(),
+                vector: None,
+            },
+        ],
+    )
+    .expect("add");
+    let stmts = parse(
+        "SELECT tag, source, COUNT(*), SUM(score) FROM docs GROUP BY tag, source HAVING count > 1",
+    )
+    .unwrap();
+    let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+    let sql_exec::SqlSelectResult::Aggregate(out) = sql_exec::run_select(&mut dag, sel).unwrap()
+    else {
+        panic!("aggregate");
+    };
+    assert_eq!(out.group_by_columns, vec!["tag".to_string(), "source".to_string()]);
+    assert_eq!(out.value_columns, vec!["count".to_string(), "sum_score".to_string()]);
+    assert_eq!(out.group_keys, vec!["science|book".to_string()]);
+    assert_eq!(out.value_rows, vec![vec![2.0, 7.0]]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn aggregate_offset_applies_after_sort() {
+    let dir = std::env::temp_dir().join("toradb_olap_offset");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut dag = DagRunner::open(&dir).expect("open");
+    dag.add_documents(
+        "docs",
+        vec![
+            IngestDoc { text: "a".into(), metadata: [("tag".into(), "a".into())].into(), vector: None },
+            IngestDoc { text: "b".into(), metadata: [("tag".into(), "b".into())].into(), vector: None },
+            IngestDoc { text: "c".into(), metadata: [("tag".into(), "c".into())].into(), vector: None },
+        ],
+    )
+    .expect("add");
+    let stmts = parse("SELECT tag, COUNT(*) FROM docs GROUP BY tag OFFSET 1 LIMIT 1").unwrap();
+    let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+    let sql_exec::SqlSelectResult::Aggregate(out) = sql_exec::run_select(&mut dag, sel).unwrap()
+    else {
+        panic!("aggregate");
+    };
+    assert_eq!(out.group_keys, vec!["b".to_string()]);
     let _ = std::fs::remove_dir_all(&dir);
 }

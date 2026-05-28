@@ -121,9 +121,11 @@ fn parse_compare_op(token: &Token) -> Option<CompareOp> {
     }
 }
 
-fn parse_where_clause(tokens: &[Token], i: &mut usize) -> Result<WherePred, String> {
-    expect_ident(tokens, i, "WHERE")?;
-    let column = ident_at(tokens, *i).ok_or("WHERE requires column name")?.to_lowercase();
+fn parse_predicate_clause(tokens: &[Token], i: &mut usize, clause_name: &str) -> Result<WherePred, String> {
+    expect_ident(tokens, i, clause_name)?;
+    let column = ident_at(tokens, *i)
+        .ok_or(format!("{clause_name} requires column name"))?
+        .to_lowercase();
     *i += 1;
 
     if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "IN") {
@@ -158,10 +160,37 @@ fn parse_where_clause(tokens: &[Token], i: &mut usize) -> Result<WherePred, Stri
     let op = tokens
         .get(*i)
         .and_then(parse_compare_op)
-        .ok_or("WHERE requires comparison operator")?;
+        .ok_or(format!("{clause_name} requires comparison operator"))?;
     *i += 1;
     let value = parse_literal(tokens, i)?;
     Ok(WherePred::Compare { column, op, value })
+}
+
+fn parse_where_clause(tokens: &[Token], i: &mut usize) -> Result<WherePred, String> {
+    parse_predicate_clause(tokens, i, "WHERE")
+}
+
+fn parse_having_clause(tokens: &[Token], i: &mut usize) -> Result<WherePred, String> {
+    parse_predicate_clause(tokens, i, "HAVING")
+}
+
+fn parse_group_by_clause(tokens: &[Token], i: &mut usize) -> Result<Vec<String>, String> {
+    expect_ident(tokens, i, "GROUP")?;
+    expect_ident(tokens, i, "BY")?;
+    let mut out = Vec::new();
+    loop {
+        let Some(col) = ident_at(tokens, *i) else {
+            return Err("GROUP BY requires at least one column".into());
+        };
+        out.push(col.to_lowercase());
+        *i += 1;
+        if matches!(tokens.get(*i), Some(Token::Comma)) {
+            *i += 1;
+            continue;
+        }
+        break;
+    }
+    Ok(out)
 }
 
 fn parse_float_list(tokens: &[Token], i: &mut usize) -> Result<Vec<f32>, String> {
@@ -345,9 +374,10 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
     let mut fusion_k = 60u32;
     let mut stream = false;
     let mut explain = false;
-    let mut group_by = None;
+    let mut group_by = Vec::new();
     let mut where_clause = None;
-    while *i < tokens.len() && !matches!(tokens.get(*i), Some(Token::Eof)) {
+    let mut having_clause = None;
+    while *i < tokens.len() && !matches!(tokens.get(*i), Some(Token::Eof) | Some(Token::RParen)) {
         match tokens.get(*i) {
             Some(Token::Ident(k)) if k == "HYDE" => {
                 hyde = true;
@@ -418,20 +448,20 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
                 order_by_score_desc = Some(parse_order_by_score(tokens, i)?);
             }
             Some(Token::Ident(k)) if k == "GROUP" => {
-                *i += 2;
-                if let Some(Token::Ident(g)) = tokens.get(*i) {
-                    group_by = Some(g.to_lowercase());
-                    *i += 1;
-                }
+                group_by = parse_group_by_clause(tokens, i)?;
             }
             Some(Token::Ident(k)) if k == "WHERE" => {
                 where_clause = Some(parse_where_clause(tokens, i)?);
             }
-            Some(Token::Semi) | Some(Token::Eof) => break,
+            Some(Token::Ident(k)) if k == "HAVING" => {
+                having_clause = Some(parse_having_clause(tokens, i)?);
+            }
+            Some(Token::Semi) | Some(Token::Eof) | Some(Token::RParen) => break,
             _ => *i += 1,
         }
     }
     Ok(SelectStmt {
+        ctes: Vec::new(),
         table,
         join,
         select_items,
@@ -453,7 +483,39 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
         explain,
         group_by,
         where_clause,
+        having_clause,
     })
+}
+
+fn parse_ctes(tokens: &[Token], i: &mut usize) -> Result<Vec<Cte>, String> {
+    expect_ident(tokens, i, "WITH")?;
+    let mut out = Vec::new();
+    loop {
+        let name = ident_at(tokens, *i)
+            .ok_or("CTE name after WITH")?
+            .to_lowercase();
+        *i += 1;
+        expect_ident(tokens, i, "AS")?;
+        if !matches!(tokens.get(*i), Some(Token::LParen)) {
+            return Err("CTE requires AS (<select>)".into());
+        }
+        *i += 1;
+        let query = parse_select_stmt(tokens, i)?;
+        if !matches!(tokens.get(*i), Some(Token::RParen)) {
+            return Err("CTE missing closing ')'".into());
+        }
+        *i += 1;
+        out.push(Cte {
+            name,
+            query: Box::new(query),
+        });
+        if matches!(tokens.get(*i), Some(Token::Comma)) {
+            *i += 1;
+            continue;
+        }
+        break;
+    }
+    Ok(out)
 }
 
 fn parse_qualified_table(tokens: &[Token], i: &mut usize) -> Result<(Option<String>, String), String> {
@@ -700,6 +762,18 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 i += 1;
                 true
             };
+        if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "WITH") {
+            let ctes = parse_ctes(&tokens, &mut i)?;
+            if !matches!(tokens.get(i), Some(Token::Ident(k)) if k == "SELECT") {
+                return Err("WITH requires a trailing SELECT".into());
+            }
+            let mut select = parse_select_stmt(&tokens, &mut i)?;
+            select.ctes = ctes;
+            select.stream |= stream_prefix;
+            select.explain |= explain_prefix;
+            out.push(Stmt::Select(select));
+            continue;
+        }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "SELECT") {
             let mut select = parse_select_stmt(&tokens, &mut i)?;
             select.stream |= stream_prefix;
