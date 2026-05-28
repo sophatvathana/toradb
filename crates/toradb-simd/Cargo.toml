@@ -9,3 +9,18 @@ default = []
 avx2 = []
 avx512 = []
 neon = []
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "dot_f32_bench"
+harness = false
+
+[[bench]]
+name = "decompress_bench"
+harness = false
+
+[[bench]]
+name = "bitmap_bench"
+harness = false

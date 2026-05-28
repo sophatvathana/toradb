@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+use std::path::Path;
 use toradb_core::{Batch, ExecCtx, QueryMetrics};
 use toradb_engine::{
     materialized, persist, sql_exec, DagRunner, IndexBuildPhase, IndexBuildState, IndexBuildStatus,
@@ -30,7 +31,7 @@ impl Database {
         let dag = DagRunner::open_with_reload(&path, reload)
             .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))?;
         let mut binder = Binder::new();
-        if let Ok(cat) = toradb_sql::catalog_store::load_catalog(path.as_path()) {
+        if let Ok(cat) = toradb_sql::catalog_store::load_catalog(Path::new(&path)) {
             for manifest in cat.iter_tables() {
                 binder.catalog.register(manifest.clone());
             }
@@ -100,7 +101,7 @@ impl Database {
                     };
                     self.ensure_table(&table);
                     let _ = toradb_sql::catalog_store::save_catalog(
-                        self.path.as_path(),
+                        Path::new(&self.path),
                         &self.binder.catalog,
                     );
                     return Ok(SqlOutcome::Message(format!("ok: created table {table}")));
