@@ -137,6 +137,12 @@ impl Table {
         batch.tier1_enable_dense =
             !matches!(strategy, Some("sparse") | Some("bm25") | Some("text"));
         batch.tier1_use_diskann = matches!(strategy, Some("diskann"));
+        batch.tier1_use_ivf = matches!(strategy, Some("ivf"));
+        batch.sparse_backend = match strategy {
+            Some("splade") => "splade".into(),
+            Some("seismic") => "seismic".into(),
+            _ => "bm25".into(),
+        };
         {
             let db = self.db.borrow_mut(py);
             if !batch.tier1_use_diskann

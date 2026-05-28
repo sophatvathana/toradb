@@ -10,9 +10,11 @@ use toradb_storage::columnar::IndexMode;
 use toradb_storage::SegmentManager;
 use toradb_storage::StorageCaches;
 
+use toradb_distributed::ClusterClient;
+
 use crate::advanced::apply_crag;
 use crate::fusion::rrf_merge;
-use crate::lowering::{lower_tier1, lower_tier2, lower_tier3};
+use crate::lowering::{lower_tier1, lower_tier2, lower_tier3, tier3_rescore};
 use crate::persist::{self, DbPath};
 use crate::scheduler::SegmentScheduler;
 
@@ -30,6 +32,8 @@ pub struct DagRunner {
     db_path: Option<DbPath>,
     bulk_tables: HashSet<String>,
     bulk_disk_state: HashMap<String, BulkDiskState>,
+    /// When set, `DISTRIBUTED` uses multi-node segment RPC instead of local rayon only.
+    cluster: Option<ClusterClient>,
 }
 
 fn segment_bm25_per_segment_k(ctx: &ExecCtx) -> usize {
@@ -46,7 +50,16 @@ impl DagRunner {
             db_path: None,
             bulk_tables: HashSet::new(),
             bulk_disk_state: HashMap::new(),
+            cluster: ClusterClient::from_env(),
         }
+    }
+
+    pub fn set_cluster(&mut self, cluster: Option<ClusterClient>) {
+        self.cluster = cluster;
+    }
+
+    pub fn cluster(&self) -> Option<&ClusterClient> {
+        self.cluster.as_ref()
     }
 
     fn ingest_options_for(&self, table: &str) -> IngestOptions {
@@ -157,11 +170,59 @@ impl DagRunner {
         let db_path = DbPath::new(path.as_ref());
         std::fs::create_dir_all(db_path.as_path()).map_err(|e| e.to_string())?;
         let mut runner = Self::new();
-        runner.db_path = Some(db_path);
+        runner.db_path = Some(db_path.clone());
         if reload {
             runner.reload_from_disk()?;
         }
+        runner.maybe_auto_resume_indexes()?;
         Ok(runner)
+    }
+
+    /// When `TORADB_AUTO_RESUME_INDEX=1`, resume any table stuck in `building` state.
+    pub fn maybe_auto_resume_indexes(&mut self) -> Result<(), String> {
+        let auto = std::env::var("TORADB_AUTO_RESUME_INDEX")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if !auto {
+            return Ok(());
+        }
+        let Some(ref path) = self.db_path else {
+            return Ok(());
+        };
+        let base = path.as_path().to_path_buf();
+        for table in persist::list_tables(&base)? {
+            if let Some(status) = persist::read_table_index_build_status(&base, &table) {
+                if status.state == crate::index_build_status::IndexBuildState::Building {
+                    let _ = self.resume_index_build(&table, false);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Run index finalization on a background thread (opens a fresh [`DagRunner`] on the same path).
+    pub fn finish_bulk_ingest_background(
+        &mut self,
+        table: &str,
+        compact: bool,
+    ) -> Result<std::thread::JoinHandle<Result<(), String>>, String> {
+        if !self.bulk_tables.contains(table) {
+            return Err(format!("table {table} is not in bulk ingest mode"));
+        }
+        let table = table.to_string();
+        let path = self
+            .db_path
+            .as_ref()
+            .ok_or("finish_bulk_ingest requires a local on-disk database")?
+            .as_path()
+            .to_path_buf();
+        self.bulk_tables.remove(&table);
+        let _ = self.bulk_disk_state.remove(&table);
+        let handle = std::thread::spawn(move || {
+            let mut dag = DagRunner::open_with_reload(&path, false)?;
+            dag.resume_index_build(&table, compact)
+        });
+        Ok(handle)
     }
 
     pub fn reload_from_disk(&mut self) -> Result<usize, String> {
@@ -483,7 +544,8 @@ impl DagRunner {
         let pre_tier2 = batch.candidates.clone();
         let t2 = lower_tier2();
         self.retrieval.run_tier2(batch, ctx);
-        batch.candidates = rrf_merge(&pre_tier2, &batch.candidates, 60);
+        let fusion_k = batch.fusion_k.max(1);
+        batch.candidates = rrf_merge(&pre_tier2, &batch.candidates, fusion_k);
         if batch.enable_crag {
             apply_crag(batch);
         }
@@ -549,7 +611,15 @@ impl DagRunner {
                     (0..num_segments).collect()
                 };
                 metrics.segments_scanned = active_segments.len() as u32;
-                let seg_merged = if parallel && workers > 1 && active_segments.len() > 1 {
+                let use_cluster = batch.distributed_segments
+                    && self.cluster.is_some()
+                    && use_disk_segments;
+                let seg_merged = if use_cluster {
+                    let cluster = self.cluster.as_ref().expect("cluster");
+                    cluster
+                        .segment_bm25_search(&table, &query, seg_k, &active_segments)
+                        .unwrap_or_default()
+                } else if parallel && workers > 1 && active_segments.len() > 1 {
                     let bins = Arc::clone(&seg_bins);
                     let table_c = table.clone();
                     let query_c = query.clone();
@@ -661,6 +731,15 @@ impl DagRunner {
             }
         }
 
+        if let Some(ref path) = self.db_path {
+            tier3_rescore(
+                path.as_path(),
+                batch,
+                ctx,
+                &mut self.caches,
+                &self.retrieval.store,
+            );
+        }
         let t3 = lower_tier3();
         metrics.tier3_candidates = t3.execute(batch, ctx) as u32;
         if let Some(ref path) = self.db_path {

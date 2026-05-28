@@ -241,7 +241,14 @@ fn parse_sparse_search(tokens: &[Token], i: &mut usize) -> Result<(Option<String
         *i += 1; // column
     }
     let method = ident_at(tokens, *i).map(|m| m.to_lowercase());
-    if method.is_some() {
+    if method.as_deref().is_some_and(|m| {
+        matches!(
+            m,
+            "bm25" | "splade" | "seismic" | "sparse" | "text" | "ann" | "dot" | "hnsw"
+        )
+    }) {
+        *i += 1;
+    } else if method.is_some() {
         *i += 1;
     }
     let mut query = None;
@@ -278,10 +285,7 @@ fn parse_from_clause(
     tokens: &[Token],
     i: &mut usize,
 ) -> Result<(String, Option<JoinClause>), String> {
-    let left_table = ident_at(tokens, *i)
-        .ok_or("table name after FROM")?
-        .to_lowercase();
-    *i += 1;
+    let (_ns, left_table) = parse_qualified_table(tokens, i)?;
     if !matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "JOIN") {
         return Ok((left_table, None));
     }
@@ -334,12 +338,45 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
     let mut offset = 0u32;
     let mut order_by_score_desc = None;
     let mut distributed = false;
+    let mut hyde = false;
+    let mut crag = false;
+    let mut graph_expand = false;
+    let mut graph_depth = 1u32;
+    let mut fusion_k = 60u32;
     let mut stream = false;
     let mut explain = false;
     let mut group_by = None;
     let mut where_clause = None;
     while *i < tokens.len() && !matches!(tokens.get(*i), Some(Token::Eof)) {
         match tokens.get(*i) {
+            Some(Token::Ident(k)) if k == "HYDE" => {
+                hyde = true;
+                *i += 1;
+            }
+            Some(Token::Ident(k)) if k == "CRAG" => {
+                crag = true;
+                *i += 1;
+            }
+            Some(Token::Ident(k)) if k == "GRAPH" => {
+                *i += 1;
+                expect_ident(tokens, i, "EXPAND")?;
+                graph_expand = true;
+                if let Some(Token::Number(n)) = tokens.get(*i) {
+                    graph_depth = *n;
+                    *i += 1;
+                }
+            }
+            Some(Token::Ident(k)) if k == "FUSION" => {
+                *i += 1;
+                expect_ident(tokens, i, "K")?;
+                if matches!(tokens.get(*i), Some(Token::Eq)) {
+                    *i += 1;
+                }
+                if let Some(Token::Number(n)) = tokens.get(*i) {
+                    fusion_k = *n;
+                    *i += 1;
+                }
+            }
             Some(Token::Ident(k)) if k == "DISTRIBUTED" => {
                 distributed = true;
                 *i += 1;
@@ -407,11 +444,33 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
         offset,
         order_by_score_desc,
         distributed,
+        hyde,
+        crag,
+        graph_expand,
+        graph_depth,
+        fusion_k,
         stream,
         explain,
         group_by,
         where_clause,
     })
+}
+
+fn parse_qualified_table(tokens: &[Token], i: &mut usize) -> Result<(Option<String>, String), String> {
+    let first = ident_at(tokens, *i)
+        .ok_or("expected table name")?
+        .to_lowercase();
+    *i += 1;
+    if matches!(tokens.get(*i), Some(Token::Dot)) {
+        *i += 1;
+        let table = ident_at(tokens, *i)
+            .ok_or("expected table after namespace.")?
+            .to_lowercase();
+        *i += 1;
+        Ok((Some(first), table))
+    } else {
+        Ok((None, first))
+    }
 }
 
 fn parse_order_by_score(tokens: &[Token], i: &mut usize) -> Result<bool, String> {
@@ -455,13 +514,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             }
             if matches!(tokens.get(i + 1), Some(Token::Ident(k)) if k == "TABLE") {
                 i += 2;
-                let name = match tokens.get(i) {
-                    Some(Token::Ident(n)) => {
-                        i += 1;
-                        n.clone()
-                    }
-                    _ => return Err("table name".into()),
-                };
+                let (namespace, name) = parse_qualified_table(&tokens, &mut i)?;
                 let mut mode = "HYBRID".into();
                 let columns = vec![];
                 if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "USING") {
@@ -470,7 +523,12 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                         mode = m.clone();
                     }
                 }
-                out.push(Stmt::CreateTable(CreateTableStmt { name, mode, columns }));
+                out.push(Stmt::CreateTable(CreateTableStmt {
+                    namespace,
+                    name,
+                    mode,
+                    columns,
+                }));
                 continue;
             }
             if matches!(tokens.get(i + 1), Some(Token::Ident(k)) if k == "INDEX") {
@@ -486,13 +544,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                     return Err("CREATE INDEX requires ON table".into());
                 }
                 i += 1;
-                let table = match tokens.get(i) {
-                    Some(Token::Ident(n)) => {
-                        i += 1;
-                        n.to_lowercase()
-                    }
-                    _ => return Err("table name after ON".into()),
-                };
+                let (_ns, table) = parse_qualified_table(&tokens, &mut i)?;
                 if !matches!(tokens.get(i), Some(Token::LParen)) {
                     return Err("CREATE INDEX requires (column)".into());
                 }
@@ -518,6 +570,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 }
                 out.push(Stmt::CreateIndex(CreateIndexStmt {
                     name,
+                    namespace: None,
                     table,
                     column,
                     using,
@@ -599,7 +652,24 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                     expect_ident(&tokens, &mut i, "VIEWS")?;
                     out.push(Stmt::ShowMaterializedViews);
                 }
-                _ => return Err("expected TABLES or MATERIALIZED VIEWS after SHOW".into()),
+                Some(Token::Ident(k)) if k == "INDEXES" || k == "INDEX" => {
+                    i += 1;
+                    expect_ident(&tokens, &mut i, "FROM")?;
+                    let (_ns, table) = parse_qualified_table(&tokens, &mut i)?;
+                    out.push(Stmt::ShowIndexes { table });
+                }
+                Some(Token::Ident(k)) if k == "CREATE" => {
+                    i += 1;
+                    expect_ident(&tokens, &mut i, "TABLE")?;
+                    let (_ns, table) = parse_qualified_table(&tokens, &mut i)?;
+                    out.push(Stmt::ShowCreateTable { table });
+                }
+                _ => {
+                    return Err(
+                        "expected TABLES, INDEXES, CREATE TABLE, or MATERIALIZED VIEWS after SHOW"
+                            .into(),
+                    );
+                }
             }
             continue;
         }
@@ -616,13 +686,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
         }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "DESCRIBE" || k == "DESC") {
             i += 1;
-            let name = match tokens.get(i) {
-                Some(Token::Ident(n)) => {
-                    i += 1;
-                    n.to_lowercase()
-                }
-                _ => return Err("table name after DESCRIBE".into()),
-            };
+            let (_ns, name) = parse_qualified_table(&tokens, &mut i)?;
             out.push(Stmt::Describe { name });
             continue;
         }

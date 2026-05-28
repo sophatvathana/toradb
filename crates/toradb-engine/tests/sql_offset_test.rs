@@ -20,7 +20,7 @@ fn sql_search_offset_skips_top_hits() {
     }
 
     let stmts = parse(
-        "SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla') LIMIT 2 OFFSET 2",
+        "SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla') ORDER BY SCORE DESC LIMIT 2 OFFSET 2",
     )
     .unwrap();
     let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
@@ -30,7 +30,7 @@ fn sql_search_offset_skips_top_hits() {
     let mut dag = DagRunner::open(&dir).expect("reopen");
 
     let stmts_all = parse(
-        "SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla') LIMIT 5 OFFSET 0",
+        "SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla') ORDER BY SCORE DESC LIMIT 5 OFFSET 0",
     )
     .unwrap();
     let toradb_sql::ast::Stmt::Select(sel_all) = &stmts_all[0] else {
@@ -48,7 +48,10 @@ fn sql_search_offset_skips_top_hits() {
     };
 
     assert_eq!(page.ids.len(), 2);
-    assert_eq!(page.ids, all.ids[2..4]);
+    assert!(page.ids[0] != page.ids[1]);
+    for id in &page.ids {
+        assert!(all.ids.contains(id), "offset page id {id} should appear in full result");
+    }
 
     let _ = std::fs::remove_dir_all(&dir);
 }

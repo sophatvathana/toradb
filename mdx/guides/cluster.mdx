@@ -1,0 +1,39 @@
+---
+title: "Cluster mode"
+description: "Multi-node segment workers and coordinator"
+---
+
+## Configuration
+
+Write a `cluster.yaml` (or `cluster.yml`) and point the engine at it. JSON (`.json`) is still accepted.
+
+```bash
+export TORADB_CLUSTER_CONFIG=./examples/cluster.yaml
+```
+
+```yaml
+coordinator_db: ./data/coordinator
+workers:
+  - id: w0
+    addr: 127.0.0.1:9100
+    db_path: ./data/node0
+  - id: w1
+    addr: 127.0.0.1:9101
+    db_path: ./data/node1
+```
+
+## Worker process
+
+```bash
+toradb-ingest worker --db ./data/node0 --addr 127.0.0.1:9100
+```
+
+## Health
+
+```bash
+toradb-ingest cluster-status --config ./examples/cluster.yaml
+```
+
+## SQL / SDK
+
+Use `DISTRIBUTED` in SQL or `strategy="distributed"` in Python. With `TORADB_CLUSTER_CONFIG` set, segment BM25 fan-out uses remote workers; otherwise `DISTRIBUTED` uses local rayon only.

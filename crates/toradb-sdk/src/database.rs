@@ -29,7 +29,13 @@ impl Database {
     pub fn open_with_reload(path: String, reload: bool) -> PyResult<Self> {
         let dag = DagRunner::open_with_reload(&path, reload)
             .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))?;
-        Ok(Self { path, dag, binder: Binder::new() })
+        let mut binder = Binder::new();
+        if let Ok(cat) = toradb_sql::catalog_store::load_catalog(path.as_path()) {
+            for manifest in cat.iter_tables() {
+                binder.catalog.register(manifest.clone());
+            }
+        }
+        Ok(Self { path, dag, binder })
     }
 
     fn execute_sql(&mut self, query: &str) -> PyResult<SqlOutcome> {
@@ -86,9 +92,51 @@ impl Database {
                     )));
                 }
                 Stmt::CreateTable(t) => {
-                    let table = t.name.to_lowercase();
+                    self.binder.bind(&stmts).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                    let table = if let Some(ns) = &t.namespace {
+                        format!("{ns}.{}", t.name).to_lowercase()
+                    } else {
+                        t.name.to_lowercase()
+                    };
                     self.ensure_table(&table);
+                    let _ = toradb_sql::catalog_store::save_catalog(
+                        self.path.as_path(),
+                        &self.binder.catalog,
+                    );
                     return Ok(SqlOutcome::Message(format!("ok: created table {table}")));
+                }
+                Stmt::ShowIndexes { table } => {
+                    let table = table.to_lowercase();
+                    let indexes = self
+                        .dag
+                        .table_index_sidecars(&table)
+                        .unwrap_or_default();
+                    return Ok(SqlOutcome::Message(format!(
+                        "indexes on {table}: {}",
+                        if indexes.is_empty() {
+                            "(none)".into()
+                        } else {
+                            indexes.join(", ")
+                        }
+                    )));
+                }
+                Stmt::ShowCreateTable { table } => {
+                    let table = table.to_lowercase();
+                    let manifest = self
+                        .binder
+                        .catalog
+                        .get(&table)
+                        .cloned()
+                        .ok_or_else(|| {
+                            pyo3::exceptions::PyValueError::new_err(format!(
+                                "unknown table {table}"
+                            ))
+                        })?;
+                    let ddl = format!(
+                        "CREATE TABLE {} USING {:?}",
+                        manifest.name, manifest.index_mode
+                    );
+                    return Ok(SqlOutcome::Message(ddl));
                 }
                 Stmt::CreateMaterializedView(mv) => {
                     let base = self

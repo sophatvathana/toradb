@@ -5,6 +5,7 @@ members = [
     "crates/toradb-simd",
     "crates/toradb-storage",
     "crates/toradb-index",
+    "crates/toradb-distributed",
     "crates/toradb-engine",
     "crates/toradb-sql",
     "crates/toradb-sdk",
@@ -31,11 +32,13 @@ toradb-core = { path = "crates/toradb-core" }
 toradb-simd = { path = "crates/toradb-simd" }
 toradb-storage = { path = "crates/toradb-storage" }
 toradb-index = { path = "crates/toradb-index" }
+toradb-distributed = { path = "crates/toradb-distributed" }
 toradb-engine = { path = "crates/toradb-engine" }
 toradb-sql = { path = "crates/toradb-sql" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 rkyv = { version = "0.8.16", features = ["std", "bytecheck"] }
 memmap2 = "0.9"
 arrow = { version = "58.3.0", default-features = false, features = ["ipc"] }

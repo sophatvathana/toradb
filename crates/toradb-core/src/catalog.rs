@@ -38,4 +38,8 @@ impl Catalog {
     pub fn list_tables(&self) -> Vec<&str> {
         self.tables.keys().map(|s| s.as_str()).collect()
     }
+
+    pub fn iter_tables(&self) -> impl Iterator<Item = &TableManifest> {
+        self.tables.values()
+    }
 }

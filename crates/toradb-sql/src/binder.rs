@@ -14,13 +14,21 @@ impl Binder {
         for stmt in stmts {
             match stmt {
                 Stmt::CreateTable(t) => {
-                    let mode = match t.mode.as_str() {
+                    let mode = match t.mode.to_uppercase().as_str() {
                         "TEXT" => IndexMode::Text,
                         "VECTOR" => IndexMode::Vector,
-                        _ => IndexMode::Hybrid,
+                        "HYBRID" => IndexMode::Hybrid,
+                        other => {
+                            return Err(format!("unsupported CREATE TABLE USING {other}"));
+                        }
+                    };
+                    let table_name = if let Some(ns) = &t.namespace {
+                        format!("{ns}.{}", t.name)
+                    } else {
+                        t.name.clone()
                     };
                     self.catalog.register(TableManifest {
-                        name: t.name.clone(),
+                        name: table_name,
                         schema: Schema::default(),
                         index_mode: mode,
                         vector_dim: None,
@@ -35,19 +43,26 @@ impl Binder {
                     let Some(manifest) = self.catalog.get_mut(&table_key) else {
                         continue;
                     };
-                    match idx.using.as_str() {
-                        "BM25" | "SPARSE" | "TEXT" => {
+                    match idx.using.to_uppercase().as_str() {
+                        "BM25" | "SPARSE" | "TEXT" | "SPLADE" | "SEISMIC" => {
                             manifest.sparse_enabled = true;
                             manifest.index_mode = IndexMode::Text;
                         }
-                        "HNSW" | "VECTOR" | "DENSE" | "ANN" | "DISKANN" => {
+                        "HNSW" | "VECTOR" | "DENSE" | "ANN" => {
+                            manifest.index_mode = IndexMode::Vector;
+                        }
+                        "IVF" => {
+                            manifest.index_mode = IndexMode::Vector;
+                        }
+                        "DISKANN" => {
+                            manifest.graph_enabled = true;
                             manifest.index_mode = IndexMode::Vector;
                         }
                         "HYBRID" => {
                             manifest.sparse_enabled = true;
                             manifest.index_mode = IndexMode::Hybrid;
                         }
-                        _ => {}
+                        other => return Err(format!("unsupported CREATE INDEX USING {other}")),
                     }
                 }
                 _ => {}

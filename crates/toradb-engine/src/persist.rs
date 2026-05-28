@@ -8,7 +8,7 @@ use toradb_index::sparse::bm25_lexicon::{self, Bm25LexiconView};
 use toradb_index::sparse::bm25_route::{self, Bm25RouteView};
 use toradb_index::sparse::bm25_tbm3;
 use toradb_index::sparse::bm25::tokenize;
-use toradb_core::CandidateSet;
+use toradb_core::{CandidateSet, DocId};
 use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
 use toradb_storage::columnar::{
     bm25_snapshot_from_segment, parquet_row_count, read_segment, read_segment_id_bounds,
@@ -687,7 +687,14 @@ pub fn load_merged_segment_bm25_sidecars(
             .collect()
     });
     let _ = caches;
-    Ok(Bm25Snapshot::merge_snapshots_tree(snaps))
+    let use_interner = std::env::var("TORADB_BM25_INTERNER")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(snaps.len() >= 8);
+    if use_interner {
+        Ok(Bm25Snapshot::merge_snapshots_interned(snaps))
+    } else {
+        Ok(Bm25Snapshot::merge_snapshots_tree(snaps))
+    }
 }
 
 fn snapshot_for_columnar_docs(docs: &[ColumnarDoc]) -> Bm25Snapshot {
@@ -709,6 +716,44 @@ fn snapshot_for_columnar_quant(docs: &[ColumnarDoc]) -> Option<quant_codec::Quan
         return None;
     }
     quant_codec::QuantVectorSnapshot::from_pairs(&pairs).ok()
+}
+
+/// Load dequantized vectors for the given doc ids from segment quant sidecars.
+pub fn load_vectors_for_ids(
+    base: &Path,
+    table: &str,
+    ids: &[DocId],
+) -> Result<HashMap<DocId, Vec<f32>>, String> {
+    use toradb_index::dense::quant_codec;
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let want: HashSet<DocId> = ids.iter().copied().collect();
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(HashMap::new());
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    let mut out = HashMap::new();
+    for seg in &manifest.segments {
+        let path = segment_quant_bin_path(base, table, seg);
+        if !path.exists() {
+            continue;
+        }
+        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        let snap = quant_codec::decode_snapshot(&bytes)?;
+        for (i, &id) in snap.ids.iter().enumerate() {
+            if want.contains(&id) && !out.contains_key(&id) {
+                if let Ok(v) = snap.decompress_vector(i) {
+                    out.insert(id, v);
+                }
+            }
+        }
+        if out.len() >= want.len() {
+            break;
+        }
+    }
+    Ok(out)
 }
 
 pub fn table_has_quant_sidecars(base: &Path, table: &str) -> Result<bool, String> {

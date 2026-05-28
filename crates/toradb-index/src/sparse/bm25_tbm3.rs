@@ -244,7 +244,7 @@ impl<'a> Bm25Tbm3View<'a> {
         TermPostings::parse(self.bytes, base, self.num_docs, df)
     }
 
-    pub(crate) fn brute_search(&self, query: &str, k: usize) -> CandidateSet {
+    pub fn brute_search(&self, query: &str, k: usize) -> CandidateSet {
         let mut scores: HashMap<DocId, f32> = HashMap::new();
         for term in tokenize(query) {
             let Some((df, rel_off, _plen)) = self.find_term_entry(&term) else {

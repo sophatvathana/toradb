@@ -10,6 +10,7 @@ toradb-simd = { workspace = true }
 toradb-storage = { workspace = true }
 toradb-index = { workspace = true }
 toradb-sql = { workspace = true }
+toradb-distributed = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

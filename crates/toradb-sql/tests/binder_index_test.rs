@@ -9,6 +9,7 @@ fn bind_create_index_updates_table_mode() {
     let mut binder = Binder::new();
     binder
         .bind(&[Stmt::CreateTable(CreateTableStmt {
+            namespace: None,
             name: "PAPERS".into(),
             mode: "TEXT".into(),
             columns: vec![],
@@ -17,6 +18,7 @@ fn bind_create_index_updates_table_mode() {
     binder
         .bind(&[Stmt::CreateIndex(CreateIndexStmt {
             name: "VEC_IDX".into(),
+            namespace: None,
             table: "papers".into(),
             column: "EMBEDDING".into(),
             using: "HNSW".into(),

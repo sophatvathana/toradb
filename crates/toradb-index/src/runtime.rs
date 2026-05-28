@@ -36,18 +36,23 @@ impl RetrievalRuntime {
         };
 
         if batch.tier1_enable_sparse {
-            push_cap(
-                &mut merged,
-                self.store
+            let sparse = match batch.sparse_backend.as_str() {
+                "splade" => crate::sparse::splade::search(&self.store, table, q, cap),
+                "seismic" => crate::sparse::seismic::search(&self.store, table, q, cap),
+                _ => self
+                    .store
                     .table(table)
                     .map(|t| t.bm25_search(q, cap))
                     .unwrap_or_default(),
-            );
+            };
+            push_cap(&mut merged, sparse);
         }
 
         if batch.tier1_enable_dense && !query_vec.is_empty() {
             let dense = if batch.tier1_use_diskann {
                 dense::diskann::search(&self.store, table, query_vec, cap)
+            } else if batch.tier1_use_ivf {
+                dense::ivf::search(&self.store, table, query_vec, cap)
             } else {
                 dense::hnsw::search(&self.store, table, query_vec, cap)
             };

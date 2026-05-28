@@ -138,6 +138,21 @@ impl Bm25Snapshot {
         };
     }
 
+    /// Merge disjoint snapshots using a term interner (lower peak RAM than repeated `HashMap` merges).
+    pub fn merge_snapshots_interned(snaps: Vec<Bm25Snapshot>) -> Option<Bm25Snapshot> {
+        if snaps.is_empty() {
+            return None;
+        }
+        if snaps.len() == 1 {
+            return Some(snaps.into_iter().next().unwrap());
+        }
+        let mut interner = Bm25Interner::default();
+        for snap in snaps {
+            interner.absorb_snapshot(snap);
+        }
+        Some(interner.into_snapshot())
+    }
+
     /// Balanced tree merge of disjoint segment snapshots
     pub fn merge_snapshots_tree(mut snaps: Vec<Bm25Snapshot>) -> Option<Bm25Snapshot> {
         if snaps.is_empty() {
@@ -160,6 +175,59 @@ impl Bm25Snapshot {
             snaps = next;
         }
         snaps.pop()
+    }
+}
+
+/// Interned term dictionary for faster multi-segment BM25 merges.
+#[derive(Debug, Default)]
+pub struct Bm25Interner {
+    terms: Vec<String>,
+    term_to_id: HashMap<String, u32>,
+    postings: Vec<Vec<(DocId, u32)>>,
+    doc_len: HashMap<DocId, u32>,
+    doc_freq: Vec<u32>,
+    num_docs: u32,
+    total_doc_len: u64,
+}
+
+impl Bm25Interner {
+    pub fn absorb_snapshot(&mut self, snap: Bm25Snapshot) {
+        self.num_docs += snap.num_docs;
+        self.doc_len.extend(snap.doc_len);
+        self.total_doc_len = self.doc_len.values().map(|&l| u64::from(l)).sum();
+        for (term, posts) in snap.postings {
+            let df_add = snap.doc_freq.get(&term).copied().unwrap_or(0);
+            let tid = *self.term_to_id.entry(term.clone()).or_insert_with(|| {
+                let id = self.terms.len() as u32;
+                self.terms.push(term);
+                self.postings.push(Vec::new());
+                self.doc_freq.push(0);
+                id
+            }) as usize;
+            self.doc_freq[tid] += df_add;
+            self.postings[tid].extend(posts);
+        }
+    }
+
+    pub fn into_snapshot(self) -> Bm25Snapshot {
+        let avg_dl = if self.num_docs > 0 {
+            self.total_doc_len as f32 / self.num_docs as f32
+        } else {
+            0.0
+        };
+        let mut postings = HashMap::new();
+        let mut doc_freq = HashMap::new();
+        for (i, term) in self.terms.iter().enumerate() {
+            postings.insert(term.clone(), self.postings[i].clone());
+            doc_freq.insert(term.clone(), self.doc_freq[i]);
+        }
+        Bm25Snapshot {
+            postings,
+            doc_len: self.doc_len,
+            doc_freq,
+            num_docs: self.num_docs,
+            avg_dl,
+        }
     }
 }
 

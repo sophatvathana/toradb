@@ -15,8 +15,14 @@ pub struct Batch {
     pub tier1_enable_dense: bool,
     /// When true, tier-1 dense retrieval uses the on-disk DiskANN graph sidecar.
     pub tier1_use_diskann: bool,
+    /// When true, tier-1 dense uses IVF (falls back to HNSW in-memory when unavailable).
+    pub tier1_use_ivf: bool,
     /// When true, run per-segment retrieval across worker threads (single-node distributed).
     pub distributed_segments: bool,
+    /// Sparse backend: `bm25` (default), `splade`, or `seismic`.
+    pub sparse_backend: String,
+    /// RRF fusion constant (default 60).
+    pub fusion_k: u32,
 }
 
 impl Default for Batch {
@@ -33,7 +39,10 @@ impl Default for Batch {
             tier1_enable_sparse: true,
             tier1_enable_dense: true,
             tier1_use_diskann: false,
+            tier1_use_ivf: false,
             distributed_segments: false,
+            sparse_backend: "bm25".into(),
+            fusion_k: 60,
         }
     }
 }

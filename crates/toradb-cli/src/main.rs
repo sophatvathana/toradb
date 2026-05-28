@@ -13,6 +13,7 @@ use arrow::record_batch::RecordBatch;
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use toradb_distributed::{ClusterClient, ClusterConfig, Worker};
 use toradb_engine::persist;
 use toradb_engine::{DagRunner, IndexBuildPhase, IndexBuildState};
 
@@ -31,6 +32,12 @@ enum Commands {
     Finish(FinishArgs),
     /// Resume or rerun index build (idempotent segment skip).
     Resume(FinishArgs),
+    /// Run a distributed segment worker RPC server.
+    Worker(WorkerArgs),
+    /// Print cluster node health from `TORADB_CLUSTER_CONFIG` or `--config`.
+    ClusterStatus(ClusterConfigArgs),
+    /// Rebuild `segment_id_ranges` for legacy tables.
+    RebuildIdRanges(FinishArgs),
 }
 
 #[derive(Parser)]
@@ -65,13 +72,51 @@ struct FinishArgs {
     compact: bool,
 }
 
+#[derive(Parser)]
+struct WorkerArgs {
+    #[arg(long)]
+    db: PathBuf,
+    #[arg(long, default_value = "127.0.0.1:9100")]
+    addr: String,
+}
+
+#[derive(Parser)]
+struct ClusterConfigArgs {
+    #[arg(long)]
+    config: Option<PathBuf>,
+}
+
 fn main() -> Result<(), String> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Bulk(args) => run_bulk(args),
         Commands::Finish(args) => run_index_op(args, false),
         Commands::Resume(args) => run_index_op(args, true),
+        Commands::Worker(args) => {
+            eprintln!("worker listening on {} db={}", args.addr, args.db.display());
+            Worker::new(args.db).serve_blocking(&args.addr)
+        }
+        Commands::ClusterStatus(args) => run_cluster_status(args),
+        Commands::RebuildIdRanges(args) => {
+            persist::rebuild_segment_id_ranges(&args.db, &args.table)?;
+            eprintln!("ok: rebuilt segment_id_ranges for {}", args.table);
+            Ok(())
+        }
     }
+}
+
+fn run_cluster_status(args: ClusterConfigArgs) -> Result<(), String> {
+    let config = if let Some(path) = args.config {
+        ClusterConfig::load(path)?
+    } else {
+        ClusterConfig::from_env()
+            .ok_or("set TORADB_CLUSTER_CONFIG (YAML or JSON) or pass --config")?
+    };
+    let client = ClusterClient::new(config);
+    for (id, ok) in client.health_all()? {
+        eprintln!("{id}: {}", if ok { "healthy" } else { "down" });
+    }
+    Ok(())
 }
 
 fn run_index_op(args: FinishArgs, resume: bool) -> Result<(), String> {

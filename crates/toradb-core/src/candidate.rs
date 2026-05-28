@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use crate::schema::DocId;
 
 /// Bounded candidate set for tiered retrieval (hot path: no heap growth in steady state).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CandidateSet {
     pub ids: Vec<DocId>,
     pub scores: Vec<f32>,

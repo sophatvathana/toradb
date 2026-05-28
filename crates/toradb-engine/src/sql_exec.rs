@@ -225,12 +225,16 @@ pub fn explain_plan(dag: &DagRunner, sel: &SelectStmt) -> Result<String, String>
     };
 
     Ok(format!(
-        "RetrievalScan(table={table} sparse={sparse} vector={vector} dense_backend={dense_backend} distributed={distributed} segment_scan={segment_scan} segments={segments} segment_workers={workers} indexes=[{indexes}] limit={limit} offset={offset}{join}{order})",
+        "RetrievalScan(table={table} sparse={sparse} vector={vector} dense_backend={dense_backend} distributed={distributed} hyde={hyde} crag={crag} graph_expand={graph_expand} fusion_k={fusion_k} segment_scan={segment_scan} segments={segments} segment_workers={workers} indexes=[{indexes}] limit={limit} offset={offset}{join}{order})",
         table = sel.table,
         sparse = sparse,
         vector = vector,
         dense_backend = dense_backend,
         distributed = sel.distributed,
+        hyde = sel.hyde,
+        crag = sel.crag,
+        graph_expand = sel.graph_expand,
+        fusion_k = sel.fusion_k,
         segment_scan = segment_scan,
         segments = segments,
         workers = workers,
@@ -277,6 +281,20 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
     batch.tier1_enable_sparse = sparse;
     batch.tier1_enable_dense = vector;
     batch.distributed_segments = sel.distributed;
+    batch.enable_hyde = sel.hyde;
+    batch.enable_crag = sel.crag;
+    batch.graph_expand = sel.graph_expand;
+    batch.graph_depth = if sel.graph_expand {
+        sel.graph_depth.max(1)
+    } else {
+        0
+    };
+    batch.fusion_k = sel.fusion_k.max(1);
+    batch.sparse_backend = sel
+        .sparse
+        .clone()
+        .unwrap_or_else(|| "bm25".into())
+        .to_lowercase();
     if vector && !sparse && dag.table_has_diskann_sidecar(&sel.table) {
         batch.tier1_use_diskann = true;
     }

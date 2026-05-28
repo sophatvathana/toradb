@@ -10,6 +10,8 @@ pub enum Stmt {
     DropTable { name: String },
     ShowTables,
     ShowMaterializedViews,
+    ShowIndexes { table: String },
+    ShowCreateTable { table: String },
     Describe { name: String },
     Select(SelectStmt),
 }
@@ -22,6 +24,8 @@ pub struct CreateMaterializedViewStmt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateTableStmt {
+    /// Optional namespace prefix (`db.table` → namespace + table).
+    pub namespace: Option<String>,
     pub name: String,
     pub mode: String,
     pub columns: Vec<(String, String)>,
@@ -30,6 +34,7 @@ pub struct CreateTableStmt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateIndexStmt {
     pub name: String,
+    pub namespace: Option<String>,
     pub table: String,
     pub column: String,
     pub using: String,
@@ -103,8 +108,14 @@ pub struct SelectStmt {
     pub offset: u32,
     /// `Some(true)` = ORDER BY score DESC, `Some(false)` = ASC, `None` = retrieval merge order.
     pub order_by_score_desc: Option<bool>,
-    /// When true, scan segment shards in parallel (single-node distributed execution).
+    /// When true, scan segment shards in parallel (single-node or cluster distributed execution).
     pub distributed: bool,
+    pub hyde: bool,
+    pub crag: bool,
+    pub graph_expand: bool,
+    pub graph_depth: u32,
+    /// RRF fusion constant (default 60).
+    pub fusion_k: u32,
     /// When true, clients should page results (see `Database.sql_stream`).
     pub stream: bool,
     /// When true, return a plan only (`EXPLAIN`); do not execute retrieval.
