@@ -41,6 +41,16 @@ cargo test
 pytest tests/python_smoke.py -q
 ```
 
+## Platform Dashboard (Rust API + UI)
+
+```bash
+cd apps/platform && pnpm install && pnpm build
+cd ../..
+cargo run -p toradb-cli --bin toradb-ingest -- platform serve --db examples/_demo_db --static-dir apps/platform/out --addr 127.0.0.1:8787
+```
+
+Open `http://127.0.0.1:8787` for the embedded dashboard + API server.
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE).

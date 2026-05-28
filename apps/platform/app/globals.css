@@ -1,0 +1,61 @@
+@import "tailwindcss";
+@plugin "tailwindcss-animate";
+
+:root {
+  --background: #090f1d;
+  --foreground: #d8e3ff;
+  --card: #111a31;
+  --card-foreground: #d8e3ff;
+  --popover: #111a31;
+  --popover-foreground: #d8e3ff;
+  --primary: #4a89ff;
+  --primary-foreground: #eaf2ff;
+  --secondary: #1b2746;
+  --secondary-foreground: #c4d4ff;
+  --muted: #13203d;
+  --muted-foreground: #92a5cb;
+  --accent: #1f2f59;
+  --accent-foreground: #d8e3ff;
+  --destructive: #ef4444;
+  --destructive-foreground: #fff1f2;
+  --border: #273960;
+  --input: #273960;
+  --ring: #4a89ff;
+  --radius: 0.625rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}

@@ -10,6 +10,7 @@ members = [
     "crates/toradb-sql",
     "crates/toradb-sdk",
     "crates/toradb-cli",
+    "crates/toradb-api",
 ]
 # toradb-sdk is a Python cdylib; build it with maturin or `cargo build -p toradb-sdk`.
 default-members = [
@@ -20,6 +21,7 @@ default-members = [
     "crates/toradb-engine",
     "crates/toradb-sql",
     "crates/toradb-cli",
+    "crates/toradb-api",
 ]
 
 [workspace.package]
@@ -35,6 +37,7 @@ toradb-index = { path = "crates/toradb-index" }
 toradb-distributed = { path = "crates/toradb-distributed" }
 toradb-engine = { path = "crates/toradb-engine" }
 toradb-sql = { path = "crates/toradb-sql" }
+toradb-api = { path = "crates/toradb-api" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -44,3 +47,6 @@ memmap2 = "0.9"
 arrow = { version = "58.3.0", default-features = false, features = ["ipc"] }
 parquet = { version = "58.3.0", default-features = false, features = ["arrow", "zstd"] }
 rayon = "1.12.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["fs", "trace"] }

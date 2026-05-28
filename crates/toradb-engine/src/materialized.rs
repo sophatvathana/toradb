@@ -67,6 +67,35 @@ pub fn load_view_row_count(base: &Path, name: &str) -> Result<usize, String> {
     Ok(load_view(base, name)?.ids.len())
 }
 
+/// Summary for platform/API listing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaterializedViewInfo {
+    pub name: String,
+    pub row_count: usize,
+    pub query: String,
+}
+
+pub fn get_materialized_view_info(base: &Path, name: &str) -> Result<MaterializedViewInfo, String> {
+    let view = load_view(base, name)?;
+    Ok(MaterializedViewInfo {
+        name: name.to_string(),
+        row_count: view.ids.len(),
+        query: view.query,
+    })
+}
+
+pub fn list_materialized_view_infos(base: &Path) -> Result<Vec<MaterializedViewInfo>, String> {
+    let mut out = Vec::new();
+    for name in list_materialized_views(base)? {
+        out.push(get_materialized_view_info(base, &name)?);
+    }
+    Ok(out)
+}
+
+pub fn view_query(base: &Path, name: &str) -> Result<String, String> {
+    Ok(load_view(base, name)?.query)
+}
+
 pub fn drop_materialized_view(base: &Path, name: &str) -> Result<(), String> {
     if !is_materialized_view(base, name) {
         return Err(format!("materialized view {name} does not exist"));

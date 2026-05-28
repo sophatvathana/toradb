@@ -1,0 +1,15 @@
+[package]
+name = "toradb-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+toradb-core = { workspace = true }
+toradb-engine = { workspace = true }
+toradb-sql = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+axum = { version = "0.8", features = ["multipart"] }
+tower-http = { workspace = true }

@@ -8,14 +8,14 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
-use arrow::array::StringArray;
-use arrow::record_batch::RecordBatch;
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use toradb_api::ServeConfig;
 use toradb_distributed::{ClusterClient, ClusterConfig, Worker};
 use toradb_engine::persist;
-use toradb_engine::{DagRunner, IndexBuildPhase, IndexBuildState};
+use toradb_engine::{
+    ingest_jsonl, ingest_parquet, DagRunner, IndexBuildPhase, IndexBuildState,
+};
 use toradb_index::dense::hnsw_index::HnswIndex;
 use toradb_index::dense::turboquant;
 use toradb_index::dense::turboquant_codec::{TqMode, TurboQuantSnapshot};
@@ -45,6 +45,17 @@ enum Commands {
     RebuildIdRanges(FinishArgs),
     /// Run the TurboQuant validation sweep on a vector corpus.
     TqBench(TqBenchArgs),
+    /// Platform dashboard and embedded API server commands.
+    Platform {
+        #[command(subcommand)]
+        command: PlatformCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum PlatformCommand {
+    /// Serve dashboard assets and API from one process.
+    Serve(PlatformServeArgs),
 }
 
 #[derive(Parser)]
@@ -127,6 +138,16 @@ struct ClusterConfigArgs {
     config: Option<PathBuf>,
 }
 
+#[derive(Parser)]
+struct PlatformServeArgs {
+    #[arg(long)]
+    db: PathBuf,
+    #[arg(long, default_value = "127.0.0.1:8787")]
+    addr: String,
+    #[arg(long, default_value = "apps/platform/out")]
+    static_dir: PathBuf,
+}
+
 fn main() -> Result<(), String> {
     let cli = Cli::parse();
     match cli.command {
@@ -144,6 +165,25 @@ fn main() -> Result<(), String> {
             Ok(())
         }
         Commands::TqBench(args) => run_tq_bench(args),
+        Commands::Platform { command } => run_platform(command),
+    }
+}
+
+fn run_platform(cmd: PlatformCommand) -> Result<(), String> {
+    match cmd {
+        PlatformCommand::Serve(args) => {
+            eprintln!(
+                "platform serve on {} db={} static={}",
+                args.addr,
+                args.db.display(),
+                args.static_dir.display()
+            );
+            toradb_api::serve_blocking(ServeConfig {
+                db_path: args.db,
+                listen_addr: args.addr,
+                static_dir: args.static_dir,
+            })
+        }
     }
 }
 
@@ -297,121 +337,6 @@ fn run_bulk(args: BulkArgs) -> Result<(), String> {
     } else {
         eprintln!("skipped finish (--no-finish); run: toradb-ingest finish --db … --table …");
     }
-    Ok(())
-}
-
-fn ingest_parquet(
-    dag: &mut DagRunner,
-    table: &str,
-    path: &Path,
-    limit: u64,
-) -> Result<u64, String> {
-    let files = parquet_files(path)?;
-    let mut total = 0u64;
-    for file in files {
-        if limit > 0 && total >= limit {
-            break;
-        }
-        let f = File::open(&file).map_err(|e| e.to_string())?;
-        let builder = ParquetRecordBatchReaderBuilder::try_new(f).map_err(|e| e.to_string())?;
-        let mut reader = builder.build().map_err(|e| e.to_string())?;
-        for batch in reader.by_ref() {
-            if limit > 0 && total >= limit {
-                break;
-            }
-            let batch: RecordBatch = batch.map_err(|e| e.to_string())?;
-            if batch.num_rows() == 0 {
-                continue;
-            }
-            if limit > 0 {
-                let remain = (limit - total) as usize;
-                if batch.num_rows() > remain {
-                    let batch = batch.slice(0, remain);
-                    let added = dag.ingest_record_batch(table, &batch)? as u64;
-                    total += added;
-                    break;
-                }
-            }
-            let added = dag.ingest_record_batch(table, &batch)? as u64;
-            total += added;
-        }
-    }
-    Ok(total)
-}
-
-fn parquet_files(path: &Path) -> Result<Vec<PathBuf>, String> {
-    if path.is_file() {
-        return Ok(vec![path.to_path_buf()]);
-    }
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let p = entry.path();
-        if p.extension().and_then(|e| e.to_str()) == Some("parquet") {
-            out.push(p);
-        }
-    }
-    out.sort();
-    if out.is_empty() {
-        return Err(format!("no parquet files under {}", path.display()));
-    }
-    Ok(out)
-}
-
-fn ingest_jsonl(
-    dag: &mut DagRunner,
-    table: &str,
-    path: &Path,
-    batch_size: usize,
-    limit: u64,
-) -> Result<u64, String> {
-    let file = File::open(path).map_err(|e| e.to_string())?;
-    let reader = BufReader::new(file);
-    let mut texts: Vec<String> = Vec::with_capacity(batch_size);
-    let mut total = 0u64;
-
-    for line in reader.lines() {
-        if limit > 0 && total >= limit {
-            break;
-        }
-        let line = line.map_err(|e| e.to_string())?;
-        let row: serde_json::Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
-        let text = row
-            .get("text")
-            .or_else(|| row.get("passage"))
-            .or_else(|| row.get("content"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if text.is_empty() {
-            continue;
-        }
-        texts.push(text);
-        total += 1;
-        if texts.len() >= batch_size {
-            flush_text_batch(dag, table, &mut texts)?;
-        }
-    }
-    if !texts.is_empty() {
-        flush_text_batch(dag, table, &mut texts)?;
-    }
-    Ok(total)
-}
-
-fn flush_text_batch(dag: &mut DagRunner, table: &str, texts: &mut Vec<String>) -> Result<(), String> {
-    if texts.is_empty() {
-        return Ok(());
-    }
-    let schema = arrow::datatypes::Schema::new(vec![arrow::datatypes::Field::new(
-        "text",
-        arrow::datatypes::DataType::Utf8,
-        false,
-    )]);
-    let arr = StringArray::from(std::mem::take(texts));
-    let batch = RecordBatch::try_new(std::sync::Arc::new(schema), vec![std::sync::Arc::new(arr)])
-        .map_err(|e| e.to_string())?;
-    dag.ingest_record_batch(table, &batch)?;
     Ok(())
 }
 
