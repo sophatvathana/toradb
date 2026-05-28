@@ -9,6 +9,16 @@ description: "GROUP BY, aggregates, WHERE"
 SELECT tag, COUNT(*) FROM articles GROUP BY tag
 ```
 
+`GROUP BY id` is supported and groups by document id. On large tables, that can produce one group per row.
+
+## Global count
+
+```sql
+SELECT COUNT(*) FROM articles
+```
+
+Use this for total rows. It is faster than grouping by `id`.
+
 ## WHERE
 
 ```sql

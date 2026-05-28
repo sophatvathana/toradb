@@ -12,7 +12,7 @@ use toradb_core::CandidateSet;
 use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
 use toradb_storage::columnar::{
     bm25_snapshot_from_segment, parquet_row_count, read_segment, read_segment_id_bounds,
-    read_segment_matching_ids, write_segment_with_compression,
+    read_segment_matching_ids, scan_segment_id_metadata, write_segment_with_compression,
     ColumnarDoc, IndexMode, QueryMode, TableManifestFile, ROUTED_QUERY_MIN_SEGMENTS,
 };
 use toradb_storage::cache::{get_or_mmap, read_segment_cached, CachedBm25Segment, StorageCaches};
@@ -769,6 +769,48 @@ fn vector_snapshot_from_store(store: &CorpusStore, table: &str) -> Option<Vector
     }
     let dim = dim?;
     VectorSnapshot::from_pairs(dim as u32, &pairs).ok()
+}
+
+pub fn scan_table_id_metadata(
+    store: &CorpusStore,
+    base: Option<&Path>,
+    table: &str,
+    mut f: impl FnMut(u64, &HashMap<String, String>) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut mem_rows = 0usize;
+    let mut scan_err: Option<String> = None;
+    store.for_each_metadata(table, |id, metadata| {
+        mem_rows += 1;
+        if scan_err.is_none() {
+            if let Err(e) = f(id, metadata) {
+                scan_err = Some(e);
+            }
+        }
+    });
+    if let Some(e) = scan_err {
+        return Err(e);
+    }
+    if mem_rows > 0 {
+        return Ok(());
+    }
+
+    let Some(base) = base else {
+        return Ok(());
+    };
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(());
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    let seg_dir = TableManifestFile::segments_dir(base, table);
+    for seg in &manifest.segments {
+        let path = seg_dir.join(seg);
+        if !path.exists() {
+            continue;
+        }
+        scan_segment_id_metadata(&path, |id, metadata| f(id, &metadata))?;
+    }
+    Ok(())
 }
 
 /// Read all documents for a table from on-disk Parquet segments.

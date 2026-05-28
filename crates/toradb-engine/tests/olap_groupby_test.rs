@@ -53,6 +53,86 @@ fn group_by_counts_metadata_tags() {
 }
 
 #[test]
+fn trivial_count_without_group_by() {
+    let dir = std::env::temp_dir().join("toradb_olap_count_no_group");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let mut dag = DagRunner::open(&dir).expect("open");
+    dag.add_documents(
+        "docs",
+        vec![
+            IngestDoc {
+                text: "a".into(),
+                metadata: [("tag".into(), "x".into())].into(),
+                vector: None,
+            },
+            IngestDoc {
+                text: "b".into(),
+                metadata: [("tag".into(), "y".into())].into(),
+                vector: None,
+            },
+            IngestDoc {
+                text: "c".into(),
+                metadata: [("tag".into(), "x".into())].into(),
+                vector: None,
+            },
+        ],
+    )
+    .expect("add");
+
+    let stmts = parse("SELECT COUNT(*) FROM docs").unwrap();
+    let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+    let sql_exec::SqlSelectResult::Aggregate(out) = sql_exec::run_select(&mut dag, sel).unwrap()
+    else {
+        panic!("aggregate");
+    };
+    assert_eq!(out.group_by_column, "_all");
+    assert_eq!(out.group_keys, vec!["_all".to_string()]);
+    assert_eq!(out.values, vec![3.0]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn group_by_id_uses_doc_id_not_metadata() {
+    let dir = std::env::temp_dir().join("toradb_olap_groupby_id");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let mut dag = DagRunner::open(&dir).expect("open");
+    dag.add_documents(
+        "docs",
+        vec![
+            IngestDoc {
+                text: "a".into(),
+                metadata: Default::default(),
+                vector: None,
+            },
+            IngestDoc {
+                text: "b".into(),
+                metadata: Default::default(),
+                vector: None,
+            },
+        ],
+    )
+    .expect("add");
+
+    let stmts = parse("SELECT id, COUNT(*) FROM docs GROUP BY id").unwrap();
+    let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+    let sql_exec::SqlSelectResult::Aggregate(out) = sql_exec::run_select(&mut dag, sel).unwrap()
+    else {
+        panic!("aggregate");
+    };
+    assert_eq!(out.group_keys, vec!["0".to_string(), "1".to_string()]);
+    assert_eq!(out.values, vec![1.0, 1.0]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn search_then_group_by_filters_docs() {
     let dir = std::env::temp_dir().join("toradb_olap_search_groupby");
     let _ = std::fs::remove_dir_all(&dir);
@@ -354,6 +434,48 @@ fn where_gt_numeric_metadata() {
     };
     assert_eq!(out.group_keys, vec!["high".to_string()]);
     assert_eq!(out.values, vec![1.0]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn filtered_count_with_where() {
+    let dir = std::env::temp_dir().join("toradb_olap_count_where");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let mut dag = DagRunner::open(&dir).expect("open");
+    dag.add_documents(
+        "docs",
+        vec![
+            IngestDoc {
+                text: "a".into(),
+                metadata: [("tag".into(), "science".into())].into(),
+                vector: None,
+            },
+            IngestDoc {
+                text: "b".into(),
+                metadata: [("tag".into(), "science".into())].into(),
+                vector: None,
+            },
+            IngestDoc {
+                text: "c".into(),
+                metadata: [("tag".into(), "patent".into())].into(),
+                vector: None,
+            },
+        ],
+    )
+    .expect("add");
+
+    let stmts = parse("SELECT COUNT(*) FROM docs WHERE tag = 'science'").unwrap();
+    let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+    let sql_exec::SqlSelectResult::Aggregate(out) = sql_exec::run_select(&mut dag, sel).unwrap()
+    else {
+        panic!("aggregate");
+    };
+    assert_eq!(out.group_keys, vec!["_all".to_string()]);
+    assert_eq!(out.values, vec![2.0]);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

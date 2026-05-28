@@ -562,6 +562,7 @@ def sample_queries(table_name: str) -> dict[str, list[str]]:
         "sql": [
             f"SELECT id FROM {table_name} SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 5",
             f"SELECT id FROM {table_name} DISTRIBUTED SPARSE SEARCH body BM25('wireless') LIMIT 10",
+            f"SELECT COUNT(*) FROM {table_name}",
             f"SELECT tag, COUNT(*) FROM {table_name} GROUP BY tag",
             f"DESCRIBE {table_name}",
             "SHOW TABLES",

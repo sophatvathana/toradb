@@ -336,6 +336,12 @@ impl TableCorpus {
         self.docs.len()
     }
 
+    pub fn for_each_metadata(&self, mut f: impl FnMut(DocId, &HashMap<String, String>)) {
+        for (&id, doc) in &self.docs {
+            f(id, &doc.metadata);
+        }
+    }
+
     pub fn next_id(&self) -> DocId {
         self.next_id
     }
@@ -591,6 +597,16 @@ impl CorpusStore {
 
     pub fn all_documents(&self, table: &str) -> Vec<(DocId, IngestDoc)> {
         self.docs_with_ids_since(table, 0)
+    }
+
+    pub fn for_each_metadata(
+        &self,
+        table: &str,
+        mut f: impl FnMut(DocId, &HashMap<String, String>),
+    ) {
+        if let Some(t) = self.table(table) {
+            t.for_each_metadata(&mut f);
+        }
     }
 
     /// Look up documents by id from the in-memory corpus (empty when segment-only open).

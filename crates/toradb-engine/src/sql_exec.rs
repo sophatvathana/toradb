@@ -47,7 +47,7 @@ fn resolve_retrieval_columns(sel: &SelectStmt) -> Result<Vec<String>, String> {
             }
             SelectExpr::Aggregate { .. } => {
                 return Err(
-                    "aggregates in SELECT require GROUP BY (use GROUP BY ... SELECT COUNT(*) ...)"
+                    "aggregates in SELECT run as analytics (use COUNT(*) for total rows or GROUP BY for grouped results)"
                         .into(),
                 );
             }
@@ -134,7 +134,7 @@ pub fn run_select(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSelectResu
             )?));
         }
     }
-    if sel.group_by.is_some() {
+    if is_analytics_select(sel) {
         return Ok(SqlSelectResult::Aggregate(run_aggregate(dag, sel)?));
     }
     Ok(SqlSelectResult::Search(run_search(dag, sel)?))
@@ -153,7 +153,15 @@ pub fn explain_plan(dag: &DagRunner, sel: &SelectStmt) -> Result<String, String>
             ));
         }
     }
-    if sel.group_by.is_some() {
+    if is_analytics_select(sel) {
+        if sel.group_by.is_none()
+            && sel.where_clause.is_none()
+            && !has_sparse(sel)
+            && !has_vector(sel)
+        {
+            let rows = dag.table_row_count(&sel.table)?;
+            return Ok(format!("TrivialCountScan(table={} rows={rows})", sel.table));
+        }
         return Ok(format!(
             "AggregateScan(table={} group_by={:?} limit={} offset={})",
             sel.table,
@@ -240,6 +248,12 @@ fn has_sparse(sel: &SelectStmt) -> bool {
 
 fn has_vector(sel: &SelectStmt) -> bool {
     sel.vector || sel.vector_query.is_some() || sel.vector_text.is_some()
+}
+
+fn is_analytics_select(sel: &SelectStmt) -> bool {
+    sel.select_items
+        .iter()
+        .any(|item| matches!(item, SelectExpr::Aggregate { .. }))
 }
 
 pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSearchResult, String> {

@@ -415,6 +415,15 @@ impl DagRunner {
         )
     }
 
+    pub fn scan_table_id_metadata(
+        &self,
+        table: &str,
+        f: impl FnMut(u64, &std::collections::HashMap<String, String>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let base = self.db_path().map(|p| p.to_path_buf());
+        crate::persist::scan_table_id_metadata(&self.retrieval.store, base.as_deref(), table, f)
+    }
+
     /// Row count without loading full Parquet when the table is segment-only on disk.
     pub fn table_row_count(&self, table: &str) -> Result<usize, String> {
         if let Some(t) = self.retrieval.store.table(table) {

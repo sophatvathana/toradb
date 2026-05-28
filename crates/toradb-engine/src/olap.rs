@@ -59,6 +59,14 @@ fn value_column_name(func: &AggFunc, column: Option<&str>) -> String {
     }
 }
 
+fn group_key(group_col: Option<&str>, id: u64, metadata: &HashMap<String, String>) -> String {
+    match group_col {
+        None => "_all".into(),
+        Some(col) if col.eq_ignore_ascii_case("id") => id.to_string(),
+        Some(col) => metadata.get(col).cloned().unwrap_or_else(|| "_null".into()),
+    }
+}
+
 fn primary_aggregate(sel: &SelectStmt) -> Result<(AggFunc, Option<String>), String> {
     let mut aggs = Vec::new();
     for item in &sel.select_items {
@@ -139,12 +147,11 @@ impl GroupAccum {
 }
 
 pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggregateResult, String> {
-    let group_col = sel
-        .group_by
-        .clone()
-        .ok_or("analytics SELECT requires GROUP BY column")?;
-
     let (agg_func, agg_col) = primary_aggregate(sel)?;
+    if sel.group_by.is_none() && !matches!(agg_func, AggFunc::CountStar) {
+        return Err("analytics SELECT without GROUP BY supports only COUNT(*)".into());
+    }
+    let group_col = sel.group_by.clone();
     let value_col = value_column_name(&agg_func, agg_col.as_deref());
 
     let filter_ids: Option<HashSet<u64>> = if sel.sparse_query.is_some()
@@ -152,18 +159,21 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
         || sel.vector_query.is_some()
         || sel.vector_text.is_some()
     {
+        let mut retrieval = sel.clone();
+        retrieval.select_items = vec![SelectExpr::Column("id".into())];
+        retrieval.group_by = None;
         let sparse = sel.sparse_query.as_ref().is_some_and(|q| !q.is_empty());
         let vector = sel.vector || sel.vector_query.is_some() || sel.vector_text.is_some();
         let ids: Vec<u64> = if sparse && vector {
-            let mut lexical = sel.clone();
+            let mut lexical = retrieval.clone();
             lexical.vector = false;
             lexical.vector_query = None;
             lexical.vector_text = None;
             run_search(dag, &lexical)?.ids
         } else if vector && !sparse {
-            run_search(dag, sel)?.ids.into_iter().take(1).collect()
+            run_search(dag, &retrieval)?.ids.into_iter().take(1).collect()
         } else {
-            run_search(dag, sel)?.ids
+            run_search(dag, &retrieval)?.ids
         };
         Some(ids.into_iter().collect())
     } else {
@@ -171,39 +181,37 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
     };
 
     dag.ensure_table(&sel.table);
-    let docs = dag.table_documents(&sel.table)?;
     let mut groups: HashMap<String, GroupAccum> = HashMap::new();
-
-    for (id, doc) in docs {
-        if let Some(ref allowed) = filter_ids {
-            if !allowed.contains(&id) {
-                continue;
+    if group_col.is_none() && filter_ids.is_none() && sel.where_clause.is_none() {
+        let rows = dag.table_row_count(&sel.table)? as u64;
+        groups.insert("_all".into(), GroupAccum::Count(rows));
+    } else {
+        dag.scan_table_id_metadata(&sel.table, |id, metadata| {
+            if let Some(ref allowed) = filter_ids {
+                if !allowed.contains(&id) {
+                    return Ok(());
+                }
             }
-        }
-        if let Some(ref pred) = sel.where_clause {
-            if !metadata_matches(pred, &doc.metadata) {
-                continue;
+            if let Some(ref pred) = sel.where_clause {
+                if !metadata_matches(pred, metadata) {
+                    return Ok(());
+                }
             }
-        }
-        let key = doc
-            .metadata
-            .get(&group_col)
-            .cloned()
-            .unwrap_or_else(|| "_null".into());
-
-        let numeric = agg_col
-            .as_deref()
-            .and_then(|c| doc.metadata.get(c))
-            .and_then(|v| parse_numeric_metadata(v));
-
-        let entry = groups
-            .entry(key)
-            .or_insert_with(|| GroupAccum::new(&agg_func));
-        if matches!(agg_func, AggFunc::CountStar) {
-            entry.update(&agg_func, None, None);
-        } else {
-            entry.update(&agg_func, agg_col.as_deref(), numeric);
-        }
+            let key = group_key(group_col.as_deref(), id, metadata);
+            let numeric = agg_col
+                .as_deref()
+                .and_then(|c| metadata.get(c))
+                .and_then(|v| parse_numeric_metadata(v));
+            let entry = groups
+                .entry(key)
+                .or_insert_with(|| GroupAccum::new(&agg_func));
+            if matches!(agg_func, AggFunc::CountStar) {
+                entry.update(&agg_func, None, None);
+            } else {
+                entry.update(&agg_func, agg_col.as_deref(), numeric);
+            }
+            Ok(())
+        })?;
     }
 
     let mut pairs: Vec<(String, f64)> = groups
@@ -220,7 +228,7 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
     let (group_keys, values): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
 
     Ok(SqlAggregateResult {
-        group_by_column: group_col,
+        group_by_column: group_col.unwrap_or_else(|| "_all".into()),
         group_keys,
         value_column: value_col,
         values,

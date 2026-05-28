@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::ops::Range;
 use std::path::Path;
@@ -208,6 +208,29 @@ pub fn read_segment_texts(path: &Path) -> Result<Vec<(u64, String)>, String> {
     Ok(rows)
 }
 
+pub fn scan_segment_id_metadata(
+    path: &Path,
+    mut f: impl FnMut(u64, HashMap<String, String>) -> Result<(), String>,
+) -> Result<(), String> {
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
+    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+        .map_err(|e| e.to_string())?;
+    let schema = builder.parquet_schema();
+    let mask = ProjectionMask::leaves(schema, [0, 2]);
+    let mut reader = builder
+        .with_projection(mask)
+        .build()
+        .map_err(|e| e.to_string())?;
+    for batch in reader.by_ref() {
+        let batch: RecordBatch = batch.map_err(|e| e.to_string())?;
+        for (id, metadata) in batch_to_id_metadata(&batch)? {
+            f(id, metadata)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn read_segment_with_compression(
     path: &Path,
     _compression: Option<&CompressionConfig>,
@@ -291,6 +314,31 @@ fn batch_to_docs(batch: &RecordBatch) -> Result<Vec<ColumnarDoc>, String> {
             metadata,
             embedding,
         });
+    }
+    Ok(out)
+}
+
+fn batch_to_id_metadata(batch: &RecordBatch) -> Result<Vec<(u64, HashMap<String, String>)>, String> {
+    let ids = batch
+        .column_by_name("id")
+        .ok_or("missing id column")?
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or("id type")?;
+    let meta = batch
+        .column_by_name("metadata_json")
+        .ok_or("missing metadata_json column")?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or("metadata_json type")?;
+    let mut out = Vec::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        let metadata = if meta.is_null(row) {
+            HashMap::new()
+        } else {
+            serde_json::from_str(meta.value(row)).map_err(|e| e.to_string())?
+        };
+        out.push((ids.value(row), metadata));
     }
     Ok(out)
 }
