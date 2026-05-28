@@ -2,11 +2,13 @@
 
 import Link from "next/link";
 import { type ColumnDef } from "@tanstack/react-table";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import type { TableInfo } from "@/lib/api";
 
 import { DataTable } from "@/components/data-table";
+import { TableSearchInput } from "@/components/table-search-input";
+import { matchesSearchQuery } from "@/lib/search";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +17,15 @@ import { usePlatformStore } from "@/stores/platform-store";
 export default function CatalogPage() {
   const tables = usePlatformStore((s) => s.tables);
   const setSelectedTable = usePlatformStore((s) => s.setSelectedTable);
+  const [search, setSearch] = useState("");
+
+  const filteredTables = useMemo(
+    () =>
+      tables.filter((t) =>
+        matchesSearchQuery(search, [t.name, t.state, t.rows, t.vector_dim]),
+      ),
+    [tables, search],
+  );
 
   const columns = useMemo<ColumnDef<TableInfo>[]>(
     () => [
@@ -76,8 +87,17 @@ export default function CatalogPage() {
           <Link href="/schema">Create table</Link>
         </Button>
       </CardHeader>
-      <CardContent>
-        <DataTable columns={columns} data={tables} emptyMessage="No tables in database" />
+      <CardContent className="space-y-3">
+        <TableSearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Search tables…"
+        />
+        <DataTable
+          columns={columns}
+          data={filteredTables}
+          emptyMessage={search.trim() ? "No tables match your search" : "No tables in database"}
+        />
       </CardContent>
     </Card>
   );

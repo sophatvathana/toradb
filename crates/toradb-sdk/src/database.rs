@@ -3,7 +3,8 @@ use pyo3::types::{PyDict, PyList};
 use std::path::Path;
 use toradb_core::{Batch, ExecCtx, QueryMetrics};
 use toradb_engine::{
-    materialized, persist, sql_exec, DagRunner, IndexBuildPhase, IndexBuildState, IndexBuildStatus,
+    materialized, persist, run_table_search, sql_exec, DagRunner, IndexBuildPhase,
+    IndexBuildState, IndexBuildStatus, TableSearchOptions, TableSearchResult,
 };
 use toradb_sql::{ast::Stmt, binder::Binder, parse};
 
@@ -324,6 +325,13 @@ impl Database {
             self.dag.ensure_table_queryable(&batch.table)?;
         }
         Ok(self.dag.run(batch, ctx))
+    }
+
+    pub(crate) fn run_table_search(
+        &mut self,
+        opts: TableSearchOptions,
+    ) -> Result<TableSearchResult, String> {
+        run_table_search(&mut self.dag, opts)
     }
 
     pub(crate) fn ensure_table(&mut self, name: &str) {

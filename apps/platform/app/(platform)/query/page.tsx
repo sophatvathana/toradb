@@ -8,7 +8,7 @@ import { ExplainPanel } from "@/components/explain-panel";
 import { QueryMetricsCard } from "@/components/query-metrics-card";
 import { SqlEditor } from "@/components/sql-editor";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
+import { TableSearchInput } from "@/components/table-search-input";
 import {
   Card,
   CardContent,
@@ -93,11 +93,10 @@ export default function QueryPage() {
           <Badge variant="outline">{columns.length} cols</Badge>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Input
+          <TableSearchInput
             placeholder="Filter results…"
             value={resultFilter}
-            onChange={(e) => setResultFilter(e.target.value)}
-            className="max-w-sm"
+            onChange={setResultFilter}
           />
           <DataTable
             columns={resultColumns}

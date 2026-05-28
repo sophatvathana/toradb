@@ -2,10 +2,9 @@ use std::collections::HashMap;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use toradb_core::{Batch, ExecCtx};
-use toradb_engine::tune_ctx;
+use toradb_engine::TableSearchOptions;
 use pyo3_arrow::PyTable;
-use toradb_index::{dense::query_embed::lexical_proxy_vector, IngestDoc};
+use toradb_index::IngestDoc;
 
 use crate::database::Database;
 
@@ -19,17 +18,6 @@ impl Table {
     pub fn new(name: String, db: Py<Database>) -> Self {
         Self { name, db }
     }
-}
-
-fn exec_ctx(top_k: Option<u32>, offset: Option<u32>) -> ExecCtx {
-    let k = top_k.unwrap_or(20);
-    let off = offset.unwrap_or(0);
-    let fetch = off.saturating_add(k).min(1000);
-    ExecCtx::new(
-        fetch.saturating_mul(50).min(1000),
-        fetch.saturating_mul(5).min(100),
-        fetch,
-    )
 }
 
 fn parse_ingest_doc(item: &Bound<'_, PyAny>) -> PyResult<IngestDoc> {
@@ -125,96 +113,33 @@ impl Table {
         depth: Option<u32>,
         query_vector: Option<Vec<f32>>,
     ) -> PyResult<SearchResults> {
-        let mut batch = Batch::new();
-        batch.table = self.name.clone();
-        batch.query = query.to_string();
-        batch.query_vector = query_vector;
-        batch.tier1_enable_sparse =
-            !matches!(
-                strategy,
-                Some("dense") | Some("vector") | Some("hnsw") | Some("diskann") | Some("ann")
-            );
-        batch.tier1_enable_dense =
-            !matches!(strategy, Some("sparse") | Some("bm25") | Some("text"));
-        batch.tier1_use_diskann = matches!(strategy, Some("diskann"));
-        batch.tier1_use_ivf = matches!(strategy, Some("ivf"));
-        batch.sparse_backend = match strategy {
-            Some("splade") => "splade".into(),
-            Some("seismic") => "seismic".into(),
-            _ => "bm25".into(),
+        let opts = TableSearchOptions {
+            table: self.name.clone(),
+            query: query.to_string(),
+            top_k,
+            offset,
+            strategy: strategy.map(str::to_string),
+            explain: explain.unwrap_or(false),
+            graph_expand,
+            depth,
+            query_vector,
         };
-        {
-            let db = self.db.borrow_mut(py);
-            if !batch.tier1_use_diskann
-                && batch.tier1_enable_dense
-                && !batch.tier1_enable_sparse
-                && db.table_has_diskann_sidecar(&self.name)
-            {
-                batch.tier1_use_diskann = true;
-            }
-            if batch.tier1_enable_dense && batch.query_vector.is_none() {
-                if let Some(dim) = db.vector_dim(&self.name) {
-                    batch.query_vector = Some(lexical_proxy_vector(query, dim));
-                }
-            }
-        }
-        batch.enable_hyde = matches!(strategy, Some("hyde"));
-        batch.enable_crag = matches!(strategy, Some("crag"));
-        batch.graph_expand = graph_expand.unwrap_or(false)
-            || matches!(strategy, Some("graph") | Some("hybrid"));
-        batch.graph_depth = depth.unwrap_or(2);
-        batch.distributed_segments = matches!(strategy, Some("distributed"));
-        let ctx = tune_ctx(exec_ctx(top_k, offset), query, strategy);
         let db_handle = self.db.clone_ref(py);
-        let (metrics, batch) = py
-            .detach(move || {
-                Python::attach(|inner_py| {
-                    let metrics = db_handle
-                        .bind(inner_py)
-                        .borrow_mut()
-                        .run_retrieval(&mut batch, &ctx)
-                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
-                    PyResult::Ok((metrics, batch))
-                })
-            })?;
-        let page = batch
-            .candidates
-            .slice_range(offset.unwrap_or(0) as usize, top_k.unwrap_or(20) as usize);
-        let dense_backend = if batch.tier1_use_diskann {
-            "diskann"
-        } else if batch.tier1_enable_dense {
-            "hnsw"
-        } else {
-            "none"
-        };
-        let explain_text = if explain.unwrap_or(false) {
-            Some(format!(
-                "table={} strategy={:?} dense_backend={} sparse={} dense={} graph_expand={} depth={} hyde={} crag={} distributed={} segment_workers={} segments_scanned={} tier1={} tier2={} tier3={}",
-                self.name,
-                strategy,
-                dense_backend,
-                batch.tier1_enable_sparse,
-                batch.tier1_enable_dense,
-                batch.graph_expand,
-                batch.graph_depth,
-                batch.enable_hyde,
-                batch.enable_crag,
-                batch.distributed_segments,
-                metrics.segment_workers,
-                metrics.segments_scanned,
-                metrics.tier1_candidates,
-                metrics.tier2_candidates,
-                metrics.tier3_candidates
-            ))
-        } else {
-            None
-        };
+        let out = py.detach(move || {
+            Python::attach(|inner_py| {
+                db_handle
+                    .bind(inner_py)
+                    .borrow_mut()
+                    .run_table_search(opts)
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
+            })
+        })?;
         Ok(SearchResults {
-            ids: page.ids,
-            scores: page.scores,
+            ids: out.ids,
+            scores: out.scores,
             projected: Vec::new(),
-            metrics,
-            explain_text,
+            metrics: out.metrics,
+            explain_text: out.explain_text,
         })
     }
 

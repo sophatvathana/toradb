@@ -6,6 +6,8 @@ import { type ColumnDef } from "@tanstack/react-table";
 
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table";
+import { TableSearchInput } from "@/components/table-search-input";
+import { matchesSearchQuery } from "@/lib/search";
 import { useToast } from "@/components/toast-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,6 +34,7 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
   const [dropOpen, setDropOpen] = useState(false);
   const [compactFull, setCompactFull] = useState(false);
   const [tab, setTab] = useState("overview");
+  const [sampleFilter, setSampleFilter] = useState("");
 
   useEffect(() => {
     if (tableName) {
@@ -68,6 +71,14 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
   );
 
   const detail = tableDetail?.name === tableName ? tableDetail : null;
+
+  const filteredSampleRows = useMemo(() => {
+    const q = sampleFilter.trim();
+    if (!q) return sampleRows;
+    return sampleRows.filter((row) =>
+      matchesSearchQuery(q, Object.values(row) as (string | number | null | undefined)[]),
+    );
+  }, [sampleRows, sampleFilter]);
 
   return (
     <div className="space-y-4">
@@ -149,11 +160,18 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
             <CardHeader>
               <CardTitle>Sample rows</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
+              <TableSearchInput
+                value={sampleFilter}
+                onChange={setSampleFilter}
+                placeholder="Filter sample rows…"
+              />
               <DataTable
                 columns={sampleColDefs}
-                data={sampleRows}
-                emptyMessage="No sample data"
+                data={filteredSampleRows}
+                emptyMessage={
+                  sampleFilter.trim() ? "No rows match your filter" : "No sample data"
+                }
                 pageSize={20}
               />
             </CardContent>
@@ -251,6 +269,9 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
         </Button>
         <Button type="button" variant="outline" onClick={() => setSelectedTable(tableName)} asChild>
           <Link href="/query">Open in Query</Link>
+        </Button>
+        <Button type="button" variant="outline" onClick={() => setSelectedTable(tableName)} asChild>
+          <Link href={`/search?table=${encodeURIComponent(tableName)}`}>Search</Link>
         </Button>
         <Button type="button" variant="outline" asChild>
           <Link href={`/schema?table=${encodeURIComponent(tableName)}`}>Schema</Link>

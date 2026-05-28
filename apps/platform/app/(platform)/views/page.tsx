@@ -6,6 +6,8 @@ import { type ColumnDef } from "@tanstack/react-table";
 
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table";
+import { TableSearchInput } from "@/components/table-search-input";
+import { matchesSearchQuery } from "@/lib/search";
 import { useToast } from "@/components/toast-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,6 +38,15 @@ export default function ViewsPage() {
   const [selected, setSelected] = useState<MaterializedViewInfo | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [sampleRows, setSampleRows] = useState<Record<string, unknown>[]>([]);
+  const [search, setSearch] = useState("");
+
+  const filteredViews = useMemo(
+    () =>
+      materializedViews.filter((mv) =>
+        matchesSearchQuery(search, [mv.name, mv.query, mv.row_count]),
+      ),
+    [materializedViews, search],
+  );
 
   const columns = useMemo<ColumnDef<MaterializedViewInfo>[]>(
     () => [
@@ -128,11 +139,18 @@ export default function ViewsPage() {
       </div>
 
       <Card>
-        <CardContent className="pt-6">
+        <CardContent className="space-y-3 pt-6">
+          <TableSearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Search views…"
+          />
           <DataTable
             columns={columns}
-            data={materializedViews}
-            emptyMessage="No materialized views"
+            data={filteredViews}
+            emptyMessage={
+              search.trim() ? "No views match your search" : "No materialized views"
+            }
           />
         </CardContent>
       </Card>

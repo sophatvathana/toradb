@@ -11,6 +11,7 @@ import {
   Gauge,
   LayoutGrid,
   Layers,
+  Search,
   ServerCog,
   Table2,
   Upload,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
 
+import { GlobalSearch } from "@/components/global-search";
 import { Badge } from "@/components/ui/badge";
 import { cacheHitRatio } from "@/lib/api";
 import { usePlatformStore } from "@/stores/platform-store";
@@ -27,6 +29,7 @@ const NAV_SIDEBAR_WIDTH = 240;
 
 const NAV_ITEMS = [
   { href: "/overview", icon: Gauge, title: "Workspace Overview" },
+  { href: "/search", icon: Search, title: "Search" },
   { href: "/query", icon: Database, title: "Query" },
   { href: "/query-log", icon: Clock3, title: "Query Log" },
   { href: "/catalog", icon: Table2, title: "Catalog" },
@@ -38,6 +41,7 @@ const NAV_ITEMS = [
 
 const RAIL_ITEMS = [
   { href: "/overview", icon: LayoutGrid, label: "Overview" },
+  { href: "/search", icon: Search, label: "Search" },
   { href: "/query", icon: Database, label: "Query" },
   { href: "/ingest", icon: Upload, label: "Ingest" },
   { href: "/jobs", icon: Workflow, label: "Jobs" },
@@ -150,6 +154,7 @@ export function PlatformShell({ children }: { children: ReactNode }) {
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              <GlobalSearch />
               <Badge variant="outline">cache hit {ratio}</Badge>
               <Badge variant="secondary">{metrics?.query_count ?? 0} queries</Badge>
             </div>

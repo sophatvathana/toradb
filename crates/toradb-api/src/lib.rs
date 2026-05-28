@@ -17,7 +17,8 @@ use tower_http::services::{ServeDir, ServeFile};
 use toradb_core::QueryMetrics;
 use toradb_engine::{
     download_hf_dataset_with_progress, ingest_hf_bundle, ingest_jsonl, ingest_parquet, materialized,
-    persist, sql_exec, DagRunner, HfIngestParams, MaterializedViewInfo,
+    persist, run_table_search, sql_exec, DagRunner, HfIngestParams, MaterializedViewInfo,
+    TableSearchOptions,
 };
 use toradb_sql::{
     ast::{CreateTableStmt, Stmt},
@@ -71,6 +72,13 @@ impl ApiError {
     fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
+            message: message.into(),
+        }
+    }
+
+    fn service_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
             message: message.into(),
         }
     }
@@ -186,6 +194,41 @@ struct QueryPreviewParams {
     table: String,
     query: String,
     limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct SearchRequestBody {
+    table: String,
+    query: String,
+    top_k: Option<u32>,
+    offset: Option<u32>,
+    strategy: Option<String>,
+    explain: Option<bool>,
+    graph_expand: Option<bool>,
+    depth: Option<u32>,
+    query_vector: Option<Vec<f32>>,
+    fetch_text: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct SearchHitResponse {
+    id: u64,
+    score: f32,
+    text: Option<String>,
+    metadata: std::collections::HashMap<String, String>,
+}
+
+#[derive(Serialize)]
+struct SearchApiResponse {
+    table: String,
+    query: String,
+    strategy: Option<String>,
+    hits: Vec<SearchHitResponse>,
+    explain: Option<String>,
+    latency_ms: f64,
+    search_ms: f64,
+    fetch_ms: f64,
+    metrics: Option<QueryMetricsResponse>,
 }
 
 #[derive(Deserialize)]
@@ -316,6 +359,7 @@ pub fn serve_blocking(config: ServeConfig) -> Result<(), String> {
         .route("/api/jobs", get(jobs))
         .route("/api/tasks", get(list_tasks))
         .route("/api/sql", post(sql))
+        .route("/api/search", post(search))
         .route("/api/query-preview", get(query_preview))
         .route("/api/query-history", get(query_history))
         .route("/api/ingest/begin", post(ingest_begin))
@@ -1224,20 +1268,174 @@ async fn sql(
     Ok(Json(execute_sql(&state, &req.query, true)?))
 }
 
+fn map_search_error(err: String) -> ApiError {
+    if err.contains("index build in progress") || err.contains("bulk ingest in progress") {
+        ApiError::service_unavailable(err)
+    } else if err.contains("not found") {
+        ApiError::not_found(err)
+    } else {
+        ApiError::bad_request(err)
+    }
+}
+
+fn execute_native_search(
+    state: &AppState,
+    body: SearchRequestBody,
+    record_history: bool,
+) -> Result<SearchApiResponse, ApiError> {
+    let started = Instant::now();
+    let top_k = body.top_k.unwrap_or(10).max(1).min(100);
+    let offset = body.offset.unwrap_or(0);
+    let strategy = body.strategy.clone();
+    let mut strategy_report = strategy.clone();
+    let explain = body.explain.unwrap_or(false);
+    let fetch_text = body.fetch_text.unwrap_or(true);
+
+    let mut dag = state
+        .dag
+        .lock()
+        .map_err(|_| ApiError::internal("failed to lock database state"))?;
+
+    let table_names = dag
+        .list_tables()
+        .map_err(|e| ApiError::internal(format!("failed to list tables: {e}")))?;
+    if !table_names.iter().any(|t| t == &body.table) {
+        return Err(ApiError::not_found(format!("table not found: {}", body.table)));
+    }
+
+    let out = run_table_search(
+        &mut dag,
+        TableSearchOptions {
+            table: body.table.clone(),
+            query: body.query.clone(),
+            top_k: Some(top_k),
+            offset: Some(offset),
+            strategy: strategy.clone(),
+            explain,
+            graph_expand: body.graph_expand,
+            depth: body.depth,
+            query_vector: body.query_vector.clone(),
+        },
+    )
+    .map_err(map_search_error)?;
+    strategy_report = out.strategy_used.clone().or(strategy_report);
+    let search_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    let fetch_started = Instant::now();
+    let mut hits = Vec::with_capacity(out.ids.len());
+    if fetch_text && !out.ids.is_empty() {
+        let docs = dag.fetch_documents(&body.table, &out.ids).map_err(|e| {
+            ApiError::internal(format!("failed to load document text: {e}"))
+        })?;
+        let doc_map: std::collections::HashMap<u64, _> =
+            docs.into_iter().map(|(id, doc)| (id, doc)).collect();
+        for (id, score) in out.ids.iter().zip(out.scores.iter()) {
+            let doc = doc_map.get(id);
+            hits.push(SearchHitResponse {
+                id: *id,
+                score: *score,
+                text: Some(
+                    doc.map(|d| d.text.clone())
+                        .unwrap_or_default(),
+                ),
+                metadata: doc.map(|d| d.metadata.clone()).unwrap_or_default(),
+            });
+        }
+    } else {
+        for (id, score) in out.ids.iter().zip(out.scores.iter()) {
+            hits.push(SearchHitResponse {
+                id: *id,
+                score: *score,
+                text: None, // fetch_text=false — client should not expect snippets
+                metadata: std::collections::HashMap::new(),
+            });
+        }
+    }
+
+    let fetch_ms = fetch_started.elapsed().as_secs_f64() * 1000.0;
+    let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+    if record_history {
+        push_history(
+            state,
+            QueryHistoryEntry {
+                query: format!(
+                    "search table={} query={}",
+                    body.table,
+                    body.query.chars().take(200).collect::<String>()
+                ),
+                kind: "search".to_string(),
+                status: "ok".to_string(),
+                latency_ms,
+                executed_at_unix_secs: now_unix_secs(),
+            },
+        );
+    }
+
+    Ok(SearchApiResponse {
+        table: body.table,
+        query: body.query,
+        strategy: strategy_report,
+        hits,
+        explain: out.explain_text,
+        latency_ms,
+        search_ms,
+        fetch_ms,
+        metrics: Some(metrics_to_response(&out.metrics)),
+    })
+}
+
+async fn search(
+    State(state): State<AppState>,
+    Json(body): Json<SearchRequestBody>,
+) -> Result<Json<SearchApiResponse>, ApiError> {
+    if body.query.trim().is_empty() {
+        return Err(ApiError::bad_request("query must not be empty"));
+    }
+    Ok(Json(execute_native_search(&state, body, true)?))
+}
+
 async fn query_preview(
     State(state): State<AppState>,
     Query(params): Query<QueryPreviewParams>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let stmt = format!(
-        "SELECT id, score FROM {} SPARSE SEARCH text BM25('{}') LIMIT {}",
-        params.table,
-        params.query.replace('\'', "''"),
-        params.limit.unwrap_or(10).max(1)
-    );
-    let resp = execute_sql(&state, &stmt, false)?;
+    let limit = params.limit.unwrap_or(10).max(1).min(100);
+    let search = execute_native_search(
+        &state,
+        SearchRequestBody {
+            table: params.table.clone(),
+            query: params.query.clone(),
+            top_k: Some(limit),
+            offset: Some(0),
+            strategy: None,
+            explain: Some(false),
+            graph_expand: None,
+            depth: None,
+            query_vector: None,
+            fetch_text: Some(true),
+        },
+        false,
+    )?;
+    let mut rows = Vec::with_capacity(search.hits.len());
+    for hit in &search.hits {
+        rows.push(serde_json::json!({
+            "id": hit.id,
+            "score": hit.score,
+            "text": hit.text,
+        }));
+    }
+    let sql_resp = SqlResponse {
+        kind: "search".to_string(),
+        columns: vec!["id".to_string(), "score".to_string(), "text".to_string()],
+        rows,
+        latency_ms: search.latency_ms,
+        explain_text: None,
+        metrics: search.metrics,
+    };
     Ok(Json(serde_json::json!({
-        "statement": stmt,
-        "result": resp,
+        "engine": "native",
+        "table": params.table,
+        "query": params.query,
+        "result": sql_resp,
     })))
 }
 

@@ -15,8 +15,10 @@ pub mod join;
 pub mod materialized;
 pub mod olap;
 pub mod sql_exec;
+pub mod table_search;
 
 pub use adaptive::tune_ctx;
+pub use table_search::{run_table_search, TableSearchOptions, TableSearchResult};
 
 pub use dag::DagRunner;
 pub use ingest_file::{ingest_jsonl, ingest_parquet};

@@ -7,9 +7,10 @@
 | Path | Module |
 |------|--------|
 | `/overview` | Metrics, latency trend, MV snippet, active tasks |
+| `/search` | Native `Table.search` UI (POST `/api/search`), strategies, document text |
 | `/query` | SQL workbench, saved queries, EXPLAIN, metrics, export CSV/JSON |
 | `/query-log` | Filterable/searchable query history, export CSV |
-| `/catalog` | Table list, link to create table |
+| `/catalog` | Table list with search filter, link to create table |
 | `/catalog/{table}` | Tabs: overview, sample, indexes, sidecars; compact/finish/drop |
 | `/schema` | Create table wizard, quick DDL (SHOW TABLES / SHOW MVs) |
 | `/views` | Materialized views: create, refresh, drop, sample |
@@ -20,9 +21,9 @@ State: [Zustand](https://github.com/pmndrs/zustand) (`stores/platform-store.ts`)
 
 ## API surface (via `toradb-api`)
 
-Read: `/api/health`, `/api/tables`, `/api/tables/{name}`, `/api/tables/{name}/sample`, `/api/tables/{name}/ddl`, `/api/tables/{name}/indexes`, `/api/materialized-views`, `/api/materialized-views/{name}`, `/api/metrics`, `/api/jobs`, `/api/tasks`, `/api/ingest/jobs`, `/api/ingest/jobs/{id}`, `/api/sql`, `/api/query-preview`, `/api/query-history`
+Read: `/api/health`, `/api/tables`, `/api/tables/{name}`, `/api/tables/{name}/sample`, `/api/tables/{name}/ddl`, `/api/tables/{name}/indexes`, `/api/materialized-views`, `/api/materialized-views/{name}`, `/api/metrics`, `/api/jobs`, `/api/tasks`, `/api/ingest/jobs`, `/api/ingest/jobs/{id}`, `/api/sql`, `/api/search`, `/api/query-preview`, `/api/query-history`
 
-Write: `/api/tables/{name}/finish`, `/resume`, `/drop`, `/compact`, `/api/materialized-views` (create), `/api/materialized-views/{name}/refresh`, `/drop`, `/api/ingest/begin`, `/api/ingest/upload`, `/api/ingest/hf` (returns `job_id`), `/api/ingest/jobs/{id}/cancel`, `/api/ingest/finish`
+Write: `/api/search` (native `Table.search`), `/api/tables/{name}/finish`, `/resume`, `/drop`, `/compact`, `/api/materialized-views` (create), `/api/materialized-views/{name}/refresh`, `/drop`, `/api/ingest/begin`, `/api/ingest/upload`, `/api/ingest/hf` (returns `job_id`), `/api/ingest/jobs/{id}/cancel`, `/api/ingest/finish`
 
 `/api/sql` supports SELECT plus DDL: `CREATE TABLE`, `SHOW TABLES`, `SHOW INDEXES`, `SHOW CREATE TABLE`, materialized view statements, `COMPACT TABLE`, `DROP TABLE`, etc.
 
@@ -82,3 +83,5 @@ cd apps/platform && pnpm dev
 4. HF ingest shows job progress then rows in catalog
 5. Compact table from catalog detail; task appears on `/jobs`
 6. Saved query survives reload; query-log search filters entries
+7. `/search` calls native `Table.search` via POST `/api/search`; ⌘K finds tables and pages
+8. Catalog, views, and jobs pages filter lists via search inputs

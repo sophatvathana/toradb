@@ -1,9 +1,11 @@
 "use client";
 
 import { type ColumnDef } from "@tanstack/react-table";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import { DataTable } from "@/components/data-table";
+import { TableSearchInput } from "@/components/table-search-input";
+import { matchesSearchQuery } from "@/lib/search";
 import { useToast } from "@/components/toast-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +19,31 @@ export default function JobsPage() {
   const tasks = usePlatformStore((s) => s.tasks);
   const finishTableAction = usePlatformStore((s) => s.finishTableAction);
   const resumeTableAction = usePlatformStore((s) => s.resumeTableAction);
+  const [jobSearch, setJobSearch] = useState("");
+  const [taskSearch, setTaskSearch] = useState("");
+
+  const filteredJobs = useMemo(
+    () =>
+      jobs.filter((j) =>
+        matchesSearchQuery(jobSearch, [
+          j.table,
+          j.state,
+          j.phase,
+          j.message,
+          j.segments_done,
+          j.segments_total,
+        ]),
+      ),
+    [jobs, jobSearch],
+  );
+
+  const filteredTasks = useMemo(
+    () =>
+      tasks.filter((t) =>
+        matchesSearchQuery(taskSearch, [t.id, t.table, t.kind, t.state, t.message]),
+      ),
+    [tasks, taskSearch],
+  );
 
   const jobColumns = useMemo<ColumnDef<JobInfo>[]>(
     () => [
@@ -145,8 +172,17 @@ export default function JobsPage() {
         <CardHeader>
           <CardTitle>Index build status</CardTitle>
         </CardHeader>
-        <CardContent>
-          <DataTable columns={jobColumns} data={jobs} emptyMessage="No background jobs" />
+        <CardContent className="space-y-3">
+          <TableSearchInput
+            value={jobSearch}
+            onChange={setJobSearch}
+            placeholder="Search jobs…"
+          />
+          <DataTable
+            columns={jobColumns}
+            data={filteredJobs}
+            emptyMessage={jobSearch.trim() ? "No jobs match your search" : "No background jobs"}
+          />
         </CardContent>
       </Card>
 
@@ -154,8 +190,17 @@ export default function JobsPage() {
         <CardHeader>
           <CardTitle>API tasks</CardTitle>
         </CardHeader>
-        <CardContent>
-          <DataTable columns={taskColumns} data={tasks} emptyMessage="No recent tasks" />
+        <CardContent className="space-y-3">
+          <TableSearchInput
+            value={taskSearch}
+            onChange={setTaskSearch}
+            placeholder="Search tasks…"
+          />
+          <DataTable
+            columns={taskColumns}
+            data={filteredTasks}
+            emptyMessage={taskSearch.trim() ? "No tasks match your search" : "No recent tasks"}
+          />
         </CardContent>
       </Card>
     </div>
