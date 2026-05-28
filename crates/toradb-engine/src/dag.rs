@@ -571,7 +571,7 @@ impl DagRunner {
                 let workers = self.segment_worker_count(&table);
                 let parallel = batch.distributed_segments
                     || (segment_only && num_segments > 1 && workers > 1);
-                let scheduler =
+                let _scheduler =
                     SegmentScheduler::new_with_numa(workers as usize, self.caches.numa);
                 metrics.segment_workers = if parallel && num_segments > 1 && workers > 1 {
                     workers
@@ -581,13 +581,19 @@ impl DagRunner {
                 let use_disk_segments = segment_only;
                 let seg_k = segment_bm25_per_segment_k(ctx);
                 let caches = &self.caches;
+                let db_path = self.db_path.as_ref().map(|p| p.0.clone());
                 let seg_bins: Arc<Vec<Option<PathBuf>>> =
                     if use_disk_segments {
-                        self.db_path
+                        db_path
                             .as_ref()
-                            .map(|p| {
-                                persist::list_segment_bm25_bins(p.as_path(), &table)
-                                    .unwrap_or_default()
+                            .map(|p| match persist::list_segment_bm25_bins(p.as_path(), &table) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    eprintln!(
+                                        "toradb: failed to list segment BM25 bins for table {table}: {e}"
+                                    );
+                                    Vec::new()
+                                }
                             })
                             .map(Arc::new)
                             .unwrap_or_else(|| Arc::new(Vec::new()))
@@ -616,11 +622,16 @@ impl DagRunner {
                     && use_disk_segments;
                 let seg_merged = if use_cluster {
                     let cluster = self.cluster.as_ref().expect("cluster");
-                    cluster
-                        .segment_bm25_search(&table, &query, seg_k, &active_segments)
-                        .unwrap_or_default()
+                    match cluster.segment_bm25_search(&table, &query, seg_k, &active_segments) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("toradb: distributed segment BM25 failed for table {table}: {e}");
+                            CandidateSet::default()
+                        }
+                    }
                 } else if parallel && workers > 1 && active_segments.len() > 1 {
                     let bins = Arc::clone(&seg_bins);
+                    let base_c = db_path.clone();
                     let table_c = table.clone();
                     let query_c = query.clone();
                     let scan = || -> Vec<CandidateSet> {
@@ -631,14 +642,45 @@ impl DagRunner {
                                     if let Some(bin_path) =
                                         bins.get(seg as usize).and_then(|p| p.as_ref())
                                     {
-                                        return persist::search_segment_bm25_at_path(
+                                        return match persist::search_segment_bm25_at_path(
                                             bin_path,
                                             &query_c,
                                             seg_k,
                                             Some(caches),
-                                        )
-                                        .unwrap_or_default();
+                                        ) {
+                                            Ok(c) => c,
+                                            Err(e) => {
+                                                eprintln!(
+                                                    "toradb: segment BM25 failed at {}: {e}",
+                                                    bin_path.display()
+                                                );
+                                                CandidateSet::default()
+                                            }
+                                        };
                                     }
+                                    if let Some(base) = base_c.as_deref() {
+                                        return match persist::search_segment_bm25_sidecar(
+                                            base,
+                                            &table_c,
+                                            seg,
+                                            &query_c,
+                                            seg_k,
+                                            Some(caches),
+                                        ) {
+                                            Ok(c) => c,
+                                            Err(e) => {
+                                                eprintln!(
+                                                    "toradb: segment BM25 fallback failed table={} seg={seg}: {e}",
+                                                    table_c
+                                                );
+                                                CandidateSet::default()
+                                            }
+                                        };
+                                    }
+                                    eprintln!(
+                                        "toradb: segment BM25 path missing and no db path for table={} seg={seg}",
+                                        table_c
+                                    );
                                     return CandidateSet::default();
                                 }
                                 self.retrieval.segment_candidates(
@@ -666,15 +708,47 @@ impl DagRunner {
                             if let Some(bin_path) =
                                 seg_bins.get(seg as usize).and_then(|p| p.as_ref())
                             {
-                                persist::search_segment_bm25_at_path(
+                                match persist::search_segment_bm25_at_path(
                                     bin_path,
                                     &query,
                                     seg_k,
                                     Some(caches),
-                                )
-                                .unwrap_or_default()
+                                ) {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        eprintln!(
+                                            "toradb: segment BM25 failed at {}: {e}",
+                                            bin_path.display()
+                                        );
+                                        CandidateSet::default()
+                                    }
+                                }
                             } else {
-                                CandidateSet::default()
+                                if let Some(base) = db_path.as_deref() {
+                                    match persist::search_segment_bm25_sidecar(
+                                        base,
+                                        &table,
+                                        seg,
+                                        &query,
+                                        seg_k,
+                                        Some(caches),
+                                    ) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            eprintln!(
+                                                "toradb: segment BM25 fallback failed table={} seg={seg}: {e}",
+                                                table
+                                            );
+                                            CandidateSet::default()
+                                        }
+                                    }
+                                } else {
+                                    eprintln!(
+                                        "toradb: segment BM25 path missing and no db path for table={} seg={seg}",
+                                        table
+                                    );
+                                    CandidateSet::default()
+                                }
                             }
                         } else {
                             self.retrieval

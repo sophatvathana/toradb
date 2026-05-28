@@ -555,10 +555,11 @@ pub fn list_segment_bm25_bins(base: &Path, table: &str) -> Result<Vec<Option<Pat
 
 fn load_cached_bm25_segment(bin_path: &Path) -> Result<CachedBm25Segment, String> {
     let mmap = get_or_mmap(bin_path, None)?;
-    CachedBm25Segment::from_mmap(mmap).map_err(|_| {
+    CachedBm25Segment::from_mmap(mmap).map_err(|e| {
         format!(
-            "invalid BM25 sidecar at {} (expected TBM3); re-run: toradb-ingest resume",
-            bin_path.display()
+            "invalid BM25 sidecar at {} (expected TBM3): {}; re-run: toradb-ingest resume",
+            bin_path.display(),
+            e
         )
     })
 }

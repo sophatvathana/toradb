@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use toradb_index::sparse::bm25_tbm3::{read_tbm3_version, TBM3_VERSION};
 use toradb_storage::columnar::TableManifestFile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,6 +238,10 @@ pub fn segment_sparse_up_to_date(
     let bm25_path = segment_bm25_path(base, table, segment);
     let lex_path = segment_bm25_lex_path(base, table, segment);
     if !bm25_path.exists() || !lex_path.exists() {
+        return false;
+    }
+    // Force a rebuild if the on-disk sidecar is from an older TBM3 format
+    if read_tbm3_version(&bm25_path) != Some(TBM3_VERSION) {
         return false;
     }
     let pq_mtime = parquet_mtime_secs(parquet_path);

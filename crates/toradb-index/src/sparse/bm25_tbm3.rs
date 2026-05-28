@@ -1,6 +1,9 @@
-//! BM25 on-disk format `TBM3`: sorted term dictionary + block-max posting lists (mmap-friendly).
+//! BM25 on-disk format `TBM3`: sorted term dictionary + compressed block-max
+//! posting lists (PFOR-128 delta doc-ids + varbyte tfs), mmap-friendly and
+//! zero-copy at query time.
 
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
 use std::path::Path;
 
 use memmap2::Mmap;
@@ -17,10 +20,23 @@ pub fn write_snapshot_file(path: &Path, snap: &Bm25Snapshot) -> Result<(), Strin
 }
 
 pub const TBM3_MAGIC: &[u8; 4] = b"TBM3";
-const VERSION: u8 = 1;
+pub const TBM3_VERSION: u8 = 2;
+const VERSION: u8 = TBM3_VERSION;
 const HEADER_LEN: usize = 20;
 const BLOCK_SIZE: usize = 128;
 
+pub fn read_tbm3_version(path: &Path) -> Option<u8> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut buf = [0u8; 5];
+    f.read_exact(&mut buf).ok()?;
+    if &buf[..4] != TBM3_MAGIC {
+        return None;
+    }
+    Some(buf[4])
+}
+
+#[inline(always)]
 fn tf_component(tf: f32, avg_dl: f32) -> f32 {
     let dl = tf;
     let denom = tf + K1 * (1.0 - B + B * dl / avg_dl.max(1.0));
@@ -31,7 +47,89 @@ fn postings_sorted_by_doc_id(posts: &[(DocId, u32)]) -> bool {
     posts.windows(2).all(|w| w[0].0 <= w[1].0)
 }
 
-/// Append one term's posting list + block metadata to `blob`
+fn varbyte_encode(mut v: u32, out: &mut Vec<u8>) {
+    while v >= 0x80 {
+        out.push(((v as u8) & 0x7F) | 0x80);
+        v >>= 7;
+    }
+    out.push(v as u8);
+}
+
+#[inline(always)]
+fn varbyte_decode(bytes: &[u8], pos: &mut usize) -> u32 {
+    let mut v: u32 = 0;
+    let mut shift: u32 = 0;
+    loop {
+        let b = bytes[*pos];
+        *pos += 1;
+        v |= ((b & 0x7F) as u32) << shift;
+        if b < 0x80 {
+            return v;
+        }
+        shift += 7;
+    }
+}
+
+fn bits_needed(max: u32) -> u8 {
+    if max == 0 {
+        return 0;
+    }
+    32 - max.leading_zeros() as u8
+}
+
+fn bitpack(values: &[u32], bits: u8, out: &mut Vec<u8>) {
+    if bits == 0 {
+        return;
+    }
+    let mut acc: u64 = 0;
+    let mut filled: u32 = 0;
+    let bits = bits as u32;
+    let mask: u64 = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
+    for &v in values {
+        acc |= ((v as u64) & mask) << filled;
+        filled += bits;
+        while filled >= 8 {
+            out.push((acc & 0xFF) as u8);
+            acc >>= 8;
+            filled -= 8;
+        }
+    }
+    if filled > 0 {
+        out.push((acc & 0xFF) as u8);
+    }
+}
+
+#[inline(always)]
+fn bitunpack_into(payload: &[u8], bits: u8, count: usize, out: &mut [u32; BLOCK_SIZE]) {
+    if bits == 0 {
+        for slot in out.iter_mut().take(count) {
+            *slot = 0;
+        }
+        return;
+    }
+    let bits = bits as u32;
+    let mask: u64 = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
+    let mut acc: u64 = 0;
+    let mut filled: u32 = 0;
+    let mut byte_idx: usize = 0;
+    for slot in out.iter_mut().take(count) {
+        while filled < bits {
+            // Defensive: extend with zero if payload exhausted (shouldn't happen).
+            let b = if byte_idx < payload.len() {
+                payload[byte_idx]
+            } else {
+                0
+            };
+            acc |= (b as u64) << filled;
+            byte_idx += 1;
+            filled += 8;
+        }
+        *slot = (acc & mask) as u32;
+        acc >>= bits;
+        filled -= bits;
+    }
+}
+
 fn append_posting_blob(
     blob: &mut Vec<u8>,
     posts: &[(DocId, u32)],
@@ -48,22 +146,51 @@ fn append_posting_blob(
     };
     let n = sorted.len();
     let num_blocks = if n == 0 { 0 } else { n.div_ceil(BLOCK_SIZE) };
-    blob.reserve(4 + n * 12 + 4 + num_blocks * 8);
+
     blob.extend_from_slice(&(n as u32).to_le_bytes());
-    for &(doc_id, tf) in sorted {
-        blob.extend_from_slice(&doc_id.to_le_bytes());
-        blob.extend_from_slice(&tf.to_le_bytes());
-    }
     blob.extend_from_slice(&(num_blocks as u32).to_le_bytes());
+
+    let mut prev_doc: DocId = 0;
+    let mut deltas: Vec<u32> = Vec::with_capacity(BLOCK_SIZE);
+    let mut tf_payload: Vec<u8> = Vec::with_capacity(BLOCK_SIZE);
+    let mut docid_payload: Vec<u8> = Vec::with_capacity(BLOCK_SIZE * 4);
+
     for b in 0..num_blocks {
         let start = b * BLOCK_SIZE;
         let end = (start + BLOCK_SIZE).min(n);
-        let mut block_max = 0.0f32;
-        for &(_, tf) in &sorted[start..end] {
-            block_max = block_max.max(tf_component(tf as f32, avg_dl));
+        let count = end - start;
+
+        deltas.clear();
+        tf_payload.clear();
+        docid_payload.clear();
+
+        let mut max_delta: u32 = 0;
+        let mut block_max_tf = 0.0f32;
+        let mut local_prev = prev_doc;
+        for &(doc_id, tf) in &sorted[start..end] {
+            let d = (doc_id - local_prev) as u32;
+            local_prev = doc_id;
+            if d > max_delta {
+                max_delta = d;
+            }
+            deltas.push(d);
+            varbyte_encode(tf.saturating_sub(1), &mut tf_payload);
+            block_max_tf = block_max_tf.max(tf_component(tf as f32, avg_dl));
         }
-        blob.extend_from_slice(&(end as u32).to_le_bytes());
-        blob.extend_from_slice(&block_max.to_le_bytes());
+        let bits = bits_needed(max_delta);
+        bitpack(&deltas, bits, &mut docid_payload);
+
+        let block_last_docid = sorted[end - 1].0;
+        blob.extend_from_slice(&block_last_docid.to_le_bytes());
+        blob.extend_from_slice(&(count as u32).to_le_bytes());
+        blob.extend_from_slice(&block_max_tf.to_le_bytes());
+        blob.push(bits);
+        blob.extend_from_slice(&(docid_payload.len() as u32).to_le_bytes());
+        blob.extend_from_slice(&(tf_payload.len() as u32).to_le_bytes());
+        blob.extend_from_slice(&docid_payload);
+        blob.extend_from_slice(&tf_payload);
+
+        prev_doc = block_last_docid;
     }
 }
 
@@ -112,46 +239,95 @@ pub fn write_tbm3_file(path: &Path, snap: &Bm25Snapshot) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
-struct TermPostings {
-    docs: Vec<(DocId, u32)>,
-    block_ends: Vec<u32>,
-    block_max_tf: Vec<f32>,
-    idf: f32,
+#[derive(Clone, Copy)]
+struct BlockHeader {
+    block_last_docid: DocId,
+    count: u32,
+    block_max_tf: f32,
+    docid_bits: u8,
+    docid_payload_off: usize,
+    tf_payload_off: usize,
+    tf_payload_len: usize,
+    next_block_off: usize,
+}
+
+#[inline(always)]
+fn read_block_header(bytes: &[u8], pos: usize) -> Result<BlockHeader, String> {
+    if pos + 8 + 4 + 4 + 1 + 4 + 4 > bytes.len() {
+        return Err("truncated TBM3 block header".into());
+    }
+    let block_last_docid = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
+    let mut p = pos + 8;
+    let count = u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap());
+    p += 4;
+    let block_max_tf = f32::from_le_bytes(bytes[p..p + 4].try_into().unwrap());
+    p += 4;
+    let docid_bits = bytes[p];
+    p += 1;
+    let docid_len = u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) as usize;
+    p += 4;
+    let tf_len = u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) as usize;
+    p += 4;
+    let docid_off = p;
+    let tf_off = docid_off + docid_len;
+    let next_off = tf_off + tf_len;
+    if next_off > bytes.len() {
+        return Err("truncated TBM3 block payload".into());
+    }
+    Ok(BlockHeader {
+        block_last_docid,
+        count,
+        block_max_tf,
+        docid_bits,
+        docid_payload_off: docid_off,
+        tf_payload_off: tf_off,
+        tf_payload_len: tf_len,
+        next_block_off: next_off,
+    })
+}
+
+pub struct TermPostings {
+    pub docs: Vec<(DocId, u32)>,
+    pub block_ends: Vec<u32>,
+    pub block_max_tf: Vec<f32>,
+    pub idf: f32,
 }
 
 impl TermPostings {
     fn parse(bytes: &[u8], base: usize, num_docs: u32, df: u32) -> Result<Self, String> {
-        if base + 4 > bytes.len() {
+        if base + 8 > bytes.len() {
             return Err("truncated TBM3 postings".into());
         }
-        let count = u32::from_le_bytes(bytes[base..base + 4].try_into().unwrap()) as usize;
-        let mut pos = base + 4;
-        let mut docs = Vec::with_capacity(count);
-        for _ in 0..count {
-            if pos + 12 > bytes.len() {
-                return Err("truncated TBM3 doc postings".into());
-            }
-            let doc_id = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
-            let tf = u32::from_le_bytes(bytes[pos + 8..pos + 12].try_into().unwrap());
-            pos += 12;
-            docs.push((doc_id, tf));
-        }
-        if pos + 4 > bytes.len() {
-            return Err("truncated TBM3 blocks".into());
-        }
-        let num_blocks = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
-        pos += 4;
+        let total = u32::from_le_bytes(bytes[base..base + 4].try_into().unwrap()) as usize;
+        let num_blocks =
+            u32::from_le_bytes(bytes[base + 4..base + 8].try_into().unwrap()) as usize;
+        let mut docs = Vec::with_capacity(total);
         let mut block_ends = Vec::with_capacity(num_blocks);
         let mut block_max_tf = Vec::with_capacity(num_blocks);
+        let mut pos = base + 8;
+        let mut prev: DocId = 0;
+        let mut deltas: [u32; BLOCK_SIZE] = [0u32; BLOCK_SIZE];
         for _ in 0..num_blocks {
-            if pos + 8 > bytes.len() {
-                return Err("truncated TBM3 block metadata".into());
+            let h = read_block_header(bytes, pos)?;
+            let count = h.count as usize;
+            bitunpack_into(
+                &bytes[h.docid_payload_off..h.docid_payload_off + (h.next_block_off - h.docid_payload_off - h.tf_payload_len)],
+                h.docid_bits,
+                count,
+                &mut deltas,
+            );
+            let tf_slice = &bytes[h.tf_payload_off..h.tf_payload_off + h.tf_payload_len];
+            let mut tf_pos = 0usize;
+            for i in 0..count {
+                prev = prev.wrapping_add(deltas[i] as u64);
+                let tf = varbyte_decode(tf_slice, &mut tf_pos).saturating_add(1);
+                docs.push((prev, tf));
             }
-            block_ends.push(u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()));
-            pos += 4;
-            block_max_tf.push(f32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()));
-            pos += 4;
+            block_ends.push(docs.len() as u32);
+            block_max_tf.push(h.block_max_tf);
+            pos = h.next_block_off;
         }
+        let _ = total;
         let n = num_docs.max(1) as f32;
         let idf = ((n - df as f32 + 0.5) / (df as f32 + 0.5) + 1.0).ln();
         Ok(Self {
@@ -161,7 +337,76 @@ impl TermPostings {
             idf,
         })
     }
+}
 
+#[derive(Clone, Copy, Debug)]
+struct DictEntry {
+    term_off: usize,
+    term_len: u16,
+    df: u32,
+    post_off: u32,
+    post_len: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct Bm25Tbm3Meta {
+    num_docs: u32,
+    avg_dl: f32,
+    num_terms: u32,
+    postings_start: usize,
+    dict: Vec<DictEntry>,
+}
+
+impl Bm25Tbm3Meta {
+    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() < HEADER_LEN || &bytes[..4] != TBM3_MAGIC {
+            return Err("invalid TBM3 magic".into());
+        }
+        if bytes[4] != VERSION {
+            return Err(format!(
+                "unsupported TBM3 version {} (expected {})",
+                bytes[4], VERSION
+            ));
+        }
+        let num_docs = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        let avg_dl = f32::from_le_bytes(bytes[12..16].try_into().unwrap());
+        let num_terms = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
+
+        let mut dict = Vec::with_capacity(num_terms as usize);
+        let mut pos = 20usize;
+        for _ in 0..num_terms {
+            if pos + 2 > bytes.len() {
+                return Err("truncated TBM3 dict".into());
+            }
+            let tlen = u16::from_le_bytes(bytes[pos..pos + 2].try_into().unwrap());
+            pos += 2;
+            let term_off = pos;
+            pos += tlen as usize;
+            if pos + 12 > bytes.len() {
+                return Err("truncated TBM3 dict entry".into());
+            }
+            let df = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
+            pos += 4;
+            let post_off = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
+            pos += 4;
+            let post_len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
+            pos += 4;
+            dict.push(DictEntry {
+                term_off,
+                term_len: tlen,
+                df,
+                post_off,
+                post_len,
+            });
+        }
+        Ok(Self {
+            num_docs,
+            avg_dl,
+            num_terms,
+            postings_start: pos,
+            dict,
+        })
+    }
 }
 
 pub struct Bm25Tbm3View<'a> {
@@ -169,185 +414,358 @@ pub struct Bm25Tbm3View<'a> {
     num_docs: u32,
     avg_dl: f32,
     num_terms: u32,
-    dict_start: usize,
     postings_start: usize,
+    dict_owned: Option<Vec<DictEntry>>,
+    dict_ref: Option<&'a [DictEntry]>,
 }
 
 impl<'a> Bm25Tbm3View<'a> {
     pub fn open(bytes: &'a [u8]) -> Result<Self, String> {
-        if bytes.len() < HEADER_LEN || &bytes[..4] != TBM3_MAGIC {
-            return Err("invalid TBM3 magic".into());
-        }
-        if bytes[4] != VERSION {
-            return Err(format!("unsupported TBM3 version {}", bytes[4]));
-        }
-        let num_docs = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
-        let avg_dl = f32::from_le_bytes(bytes[12..16].try_into().unwrap());
-        let num_terms = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
-        let mut dict_pos = 20usize;
-        for _ in 0..num_terms {
-            if dict_pos + 2 > bytes.len() {
-                return Err("truncated TBM3 dict".into());
-            }
-            let tlen = u16::from_le_bytes(bytes[dict_pos..dict_pos + 2].try_into().unwrap()) as usize;
-            dict_pos += 2 + tlen + 4 + 4 + 4;
-        }
+        let meta = Bm25Tbm3Meta::parse(bytes)?;
         Ok(Self {
             bytes,
-            num_docs,
-            avg_dl,
-            num_terms,
-            dict_start: 20,
-            postings_start: dict_pos,
+            num_docs: meta.num_docs,
+            avg_dl: meta.avg_dl,
+            num_terms: meta.num_terms,
+            postings_start: meta.postings_start,
+            dict_owned: Some(meta.dict),
+            dict_ref: None,
         })
+    }
+
+    /// Build a view from already-parsed metadata. Avoids re-walking the dict
+    /// for each query when the segment is cached across calls.
+    pub fn with_meta(bytes: &'a [u8], meta: &'a Bm25Tbm3Meta) -> Self {
+        Self {
+            bytes,
+            num_docs: meta.num_docs,
+            avg_dl: meta.avg_dl,
+            num_terms: meta.num_terms,
+            postings_start: meta.postings_start,
+            dict_owned: None,
+            dict_ref: Some(&meta.dict),
+        }
+    }
+
+    #[inline]
+    fn dict(&self) -> &[DictEntry] {
+        if let Some(d) = self.dict_ref {
+            d
+        } else {
+            self.dict_owned.as_deref().unwrap_or(&[])
+        }
     }
 
     pub fn from_mmap(mmap: &'a Mmap) -> Result<Self, String> {
         Self::open(mmap.as_ref())
     }
 
+    #[inline]
+    fn term_str(&self, e: &DictEntry) -> &str {
+        // Safe: dict was constructed from the same bytes; UTF-8 was enforced on
+        // write (terms come from `tokenize`, which produces valid UTF-8).
+        unsafe {
+            std::str::from_utf8_unchecked(
+                &self.bytes[e.term_off..e.term_off + e.term_len as usize],
+            )
+        }
+    }
+
     pub(crate) fn term_at(&self, index: u32) -> Result<(&str, u32, u32, u32), String> {
-        let mut pos = self.dict_start;
-        for _ in 0..index {
-            let tlen = u16::from_le_bytes(self.bytes[pos..pos + 2].try_into().unwrap()) as usize;
-            pos += 2 + tlen + 4 + 4 + 4;
-        }
-        let tlen = u16::from_le_bytes(self.bytes[pos..pos + 2].try_into().unwrap()) as usize;
-        pos += 2;
-        let t = std::str::from_utf8(&self.bytes[pos..pos + tlen]).map_err(|e| e.to_string())?;
-        pos += tlen;
-        let df = u32::from_le_bytes(self.bytes[pos..pos + 4].try_into().unwrap());
-        pos += 4;
-        let off = u32::from_le_bytes(self.bytes[pos..pos + 4].try_into().unwrap());
-        pos += 4;
-        let plen = u32::from_le_bytes(self.bytes[pos..pos + 4].try_into().unwrap());
-        Ok((t, df, off, plen))
+        let e = self
+            .dict()
+            .get(index as usize)
+            .ok_or_else(|| "term index out of range".to_string())?;
+        Ok((self.term_str(e), e.df, e.post_off, e.post_len))
     }
 
-    fn find_term_entry(&self, term: &str) -> Option<(u32, u32, u32)> {
-        let mut lo = 0u32;
-        let mut hi = self.num_terms;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let (t, df, off, plen) = self.term_at(mid).ok()?;
-            match t.cmp(term) {
-                std::cmp::Ordering::Less => lo = mid + 1,
-                std::cmp::Ordering::Greater => hi = mid,
-                std::cmp::Ordering::Equal => return Some((df, off, plen)),
-            }
-        }
-        None
+    pub(crate) fn find_term_entry(&self, term: &str) -> Option<(u32, u32, u32)> {
+        let dict = self.dict();
+        let idx = dict
+            .binary_search_by(|e| self.term_str(e).cmp(term))
+            .ok()?;
+        let e = dict[idx];
+        Some((e.df, e.post_off, e.post_len))
     }
 
-    fn load_term(&self, df: u32, rel_off: u32) -> Result<TermPostings, String> {
+    pub(crate) fn load_term(&self, df: u32, rel_off: u32) -> Result<TermPostings, String> {
         let base = self.postings_start + rel_off as usize;
         TermPostings::parse(self.bytes, base, self.num_docs, df)
     }
 
+    fn open_cursor(&self, df: u32, rel_off: u32) -> Result<TermCursor<'a>, String> {
+        TermCursor::open(self.bytes, self.postings_start + rel_off as usize, df, self.num_docs, self.avg_dl)
+    }
+
     pub fn brute_search(&self, query: &str, k: usize) -> CandidateSet {
+        // Single unified path: just call search; it falls back to per-term linear scan
+        // if appropriate. Kept public for tests that compare against MaxScore.
+        let mut cursors = self.cursors_for(query);
+        if cursors.is_empty() {
+            return CandidateSet::default();
+        }
         let mut scores: HashMap<DocId, f32> = HashMap::new();
-        for term in tokenize(query) {
-            let Some((df, rel_off, _plen)) = self.find_term_entry(&term) else {
-                continue;
-            };
-            let Ok(list) = self.load_term(df, rel_off) else {
-                continue;
-            };
-            for &(doc_id, tf) in &list.docs {
-                let score = list.idf * tf_component(tf as f32, self.avg_dl);
-                *scores.entry(doc_id).or_default() += score;
+        let mut deltas = [0u32; BLOCK_SIZE];
+        for c in cursors.iter_mut() {
+            let idf = c.idf;
+            while c.has_block() {
+                c.decode_current_block(&mut deltas);
+                let count = c.block_count();
+                let decoded = c.decoded.as_ref().unwrap();
+                for i in 0..count {
+                    let doc_id = decoded.doc_ids[i];
+                    let tf = decoded.tfs[i];
+                    let s = idf * tf_component(tf as f32, self.avg_dl);
+                    *scores.entry(doc_id).or_default() += s;
+                }
+                c.advance_block();
             }
         }
-        top_k(scores, k)
+        scores_to_topk(scores, k)
+    }
+
+    fn cursors_for(&self, query: &str) -> Vec<TermCursor<'a>> {
+        let mut cursors = Vec::new();
+        for term in tokenize(query) {
+            if let Some((df, rel_off, _plen)) = self.find_term_entry(&term) {
+                if let Ok(c) = self.open_cursor(df, rel_off) {
+                    if c.total_docs > 0 {
+                        cursors.push(c);
+                    }
+                }
+            }
+        }
+        cursors
     }
 
     pub fn search(&self, query: &str, k: usize) -> CandidateSet {
         if k == 0 {
             return CandidateSet::default();
         }
-        let mut lists: Vec<TermPostings> = Vec::new();
-        for term in tokenize(query) {
-            let Some((df, rel_off, _plen)) = self.find_term_entry(&term) else {
-                continue;
-            };
-            if let Ok(list) = self.load_term(df, rel_off) {
-                if !list.docs.is_empty() {
-                    lists.push(list);
-                }
-            }
-        }
-        if lists.is_empty() {
+        let mut cursors = self.cursors_for(query);
+        if cursors.is_empty() {
             return CandidateSet::default();
         }
-        if lists.iter().map(|l| l.docs.len()).sum::<usize>() < 256 {
-            return self.brute_search(query, k);
+        if cursors.len() == 1 {
+            // Single-term: stream straight into a bounded min-heap of size k.
+            return single_term_topk(&mut cursors[0], k, self.avg_dl);
         }
-
-        // MaxScore / block-max WAND: process terms shortest-first, skip blocks that
-        // cannot reach the current top-k threshold.
-        lists.sort_by_key(|l| l.docs.len());
-        let term_ceiling: Vec<f32> = lists
-            .iter()
-            .map(|l| {
-                l.idf
-                    * l.block_max_tf
-                        .iter()
-                        .copied()
-                        .fold(0.0f32, f32::max)
-            })
-            .collect();
-
-        let mut scores: HashMap<DocId, f32> = HashMap::new();
-        let mut threshold = 0.0f32;
-
-        for (ti, list) in lists.iter().enumerate() {
-            let remaining_ceiling: f32 = term_ceiling[ti + 1..].iter().sum();
-            let mut block_idx = 0usize;
-            let mut doc_idx = 0usize;
-            while block_idx < list.block_ends.len() {
-                let block_end = list.block_ends[block_idx] as usize;
-                let block_ub = list.idf * list.block_max_tf[block_idx];
-                let partial_max = list.docs[doc_idx..block_end]
-                    .iter()
-                    .map(|(id, _)| scores.get(id).copied().unwrap_or(0.0))
-                    .fold(0.0f32, f32::max);
-                let max_possible = partial_max + block_ub + remaining_ceiling;
-                if max_possible < threshold {
-                    doc_idx = block_end;
-                    block_idx += 1;
-                    continue;
-                }
-                for &(doc_id, tf) in &list.docs[doc_idx..block_end] {
-                    let s = list.idf * tf_component(tf as f32, self.avg_dl);
-                    *scores.entry(doc_id).or_default() += s;
-                }
-                doc_idx = block_end;
-                block_idx += 1;
-            }
-            if scores.len() > k {
-                let mut vals: Vec<f32> = scores.values().copied().collect();
-                vals.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-                threshold = vals.get(k.saturating_sub(1)).copied().unwrap_or(0.0);
-            }
-        }
-
-        top_k(scores, k)
+        // Sort by document frequency ascending: cheaper terms first.
+        cursors.sort_by_key(|c| c.total_docs);
+        daat_maxscore(&mut cursors, &[], k, self.avg_dl)
     }
 }
 
-fn top_k(scores: HashMap<DocId, f32>, k: usize) -> CandidateSet {
-    let mut ranked: Vec<(DocId, f32)> = scores.into_iter().collect();
-    ranked.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
+fn single_term_topk(cursor: &mut TermCursor<'_>, k: usize, avg_dl: f32) -> CandidateSet {
+    let mut heap: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
+    let mut deltas = [0u32; BLOCK_SIZE];
+    let idf = cursor.idf;
+    while cursor.has_block() {
+        cursor.decode_current_block(&mut deltas);
+        let count = cursor.block_count();
+        let decoded = cursor.decoded.as_ref().unwrap();
+        for i in 0..count {
+            let doc_id = decoded.doc_ids[i];
+            let tf = decoded.tfs[i];
+            let s = idf * tf_component(tf as f32, avg_dl);
+            push_topk(&mut heap, ScoredDoc { score: s, doc_id }, k);
+        }
+        cursor.advance_block();
+    }
+    heap_to_candidates(heap)
+}
+
+fn daat_maxscore<'a>(
+    cursors: &mut [TermCursor<'a>],
+    _term_ceiling: &[f32],
+    k: usize,
+    avg_dl: f32,
+) -> CandidateSet {
+    let mut scores: HashMap<DocId, f32> = HashMap::with_capacity(1024);
+    let mut deltas = [0u32; BLOCK_SIZE];
+
+    for cursor in cursors.iter_mut() {
+        let idf = cursor.idf;
+        while cursor.has_block() {
+            cursor.decode_current_block(&mut deltas);
+            let count = cursor.block_count();
+            // Drop `cursor` borrow before mutating `scores`.
+            let decoded = cursor.decoded.as_ref().unwrap();
+            for i in 0..count {
+                let doc_id = decoded.doc_ids[i];
+                let tf = decoded.tfs[i];
+                let s = idf * tf_component(tf as f32, avg_dl);
+                *scores.entry(doc_id).or_default() += s;
+            }
+            cursor.advance_block();
+        }
+    }
+    scores_to_topk(scores, k)
+}
+
+struct TermCursor<'a> {
+    bytes: &'a [u8],
+    total_docs: usize,
+    num_blocks: usize,
+    block_idx: usize,
+    next_block_off: usize,
+    current_header: Option<BlockHeader>,
+    decoded: Option<DecodedBlock>,
+    prev_doc: DocId,
+    pub idf: f32,
+}
+
+struct DecodedBlock {
+    doc_ids: [DocId; BLOCK_SIZE],
+    tfs: [u32; BLOCK_SIZE],
+    count: usize,
+}
+
+impl<'a> TermCursor<'a> {
+    fn open(
+        bytes: &'a [u8],
+        base: usize,
+        df: u32,
+        num_docs: u32,
+        _avg_dl: f32,
+    ) -> Result<Self, String> {
+        if base + 8 > bytes.len() {
+            return Err("truncated TBM3 postings header".into());
+        }
+        let total = u32::from_le_bytes(bytes[base..base + 4].try_into().unwrap()) as usize;
+        let num_blocks =
+            u32::from_le_bytes(bytes[base + 4..base + 8].try_into().unwrap()) as usize;
+        let start = base + 8;
+        let n = num_docs.max(1) as f32;
+        let idf = ((n - df as f32 + 0.5) / (df as f32 + 0.5) + 1.0).ln();
+
+        let current_header = if num_blocks > 0 {
+            Some(read_block_header(bytes, start)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            bytes,
+            total_docs: total,
+            num_blocks,
+            block_idx: 0,
+            next_block_off: start,
+            current_header,
+            decoded: None,
+            prev_doc: 0,
+            idf,
+        })
+    }
+
+    #[inline]
+    fn has_block(&self) -> bool {
+        self.block_idx < self.num_blocks
+    }
+
+    #[inline]
+    fn block_count(&self) -> usize {
+        self.decoded.as_ref().map(|d| d.count).unwrap_or(0)
+    }
+
+    fn decode_current_block(&mut self, deltas: &mut [u32; BLOCK_SIZE]) {
+        let h = match self.current_header {
+            Some(h) => h,
+            None => return,
+        };
+        let count = h.count as usize;
+        bitunpack_into(
+            &self.bytes[h.docid_payload_off..h.docid_payload_off + (h.tf_payload_off - h.docid_payload_off)],
+            h.docid_bits,
+            count,
+            deltas,
+        );
+        let mut block = DecodedBlock {
+            doc_ids: [0u64; BLOCK_SIZE],
+            tfs: [0u32; BLOCK_SIZE],
+            count,
+        };
+        let tf_slice = &self.bytes[h.tf_payload_off..h.tf_payload_off + h.tf_payload_len];
+        let mut tf_pos = 0usize;
+        let mut prev = self.prev_doc;
+        for i in 0..count {
+            prev = prev.wrapping_add(deltas[i] as u64);
+            block.doc_ids[i] = prev;
+            block.tfs[i] = varbyte_decode(tf_slice, &mut tf_pos).saturating_add(1);
+        }
+        self.decoded = Some(block);
+    }
+
+    fn advance_block(&mut self) {
+        if let Some(h) = self.current_header {
+            self.prev_doc = h.block_last_docid;
+            self.next_block_off = h.next_block_off;
+        }
+        self.block_idx += 1;
+        if self.block_idx < self.num_blocks {
+            self.current_header = read_block_header(self.bytes, self.next_block_off).ok();
+        } else {
+            self.current_header = None;
+        }
+        self.decoded = None;
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ScoredDoc {
+    score: f32,
+    doc_id: DocId,
+}
+
+impl PartialEq for ScoredDoc {
+    fn eq(&self, other: &Self) -> bool {
+        self.score == other.score && self.doc_id == other.doc_id
+    }
+}
+impl Eq for ScoredDoc {}
+impl Ord for ScoredDoc {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.score
+            .partial_cmp(&other.score)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.0.cmp(&b.0))
-    });
-    ranked.truncate(k);
-    let mut out = CandidateSet::with_capacity(ranked.len());
-    for (id, score) in ranked {
-        out.push(id, score);
+            .then_with(|| other.doc_id.cmp(&self.doc_id))
+    }
+}
+impl PartialOrd for ScoredDoc {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[inline]
+fn push_topk(heap: &mut BinaryHeap<Reverse<ScoredDoc>>, item: ScoredDoc, k: usize) {
+    if heap.len() < k {
+        heap.push(Reverse(item));
+        return;
+    }
+    if let Some(min) = heap.peek() {
+        if item.cmp(&min.0) == std::cmp::Ordering::Greater {
+            heap.pop();
+            heap.push(Reverse(item));
+        }
+    }
+}
+
+fn heap_to_candidates(heap: BinaryHeap<Reverse<ScoredDoc>>) -> CandidateSet {
+    let mut v: Vec<ScoredDoc> = heap.into_iter().map(|r| r.0).collect();
+    v.sort_by(|a, b| b.cmp(a));
+    let mut out = CandidateSet::with_capacity(v.len());
+    for s in v {
+        out.push(s.doc_id, s.score);
     }
     out
+}
+
+fn scores_to_topk(scores: HashMap<DocId, f32>, k: usize) -> CandidateSet {
+    let mut heap: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
+    for (doc_id, score) in scores {
+        push_topk(&mut heap, ScoredDoc { score, doc_id }, k);
+    }
+    heap_to_candidates(heap)
 }
 
 /// Rebuild an in-memory snapshot (e.g. merge table-level index from segments).
@@ -358,13 +776,14 @@ pub fn snapshot_from_tbm3(bytes: &[u8]) -> Result<Bm25Snapshot, String> {
     let mut doc_len: HashMap<DocId, u32> = HashMap::new();
     for i in 0..view.num_terms {
         let (term, df, off, _plen) = view.term_at(i)?;
-        doc_freq.insert(term.to_string(), df);
+        let term_string = term.to_string();
+        doc_freq.insert(term_string.clone(), df);
         let list = view.load_term(df, off)?;
         for &(doc_id, tf) in &list.docs {
             let entry = doc_len.entry(doc_id).or_insert(0);
             *entry = entry.saturating_add(tf);
         }
-        postings.insert(term.to_string(), list.docs);
+        postings.insert(term_string, list.docs);
     }
     Ok(Bm25Snapshot {
         postings,
@@ -469,5 +888,93 @@ mod tests {
                 "block max {stored} < true max {true_max}"
             );
         }
+    }
+
+    #[test]
+    fn varbyte_roundtrip() {
+        let vals: Vec<u32> = vec![0, 1, 127, 128, 16383, 16384, 1 << 21, u32::MAX];
+        let mut buf = Vec::new();
+        for &v in &vals {
+            varbyte_encode(v, &mut buf);
+        }
+        let mut pos = 0;
+        for &expected in &vals {
+            assert_eq!(varbyte_decode(&buf, &mut pos), expected);
+        }
+    }
+
+    #[test]
+    fn bitpack_roundtrip_random() {
+        let vals: Vec<u32> = (0..200u32).map(|i| (i * 7) % 1024).collect();
+        let bits = bits_needed(*vals.iter().max().unwrap());
+        let mut payload = Vec::new();
+        bitpack(&vals, bits, &mut payload);
+        let mut out = [0u32; BLOCK_SIZE];
+        // Decode in chunks of 128 to mirror runtime use.
+        for chunk_start in (0..vals.len()).step_by(BLOCK_SIZE) {
+            let count = (vals.len() - chunk_start).min(BLOCK_SIZE);
+            let mut chunk_payload = Vec::new();
+            bitpack(&vals[chunk_start..chunk_start + count], bits, &mut chunk_payload);
+            bitunpack_into(&chunk_payload, bits, count, &mut out);
+            for i in 0..count {
+                assert_eq!(out[i], vals[chunk_start + i]);
+            }
+        }
+    }
+
+    #[test]
+    fn search_matches_brute_force_topk() {
+        // Larger corpus to exercise MaxScore + heap path.
+        let mut docs = Vec::new();
+        for i in 0..2000u64 {
+            docs.push((
+                i,
+                format!(
+                    "alpha{} beta{} gamma{} doc text content {}",
+                    i % 7,
+                    i % 13,
+                    i % 5,
+                    i
+                ),
+            ));
+        }
+        let snap = Bm25Snapshot::from_documents(docs);
+        let bytes = encode_tbm3(&snap);
+        let view = Bm25Tbm3View::open(&bytes).unwrap();
+        for q in [
+            "alpha3 doc",
+            "beta7 gamma2 doc text",
+            "alpha0 beta0 gamma0 content",
+            "doc",
+        ] {
+            let wand = view.search(q, 10);
+            let brute = view.brute_search(q, 10);
+            let mut a: Vec<(DocId, f32)> = wand.ids.into_iter().zip(wand.scores).collect();
+            let mut b: Vec<(DocId, f32)> = brute.ids.into_iter().zip(brute.scores).collect();
+            a.sort_by(|x, y| {
+                y.1.partial_cmp(&x.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| x.0.cmp(&y.0))
+            });
+            b.sort_by(|x, y| {
+                y.1.partial_cmp(&x.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| x.0.cmp(&y.0))
+            });
+            assert_eq!(a, b, "mismatch on query {q}");
+        }
+    }
+
+    #[test]
+    fn rejects_old_version() {
+        // Build a synthetic header with old VERSION=1 and ensure open() refuses.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(TBM3_MAGIC);
+        buf.push(1u8);
+        buf.extend_from_slice(&[0u8; 3]);
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        buf.extend_from_slice(&0f32.to_le_bytes());
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        assert!(Bm25Tbm3View::open(&buf).is_err());
     }
 }

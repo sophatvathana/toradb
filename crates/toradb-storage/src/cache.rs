@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use memmap2::Mmap;
 use toradb_core::CandidateSet;
-use toradb_index::sparse::bm25_tbm3::{Bm25Tbm3View, TBM3_MAGIC};
+use toradb_index::sparse::bm25_tbm3::{Bm25Tbm3Meta, Bm25Tbm3View, TBM3_MAGIC};
 
 use crate::columnar::ColumnarDoc;
 use crate::numa::{NumaConfig, prefetch_mmap_sequential};
@@ -225,20 +225,26 @@ impl IndexBlobCache {
     }
 }
 
-/// Cached per-segment BM25 (`TBM3` mmap).
+/// Cached per-segment BM25 (`TBM3` mmap). Holds the parsed header + dictionary
+/// alongside the mmap so each `search()` reuses the dictionary index instead of
+/// re-walking the on-disk dict.
 #[derive(Debug)]
-pub struct CachedBm25Segment(Arc<Mmap>);
+pub struct CachedBm25Segment {
+    mmap: Arc<Mmap>,
+    meta: Bm25Tbm3Meta,
+}
 
 impl CachedBm25Segment {
     pub fn from_mmap(mmap: Arc<Mmap>) -> Result<Self, String> {
         if mmap.len() < 4 || &mmap[..4] != TBM3_MAGIC {
             return Err("invalid BM25 sidecar (expected TBM3)".into());
         }
-        Ok(Self(mmap))
+        let meta = Bm25Tbm3Meta::parse(mmap.as_ref())?;
+        Ok(Self { mmap, meta })
     }
 
     pub fn search(&self, query: &str, k: usize) -> Result<CandidateSet, String> {
-        let view = Bm25Tbm3View::from_mmap(&self.0)?;
+        let view = Bm25Tbm3View::with_meta(self.mmap.as_ref(), &self.meta);
         Ok(view.search(query, k))
     }
 
