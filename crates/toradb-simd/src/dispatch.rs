@@ -14,6 +14,7 @@ pub type DotF32Fn = fn(&[f32], &[f32]) -> f32;
 pub type DecompressBlockFn = fn(&[u8], f32, f32, &mut [f32]);
 pub type PopcntU64Fn = fn(u64) -> u32;
 pub type PopcntSliceU64Fn = fn(&[u64]) -> u64;
+pub type TqAdcMse4Fn = fn(&[f32], &[u8], &[f32]) -> f32;
 
 #[derive(Clone, Copy)]
 pub struct DispatchTable {
@@ -22,6 +23,7 @@ pub struct DispatchTable {
     pub decompress_block: DecompressBlockFn,
     pub popcnt_u64: PopcntU64Fn,
     pub popcnt_slice_u64: PopcntSliceU64Fn,
+    pub tq_adc_mse_4bit: TqAdcMse4Fn,
 }
 
 pub fn detect() -> SimdLevel {
@@ -54,6 +56,7 @@ fn scalar_table() -> DispatchTable {
         decompress_block: kernels::scalar::decompress_block,
         popcnt_u64: kernels::scalar::popcnt_u64,
         popcnt_slice_u64: kernels::scalar::popcnt_slice_u64,
+        tq_adc_mse_4bit: kernels::scalar::tq_adc_mse_4bit,
     }
 }
 
@@ -81,10 +84,22 @@ fn decompress_x86_avx2(codes: &[u8], min: f32, scale: f32, out: &mut [f32]) {
     unsafe { kernels::x86::decompress_block_avx2(codes, min, scale, out) }
 }
 
+#[cfg(all(target_arch = "x86_64", feature = "avx2"))]
+fn tq_adc_mse_4bit_x86_avx2(query: &[f32], codes: &[u8], codebook: &[f32]) -> f32 {
+    // SAFETY: selected only after runtime AVX2+FMA feature check.
+    unsafe { kernels::x86::tq_adc_mse_4bit_avx2(query, codes, codebook) }
+}
+
 #[cfg(all(target_arch = "aarch64", feature = "neon"))]
 fn dot_aarch64_neon(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: NEON is baseline on aarch64; this path is cfg-gated.
     unsafe { kernels::aarch64::dot_f32_neon(a, b) }
+}
+
+#[cfg(all(target_arch = "aarch64", feature = "neon"))]
+fn tq_adc_mse_4bit_aarch64_neon(query: &[f32], codes: &[u8], codebook: &[f32]) -> f32 {
+    // SAFETY: NEON is baseline on aarch64; this path is cfg-gated.
+    unsafe { kernels::aarch64::tq_adc_mse_4bit_neon(query, codes, codebook) }
 }
 
 fn build_table() -> DispatchTable {
@@ -102,11 +117,17 @@ fn build_table() -> DispatchTable {
             t.level = SimdLevel::Avx2;
             t.dot_f32 = dot_x86_avx2;
             t.decompress_block = decompress_x86_avx2;
+            // tq_adc 4-bit kernel needs avx2+fma; both are part of the AVX2 baseline
+            // on every CPU we care about, but be defensive.
+            if std::arch::is_x86_feature_detected!("fma") {
+                t.tq_adc_mse_4bit = tq_adc_mse_4bit_x86_avx2;
+            }
         }
         #[cfg(all(target_arch = "aarch64", feature = "neon"))]
         SimdLevel::Neon => {
             t.level = SimdLevel::Neon;
             t.dot_f32 = dot_aarch64_neon;
+            t.tq_adc_mse_4bit = tq_adc_mse_4bit_aarch64_neon;
         }
         _ => {}
     }

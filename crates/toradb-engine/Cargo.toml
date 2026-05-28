@@ -19,5 +19,14 @@ memmap2 = { workspace = true }
 arrow = { workspace = true }
 parquet = { workspace = true }
 
+[features]
+simd-neon = ["toradb-simd/neon"]
+simd-avx2 = ["toradb-simd/avx2"]
+simd-avx512 = ["toradb-simd/avx512"]
+
 [dev-dependencies]
 tempfile = "3"
+
+[[example]]
+name = "tq_validate"
+path = "examples/tq_validate.rs"

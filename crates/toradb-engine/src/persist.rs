@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use rayon::prelude::*;
-use toradb_index::dense::{diskann_codec, hnsw_codec, quant_codec, vector_codec};
+use toradb_index::dense::{diskann_codec, hnsw_codec, quant_codec, turboquant_codec, vector_codec};
 use toradb_index::sparse::bm25_lexicon::{self, Bm25LexiconView};
 use toradb_index::sparse::bm25_route::{self, Bm25RouteView};
 use toradb_index::sparse::bm25_tbm3;
@@ -155,6 +155,68 @@ fn segment_quant_bin_path(base: &Path, table: &str, segment_parquet: &str) -> Pa
         .strip_suffix(".parquet")
         .unwrap_or(segment_parquet);
     indexes_dir(base, table).join(format!("{stem}.vectors.q.bin"))
+}
+
+fn segment_turboquant_bin_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
+    let stem = segment_parquet
+        .strip_suffix(".parquet")
+        .unwrap_or(segment_parquet);
+    indexes_dir(base, table).join(format!("{stem}.vectors.tq.bin"))
+}
+
+fn turboquant_config() -> Option<(turboquant_codec::TqMode, u8)> {
+    let codec = std::env::var("TORADB_VECTOR_CODEC").ok()?;
+    let mode = match codec.as_str() {
+        "turboquant_mse" => turboquant_codec::TqMode::Mse,
+        "turboquant_ip" => turboquant_codec::TqMode::Ip,
+        _ => return None,
+    };
+    let bits = std::env::var("TORADB_TURBOQUANT_BITS")
+        .ok()
+        .and_then(|s| s.parse::<u8>().ok())
+        .unwrap_or(3)
+        .clamp(2, 4);
+    Some((mode, bits))
+}
+
+fn snapshot_for_columnar_turboquant(
+    docs: &[ColumnarDoc],
+    mode: turboquant_codec::TqMode,
+    bits: u8,
+) -> Option<turboquant_codec::TurboQuantSnapshot> {
+    let mut pairs = Vec::new();
+    for doc in docs {
+        if let Some(ref emb) = doc.embedding {
+            pairs.push((doc.id, emb.clone()));
+        }
+    }
+    if pairs.is_empty() {
+        return None;
+    }
+
+    let seed = pairs
+        .iter()
+        .fold(0u64, |acc, (id, _)| acc.wrapping_mul(0x9E37).wrapping_add(*id));
+    turboquant_codec::TurboQuantSnapshot::from_pairs(
+        &pairs,
+        mode,
+        bits,
+        seed | 1,
+        seed.rotate_left(17) | 1,
+    )
+    .ok()
+}
+
+fn save_segment_turboquant_sidecar(
+    base: &Path,
+    table: &str,
+    segment_parquet: &str,
+    snap: &turboquant_codec::TurboQuantSnapshot,
+) -> Result<(), String> {
+    turboquant_codec::write_snapshot_file(
+        &segment_turboquant_bin_path(base, table, segment_parquet),
+        snap,
+    )
 }
 
 fn load_bm25_snapshot_mmap(path: &Path, caches: Option<&mut StorageCaches>) -> Result<Bm25Snapshot, String> {
@@ -756,6 +818,41 @@ pub fn load_vectors_for_ids(
     Ok(out)
 }
 
+pub fn load_turboquant_sidecars(
+    base: &Path,
+    table: &str,
+) -> Result<Vec<turboquant_codec::TurboQuantSnapshot>, String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(Vec::new());
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    let mut out = Vec::new();
+    for seg in &manifest.segments {
+        let path = segment_turboquant_bin_path(base, table, seg);
+        if !path.exists() {
+            continue;
+        }
+        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        out.push(turboquant_codec::decode_snapshot(&bytes)?);
+    }
+    Ok(out)
+}
+
+pub fn table_has_turboquant_sidecars(base: &Path, table: &str) -> Result<bool, String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(false);
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    for seg in &manifest.segments {
+        if segment_turboquant_bin_path(base, table, seg).exists() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub fn table_has_quant_sidecars(base: &Path, table: &str) -> Result<bool, String> {
     let manifest_path = TableManifestFile::path_for_table(base, table);
     if !manifest_path.exists() {
@@ -1104,6 +1201,22 @@ fn restore_bm25_index(
     }
     restore_hnsw_index(base, table, store, num_segments, caches.as_deref_mut())?;
     restore_diskann_index(base, table, store, caches.as_deref_mut())?;
+    restore_turboquant_sidecars(base, table, store)?;
+    Ok(())
+}
+
+fn restore_turboquant_sidecars(
+    base: &Path,
+    table: &str,
+    store: &mut CorpusStore,
+) -> Result<(), String> {
+    if !table_has_turboquant_sidecars(base, table)? {
+        return Ok(());
+    }
+    let snaps = load_turboquant_sidecars(base, table)?;
+    if !snaps.is_empty() {
+        store.restore_turboquant_segments(table, snaps);
+    }
     Ok(())
 }
 
@@ -1328,6 +1441,11 @@ pub fn flush_batch_with_opts(
         if let Some(qsnap) = snapshot_for_columnar_quant(docs) {
             save_segment_quant_sidecar(base, table, &seg_name, &qsnap)?;
         }
+        if let Some((mode, bits)) = turboquant_config() {
+            if let Some(tqsnap) = snapshot_for_columnar_turboquant(docs, mode, bits) {
+                save_segment_turboquant_sidecar(base, table, &seg_name, &tqsnap)?;
+            }
+        }
     }
     wal::append_flush(
         base,
@@ -1374,6 +1492,10 @@ fn remove_segment_sidecars(base: &Path, table: &str, segment_parquet: &str) -> R
     let quant = segment_quant_bin_path(base, table, segment_parquet);
     if quant.exists() {
         std::fs::remove_file(&quant).map_err(|e| e.to_string())?;
+    }
+    let tq = segment_turboquant_bin_path(base, table, segment_parquet);
+    if tq.exists() {
+        std::fs::remove_file(&tq).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1630,6 +1752,22 @@ pub fn rebuild_segment_sidecars_with_progress(
                             let quant_path = segment_quant_bin_path(&base_owned, &table_owned, seg);
                             if !quant_path.exists() {
                                 save_segment_quant_sidecar(&base_owned, &table_owned, seg, &qsnap)?;
+                            }
+                        }
+                        if let Some((mode, bits)) = turboquant_config() {
+                            if let Some(tqsnap) =
+                                snapshot_for_columnar_turboquant(&docs, mode, bits)
+                            {
+                                let tq_path =
+                                    segment_turboquant_bin_path(&base_owned, &table_owned, seg);
+                                if !tq_path.exists() {
+                                    save_segment_turboquant_sidecar(
+                                        &base_owned,
+                                        &table_owned,
+                                        seg,
+                                        &tqsnap,
+                                    )?;
+                                }
                             }
                         }
                     }

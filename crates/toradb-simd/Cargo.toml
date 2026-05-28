@@ -24,3 +24,11 @@ harness = false
 [[bench]]
 name = "bitmap_bench"
 harness = false
+
+[[bench]]
+name = "fht_bench"
+harness = false
+
+[[bench]]
+name = "tq_adc_bench"
+harness = false

@@ -12,6 +12,8 @@ path = "src/main.rs"
 toradb-core = { workspace = true }
 toradb-distributed = { workspace = true }
 toradb-engine = { workspace = true }
+toradb-index = { workspace = true }
+toradb-simd = { workspace = true }
 toradb-storage = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 arrow = { workspace = true }

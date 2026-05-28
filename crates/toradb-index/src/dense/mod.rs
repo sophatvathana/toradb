@@ -10,4 +10,6 @@ pub mod ivf;
 pub mod matryoshka;
 pub mod muvera;
 pub mod search;
+pub mod tq_codebook;
 pub mod turboquant;
+pub mod turboquant_codec;

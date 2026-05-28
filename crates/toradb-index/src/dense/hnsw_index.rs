@@ -6,8 +6,16 @@ use toradb_core::{CandidateSet, DocId};
 use toradb_simd::dot_f32;
 
 const M: usize = 16;
-const EF_SEARCH: usize = 64;
+const DEFAULT_EF_SEARCH: usize = 64;
 const HNSW_MIN_DOCS: usize = 32;
+
+fn ef_search() -> usize {
+    std::env::var("TORADB_HNSW_EF_SEARCH")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .map(|v| v.max(1))
+        .unwrap_or(DEFAULT_EF_SEARCH)
+}
 /// Minimum vectors per logical segment shard before building a segment-local graph.
 pub const SEGMENT_HNSW_MIN_DOCS: usize = 8;
 
@@ -91,12 +99,24 @@ impl HnswIndex {
         if self.ids.is_empty() || query.len() != self.dim {
             return CandidateSet::default();
         }
+        let q = query.to_vec();
+        self.search_with(k, &|i| dot_f32(&q, &self.vectors[i]))
+    }
+
+    pub fn search_with<F>(&self, k: usize, score: &F) -> CandidateSet
+    where
+        F: Fn(usize) -> f32,
+    {
+        if self.ids.is_empty() || k == 0 {
+            return CandidateSet::default();
+        }
         let mut visited = vec![false; self.ids.len()];
-        let mut candidates = vec![(self.entry, dot_f32(query, &self.vectors[self.entry]))];
+        let mut candidates = vec![(self.entry, score(self.entry))];
         visited[self.entry] = true;
         let mut best: Vec<(usize, f32)> = Vec::new();
+        let ef = ef_search();
 
-        for _ in 0..EF_SEARCH {
+        for _ in 0..ef {
             if candidates.is_empty() {
                 break;
             }
@@ -108,7 +128,7 @@ impl HnswIndex {
                     continue;
                 }
                 visited[nb] = true;
-                let s = dot_f32(query, &self.vectors[nb]);
+                let s = score(nb);
                 candidates.push((nb, s));
             }
         }
@@ -120,6 +140,22 @@ impl HnswIndex {
             out.push(self.ids[idx], score);
         }
         out
+    }
+
+    pub fn doc_id(&self, node: usize) -> Option<DocId> {
+        self.ids.get(node).copied()
+    }
+
+    pub fn node_of(&self, id: DocId) -> Option<usize> {
+        self.ids.iter().position(|x| *x == id)
+    }
+
+    pub fn ids(&self) -> &[DocId] {
+        &self.ids
+    }
+
+    pub fn vectors(&self) -> &[Vec<f32>] {
+        &self.vectors
     }
 }
 

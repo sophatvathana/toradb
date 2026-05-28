@@ -4,6 +4,9 @@ use toradb_core::{CandidateSet, DocId, IngestOptions};
 use toradb_simd::dot_f32;
 
 use crate::dense::hnsw_index::{should_use_hnsw, should_use_segment_hnsw, HnswIndex};
+use crate::dense::turboquant;
+use crate::dense::turboquant_codec::TurboQuantSnapshot;
+use crate::dense::vector_codec::VectorSnapshot;
 use crate::graph::csr::CsrGraph;
 use crate::sparse::bm25::{Bm25Index, Bm25Snapshot, tokenize};
 
@@ -32,6 +35,10 @@ pub struct TableCorpus {
     graph: CsrGraph,
     next_id: DocId,
     vector_dim: Option<usize>,
+    /// Per-segment TurboQuant snapshots loaded from `.vectors.tq.bin` sidecars.
+    /// When non-empty and the global HNSW is present, `vector_search` will route
+    /// through ADC scoring + full-precision re-rank.
+    tq_segments: Vec<TurboQuantSnapshot>,
 }
 
 impl TableCorpus {
@@ -200,6 +207,67 @@ impl TableCorpus {
         }
     }
 
+    pub fn restore_turboquant_segments(&mut self, snaps: Vec<TurboQuantSnapshot>) {
+        self.tq_segments = snaps.into_iter().filter(|s| !s.is_empty()).collect();
+    }
+
+    pub fn has_turboquant_segments(&self) -> bool {
+        !self.tq_segments.is_empty()
+    }
+
+    fn build_full_snapshot(&self) -> Option<VectorSnapshot> {
+        let dim = self.vector_dim?;
+        let mut pairs: Vec<(DocId, Vec<f32>)> = Vec::new();
+        for (&id, doc) in &self.docs {
+            if let Some(ref v) = doc.vector {
+                if v.len() == dim {
+                    pairs.push((id, v.clone()));
+                }
+            }
+        }
+        if pairs.is_empty() {
+            return None;
+        }
+        VectorSnapshot::from_pairs(dim as u32, &pairs).ok()
+    }
+
+    fn turboquant_search(&self, query: &[f32], k: usize) -> CandidateSet {
+        let Some(ref graph) = self.hnsw else {
+            return CandidateSet::default();
+        };
+        if !should_use_hnsw(graph.len()) {
+            return CandidateSet::default();
+        }
+        let full = self.build_full_snapshot();
+        let rerank_factor = std::env::var("TORADB_TQ_RERANK_FACTOR")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(4)
+            .max(1);
+        let mut merged: Vec<(DocId, f32)> = Vec::new();
+        for snap in &self.tq_segments {
+            let c = turboquant::hnsw_adc_search(
+                graph,
+                snap,
+                full.as_ref(),
+                query,
+                k,
+                rerank_factor,
+            );
+            for (i, id) in c.ids.iter().enumerate() {
+                merged.push((*id, c.scores[i]));
+            }
+        }
+        merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        merged.dedup_by_key(|(id, _)| *id);
+        merged.truncate(k);
+        let mut out = CandidateSet::with_capacity(merged.len());
+        for (id, s) in merged {
+            out.push(id, s);
+        }
+        out
+    }
+
     pub fn segment_hnsw_snapshot(&self) -> HashMap<u32, HnswIndex> {
         self.segment_hnsw.clone()
     }
@@ -235,6 +303,12 @@ impl TableCorpus {
     }
 
     pub fn vector_search(&self, query: &[f32], k: usize) -> CandidateSet {
+        if self.has_turboquant_segments() {
+            let c = self.turboquant_search(query, k);
+            if !c.is_empty() {
+                return c;
+            }
+        }
         if let Some(ref h) = self.hnsw {
             if should_use_hnsw(h.len()) {
                 return h.search(query, k);
@@ -551,6 +625,14 @@ impl CorpusStore {
 
     pub fn restore_segment_hnsw(&mut self, table: &str, segment: u32, index: HnswIndex) {
         self.ensure_table(table).restore_segment_hnsw(segment, index);
+    }
+
+    pub fn restore_turboquant_segments(
+        &mut self,
+        table: &str,
+        snaps: Vec<TurboQuantSnapshot>,
+    ) {
+        self.ensure_table(table).restore_turboquant_segments(snaps);
     }
 
     pub fn hnsw_snapshot(&self, table: &str) -> Option<HnswIndex> {

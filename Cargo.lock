@@ -1721,6 +1721,8 @@ dependencies = [
  "toradb-core",
  "toradb-distributed",
  "toradb-engine",
+ "toradb-index",
+ "toradb-simd",
  "toradb-storage",
 ]
 
