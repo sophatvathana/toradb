@@ -122,10 +122,27 @@ impl DagRunner {
             reload_texts,
         )?;
         if compact {
-            let _ = persist::maybe_compact_after_flush(
+            let policy = toradb_storage::compaction::CompactPolicy::from_env();
+            loop {
+                let report = persist::compact_table(
+                    path.as_path(),
+                    table,
+                    Some(&mut self.retrieval.store),
+                    toradb_storage::compaction::CompactMode::Normal,
+                    &policy,
+                    Some(&mut self.caches),
+                )?;
+                if report.merges == 0 {
+                    break;
+                }
+            }
+        
+            persist::compact_table(
                 path.as_path(),
                 table,
-                &mut self.retrieval.store,
+                Some(&mut self.retrieval.store),
+                toradb_storage::compaction::CompactMode::Full,
+                &policy,
                 Some(&mut self.caches),
             )?;
         }
@@ -404,7 +421,7 @@ impl DagRunner {
     fn segment_parallelism(&self, table: &str) -> u32 {
         if let Some(ref path) = self.db_path {
             persist::table_segment_count(path.as_path(), table)
-                .unwrap_or(persist::DEFAULT_SEGMENT_PARALLELISM)
+                .unwrap_or_else(|_| persist::default_parallelism())
         } else {
             self.segments.len() as u32
         }
@@ -414,9 +431,9 @@ impl DagRunner {
     fn segment_worker_count(&self, table: &str) -> u32 {
         if let Some(ref path) = self.db_path {
             persist::table_segment_workers(path.as_path(), table)
-                .unwrap_or(persist::DEFAULT_SEGMENT_PARALLELISM)
+                .unwrap_or_else(|_| persist::default_parallelism())
         } else {
-            persist::DEFAULT_SEGMENT_PARALLELISM
+            persist::default_parallelism()
         }
         .max(1)
     }

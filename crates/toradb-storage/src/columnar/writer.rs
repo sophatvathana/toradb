@@ -13,6 +13,35 @@ use toradb_core::CompressionConfig;
 
 use super::schema::doc_schema;
 
+pub fn write_segment_from_batches(
+    path: &Path,
+    batches: impl Iterator<Item = Result<RecordBatch, String>>,
+    compression: Option<&CompressionConfig>,
+) -> Result<u64, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let schema = doc_schema();
+    let file = File::create(path).map_err(|e| e.to_string())?;
+    let mut props_builder = WriterProperties::builder();
+    if let Some(cfg) = compression {
+        if cfg.enabled {
+            props_builder = props_builder.set_compression(Compression::ZSTD(Default::default()));
+        }
+    }
+    let props = props_builder.build();
+    let mut writer =
+        ArrowWriter::try_new(file, schema, Some(props)).map_err(|e| e.to_string())?;
+    let mut row_count = 0u64;
+    for batch in batches {
+        let batch = batch?;
+        row_count += batch.num_rows() as u64;
+        writer.write(&batch).map_err(|e| e.to_string())?;
+    }
+    writer.close().map_err(|e| e.to_string())?;
+    Ok(row_count)
+}
+
 #[derive(Debug, Clone)]
 pub struct ColumnarDoc {
     pub id: u64,

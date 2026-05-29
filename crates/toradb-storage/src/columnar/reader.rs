@@ -247,6 +247,18 @@ pub fn read_segment_with_compression(
     Ok(docs)
 }
 
+pub fn iter_segment_batches(
+    path: &Path,
+    batch_size: usize,
+) -> Result<impl Iterator<Item = Result<RecordBatch, String>>, String> {
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .map_err(|e| e.to_string())?
+        .with_batch_size(batch_size);
+    let reader = builder.build().map_err(|e| e.to_string())?;
+    Ok(reader.map(|r| r.map_err(|e| e.to_string())))
+}
+
 pub fn decode_segment_bytes(bytes: &[u8]) -> Result<Vec<ColumnarDoc>, String> {
     let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
     let path = dir.path().join("seg.parquet");

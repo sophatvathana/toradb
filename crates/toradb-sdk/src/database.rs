@@ -545,7 +545,9 @@ impl Database {
             .finish_bulk_ingest(table, compact)
             .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))?;
         if reindex_bm25 {
-            let _ = self.reindex(table, Some("BM25"), Some("text"))?;
+            self.dag
+                .resume_index_build(table, false)
+                .map_err(|e| pyo3::exceptions::PyOSError::new_err(e))?;
         }
         Ok(())
     }

@@ -22,6 +22,8 @@ pub struct WalCheckpoint {
 pub struct WalCompactionRecord {
     pub removed: Vec<String>,
     pub added: Vec<String>,
+    #[serde(default)]
+    pub added_tiers: Vec<u8>,
 }
 
 #[derive(Debug, Default)]
@@ -47,6 +49,7 @@ pub fn append_compaction(
     table: &str,
     removed: &[String],
     added: &[String],
+    added_tiers: &[u8],
 ) -> Result<(), String> {
     if removed.is_empty() && added.is_empty() {
         return Ok(());
@@ -58,6 +61,7 @@ pub fn append_compaction(
     let record = WalCompactionRecord {
         removed: removed.to_vec(),
         added: added.to_vec(),
+        added_tiers: added_tiers.to_vec(),
     };
     let line = serde_json::to_string(&record).map_err(|e| e.to_string())?;
     let mut file = OpenOptions::new()

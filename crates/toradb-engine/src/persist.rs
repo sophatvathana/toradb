@@ -13,7 +13,7 @@ use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
 use toradb_storage::columnar::{
     bm25_snapshot_from_segment, parquet_row_count, read_segment, read_segment_id_bounds,
     read_segment_matching_ids, scan_segment_id_metadata, write_segment_with_compression,
-    ColumnarDoc, IndexMode, QueryMode, TableManifestFile, ROUTED_QUERY_MIN_SEGMENTS,
+    ColumnarDoc, IndexMode, QueryMode, SegmentMeta, TableManifestFile, ROUTED_QUERY_MIN_SEGMENTS,
 };
 use toradb_storage::cache::{get_or_mmap, read_segment_cached, CachedBm25Segment, StorageCaches};
 use toradb_storage::compaction::{self, CompactMode, CompactPolicy, CompactReport};
@@ -29,7 +29,13 @@ pub use crate::index_build_status::{
     scan_indexing_tables,
 };
 
-pub const DEFAULT_SEGMENT_PARALLELISM: u32 = 4;
+pub fn default_parallelism() -> u32 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(4)
+        .min(32)
+        .max(1)
+}
 
 fn ingest_thread_count() -> usize {
     std::env::var("TORADB_INGEST_THREADS")
@@ -45,29 +51,30 @@ fn ingest_thread_count() -> usize {
 }
 
 fn num_segments_hint(segments_len: usize) -> u32 {
-    segments_len.max(DEFAULT_SEGMENT_PARALLELISM as usize) as u32
+    segments_len.max(4) as u32
 }
 
 /// Segment-parallel fan-out for a table (manifest segment count, minimum 4).
 pub fn table_segment_count(base: &Path, table: &str) -> Result<u32, String> {
     let manifest_path = TableManifestFile::path_for_table(base, table);
     if !manifest_path.exists() {
-        return Ok(DEFAULT_SEGMENT_PARALLELISM);
+        return Ok(4);
     }
     let manifest = TableManifestFile::load(&manifest_path)?;
     Ok(num_segments_hint(manifest.segments.len()))
 }
 
 /// Configured rayon worker cap for distributed segment scans on this table.
+/// Defaults to physical core count when not manually set via SET SEGMENT_WORKERS.
 pub fn table_segment_workers(base: &Path, table: &str) -> Result<u32, String> {
     let manifest_path = TableManifestFile::path_for_table(base, table);
     if !manifest_path.exists() {
-        return Ok(DEFAULT_SEGMENT_PARALLELISM);
+        return Ok(default_parallelism());
     }
     let manifest = TableManifestFile::load(&manifest_path)?;
     Ok(manifest
         .segment_workers
-        .unwrap_or(DEFAULT_SEGMENT_PARALLELISM)
+        .unwrap_or_else(default_parallelism)
         .max(1))
 }
 
@@ -1459,8 +1466,23 @@ pub fn flush_batch_with_opts(
     let mut manifest = manifest;
     let seg_name_clone = seg_name.clone();
     let max_id = since_id.saturating_add(docs.len() as u64).saturating_sub(1);
-    manifest.record_segment_id_range(&seg_name, since_id, max_id);
-    manifest.push_segment(seg_name);
+    let byte_size = seg_path.metadata().map(|m| m.len()).unwrap_or(0);
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let generation = manifest.next_generation();
+    manifest.push_segment_meta(SegmentMeta {
+        file: seg_name.clone(),
+        min_id: since_id,
+        max_id,
+        tier: SegmentMeta::tier_for_bytes(byte_size),
+        generation,
+        created_at,
+        byte_size,
+        row_count: docs.len() as u64,
+        deleted_count: 0,
+    });
     manifest.save(&manifest_path)?;
     let seg_dir = TableManifestFile::segments_dir(base, table);
     if !opts.defer_wal_fsync {
@@ -1517,14 +1539,21 @@ pub fn replay_compaction_wal(base: &Path, table: &str) -> Result<usize, String> 
     for record in &records {
         for removed in &record.removed {
             if manifest.segments.contains(removed) && !seg_dir.join(removed).exists() {
-                manifest.segments.retain(|s| s != removed);
+                manifest.remove_segment(removed);
                 fixed += 1;
             }
         }
-        for added in &record.added {
+        for (i, added) in record.added.iter().enumerate() {
             if !manifest.segments.contains(added) && seg_dir.join(added).exists() {
                 manifest.push_segment(added.clone());
                 fixed += 1;
+            }
+            if let Some(tier) = record.added_tiers.get(i).copied() {
+                if let Some(m) = manifest.segment_meta.iter_mut().find(|m| m.file == *added) {
+                    if m.tier == 0 && tier > 0 {
+                        m.tier = tier;
+                    }
+                }
             }
         }
     }
@@ -1585,7 +1614,12 @@ pub fn compact_table(
             save_table_indexes(base, table, &mut tmp, num_segments)?;
         }
     }
-    wal::append_compaction(base, table, &report.removed, &report.added)?;
+    let added_tiers: Vec<u8> = report
+        .tier_transitions
+        .iter()
+        .map(|(_, t)| *t)
+        .collect();
+    wal::append_compaction(base, table, &report.removed, &report.added, &added_tiers)?;
     let manifest = TableManifestFile::load(&TableManifestFile::path_for_table(base, table))?;
     wal::checkpoint_after_manifest(base, table, &manifest.segments, &seg_dir)?;
     wal::truncate_compactions(base, table)?;
@@ -1605,7 +1639,7 @@ pub fn maybe_compact_after_flush(
     }
     let manifest = TableManifestFile::load(&manifest_path)?;
     let seg_dir = TableManifestFile::segments_dir(base, table);
-    if !compaction::should_compact(&manifest, &seg_dir, &policy) {
+    if !compaction::should_compact_tiered(&manifest, &seg_dir, &policy) {
         return Ok(None);
     }
     let report = compact_table(
