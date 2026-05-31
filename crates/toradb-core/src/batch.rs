@@ -1,4 +1,5 @@
 use crate::candidate::CandidateSet;
+use crate::provenance::ProvenanceCollector;
 
 #[derive(Debug, Clone)]
 pub struct Batch {
@@ -23,6 +24,7 @@ pub struct Batch {
     pub sparse_backend: String,
     /// RRF fusion constant (default 60).
     pub fusion_k: u32,
+    pub provenance: Option<ProvenanceCollector>,
 }
 
 impl Default for Batch {
@@ -43,6 +45,7 @@ impl Default for Batch {
             distributed_segments: false,
             sparse_backend: "bm25".into(),
             fusion_k: 60,
+            provenance: None,
         }
     }
 }
@@ -50,5 +53,12 @@ impl Default for Batch {
 impl Batch {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[inline]
+    pub fn with_provenance(&mut self, f: impl FnOnce(&mut ProvenanceCollector)) {
+        if let Some(p) = self.provenance.as_mut() {
+            f(p);
+        }
     }
 }

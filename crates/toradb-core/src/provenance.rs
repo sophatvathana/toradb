@@ -46,7 +46,7 @@ pub struct ProvenanceRecord {
 }
 
 /// Zero-cost when disabled: only allocates when `enabled = true`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ProvenanceCollector {
     pub enabled: bool,
     pub record: ProvenanceRecord,
@@ -93,6 +93,26 @@ impl ProvenanceCollector {
         }
     }
 
+    pub fn record_metadata_drop(&mut self, id: DocId, reason: String) {
+        if self.enabled {
+            self.record.tier1.drops.push(DropRecord {
+                id,
+                stage: DropStage::MetadataFilter,
+                reason,
+            });
+        }
+    }
+
+    pub fn record_tier1_drop(&mut self, id: DocId, reason: String) {
+        if self.enabled {
+            self.record.tier1.drops.push(DropRecord {
+                id,
+                stage: DropStage::Tier1BudgetCut,
+                reason,
+            });
+        }
+    }
+
     pub fn record_tier3_drop(&mut self, id: DocId, reason: String) {
         if self.enabled {
             self.record.tier3.drops.push(DropRecord {
@@ -100,6 +120,17 @@ impl ProvenanceCollector {
                 stage: DropStage::Tier3BudgetCut,
                 reason,
             });
+        }
+    }
+
+    pub fn record_tier_latency(&mut self, tier: u8, micros: u64) {
+        if self.enabled {
+            match tier {
+                1 => self.record.tier1.latency_us = micros,
+                2 => self.record.tier2.latency_us = micros,
+                3 => self.record.tier3.latency_us = micros,
+                _ => {}
+            }
         }
     }
 

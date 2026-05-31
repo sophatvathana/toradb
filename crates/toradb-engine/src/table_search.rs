@@ -1,5 +1,4 @@
 use toradb_core::{Batch, ExecCtx, ProvenanceCollector, ProvenanceRecord, QueryMetrics};
-use toradb_core::provenance::DropStage;
 use toradb_index::dense::query_embed::lexical_proxy_vector;
 use toradb_storage::columnar::IndexMode;
 
@@ -98,8 +97,16 @@ fn configure_batch(
         opts.graph_expand.unwrap_or(false) || matches!(strategy, Some("graph") | Some("hybrid"));
     batch.graph_depth = opts.depth.unwrap_or(2);
     batch.distributed_segments = matches!(strategy, Some("distributed"));
+    let strategy_used = strategy.map(str::to_string);
+    if opts.explain {
+        batch.provenance = Some(ProvenanceCollector::new(
+            true,
+            opts.query.clone(),
+            strategy_used.clone(),
+        ));
+    }
     let ctx = tune_ctx(exec_ctx(opts.top_k, opts.offset), &opts.query, strategy);
-    (batch, ctx, strategy.map(str::to_string))
+    (batch, ctx, strategy_used)
 }
 
 fn format_explain(
@@ -156,57 +163,11 @@ pub fn run_table_search(
         None
     };
 
-    let provenance = if opts.explain {
-        let mut prov = ProvenanceCollector::new(
-            true,
-            opts.query.clone(),
-            strategy_used.clone(),
-        );
-
-        // Tier 1: record all BM25 candidates (if sparse was enabled)
-        if batch.tier1_enable_sparse {
-            for (&id, &score) in batch.candidates.ids.iter().zip(batch.candidates.scores.iter()) {
-                prov.record_bm25(id, score);
-            }
-        }
-        // Tier 1: record all HNSW candidates (if dense was enabled)
-        if batch.tier1_enable_dense {
-            for (&id, &score) in batch.candidates.ids.iter().zip(batch.candidates.scores.iter()) {
-                prov.record_hnsw(id, score);
-            }
-        }
-
-        // Tier 2: record RRF-merged candidates
-        for (&id, &score) in batch.candidates.ids.iter().zip(batch.candidates.scores.iter()) {
-            prov.record_rrf(id, score);
-        }
-
-        // Record tier2 budget cuts: candidates after tier2 that didn't reach tier3
-        let tier2_count = metrics.tier2_candidates as usize;
-        let tier3_count = metrics.tier3_candidates as usize;
-        if tier2_count > tier3_count {
-            let cuts = tier2_count.saturating_sub(tier3_count);
-            for i in tier3_count..(tier3_count + cuts).min(batch.candidates.len()) {
-                let id = batch.candidates.ids[i];
-                prov.record_drop(id, DropStage::Tier2BudgetCut, format!("tier2 budget cut at rank {i}"));
-            }
-        }
-
-        // Record CRAG drops
-        if batch.enable_crag {
-            let final_count = top_k.min(batch.candidates.len());
-            for i in final_count..batch.candidates.len() {
-                let id = batch.candidates.ids[i];
-                prov.record_drop(id, DropStage::CragFilter, "crag median filter".to_string());
-            }
-        }
-
+    let provenance = batch.provenance.take().and_then(|mut prov| {
         prov.set_final(&page.ids);
         prov.set_total_latency_ms(elapsed_ms);
         prov.finish()
-    } else {
-        None
-    };
+    });
 
     // Persist provenance to per-table search log when available.
     if let (Some(ref prov), Some(db_path)) = (&provenance, dag.db_path()) {

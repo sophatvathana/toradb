@@ -402,6 +402,27 @@ impl Database {
         }
     }
 
+    #[pyo3(signature = (table, limit=50))]
+    fn search_log<'py>(
+        &self,
+        py: Python<'py>,
+        table: &str,
+        limit: usize,
+    ) -> PyResult<Bound<'py, PyList>> {
+        let base = self.dag.db_path().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("database has no on-disk path")
+        })?;
+        let records = persist::read_search_log(base, table, limit)
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+        let list = PyList::empty(py);
+        for rec in &records {
+            let value = serde_json::to_value(rec)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            list.append(crate::table::json_to_py(py, &value)?)?;
+        }
+        Ok(list)
+    }
+
     /// Run a retrieval `SELECT` in pages (uses `LIMIT` / `OFFSET` under the hood).
     #[pyo3(signature = (query, batch_size=128))]
     fn sql_stream<'py>(

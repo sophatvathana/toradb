@@ -57,6 +57,106 @@ fn search_with_explain_populates_provenance() {
     assert!(prov.total_latency_ms >= 0.0);
 }
 
+fn make_hybrid_dag() -> (DagRunner, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut dag = DagRunner::open(dir.path()).unwrap();
+    dag.add_documents(
+        "docs",
+        vec![
+            toradb_index::IngestDoc {
+                text: "Nikola Tesla invented the AC motor and the Tesla coil".into(),
+                metadata: Default::default(),
+                vector: Some(vec![1.0, 0.0, 0.0, 0.0]),
+            },
+            toradb_index::IngestDoc {
+                text: "Thomas Edison pioneered the light bulb and direct current".into(),
+                metadata: Default::default(),
+                vector: Some(vec![0.0, 1.0, 0.0, 0.0]),
+            },
+            toradb_index::IngestDoc {
+                text: "Marie Curie discovered radium and polonium".into(),
+                metadata: Default::default(),
+                vector: Some(vec![0.0, 0.0, 1.0, 0.0]),
+            },
+            toradb_index::IngestDoc {
+                text: "Albert Einstein formulated the theory of relativity".into(),
+                metadata: Default::default(),
+                vector: Some(vec![0.0, 0.0, 0.0, 1.0]),
+            },
+        ],
+    )
+    .unwrap();
+    (dag, dir)
+}
+
+#[test]
+fn hybrid_provenance_records_distinct_sparse_and_dense_tiers() {
+    let (mut dag, _dir) = make_hybrid_dag();
+    let result = run_table_search(
+        &mut dag,
+        TableSearchOptions {
+            table: "docs".into(),
+            query: "Tesla motor".into(),
+            top_k: Some(4),
+            offset: None,
+            strategy: Some("hybrid".into()),
+            explain: true,
+            graph_expand: None,
+            depth: None,
+            query_vector: Some(vec![0.1, 0.9, 0.0, 0.0]),
+        },
+    )
+    .unwrap();
+
+    let prov = result.provenance.expect("provenance populated for hybrid explain");
+
+    assert!(!prov.tier1.bm25_candidates.is_empty(), "expected BM25 candidates");
+    assert!(!prov.tier1.hnsw_candidates.is_empty(), "expected HNSW candidates");
+
+    let bm25: Vec<_> = prov.tier1.bm25_candidates.iter().map(|d| d.id).collect();
+    let hnsw: Vec<_> = prov.tier1.hnsw_candidates.iter().map(|d| d.id).collect();
+    assert_ne!(
+        bm25, hnsw,
+        "BM25 and HNSW candidate orderings should differ (got identical lists — provenance is fabricated)"
+    );
+
+    let same_scores = prov.tier1.bm25_candidates.len() == prov.tier1.hnsw_candidates.len()
+        && prov
+            .tier1
+            .bm25_candidates
+            .iter()
+            .zip(prov.tier1.hnsw_candidates.iter())
+            .all(|(a, b)| a.id == b.id && (a.score - b.score).abs() < f32::EPSILON);
+    assert!(!same_scores, "sparse and dense scores should not be identical");
+}
+
+#[test]
+fn provenance_records_per_tier_latency() {
+    let (mut dag, _dir) = make_hybrid_dag();
+    let result = run_table_search(
+        &mut dag,
+        TableSearchOptions {
+            table: "docs".into(),
+            query: "Tesla motor".into(),
+            top_k: Some(4),
+            offset: None,
+            strategy: Some("hybrid".into()),
+            explain: true,
+            graph_expand: None,
+            depth: None,
+            query_vector: Some(vec![0.1, 0.9, 0.0, 0.0]),
+        },
+    )
+    .unwrap();
+
+    let prov = result.provenance.unwrap();
+    let any_tier_timed = prov.tier1.latency_us > 0
+        || prov.tier2.latency_us > 0
+        || prov.tier3.latency_us > 0;
+    assert!(any_tier_timed, "expected at least one tier to record non-zero latency");
+    assert!(prov.total_latency_ms > 0.0, "total latency should be positive");
+}
+
 #[test]
 fn search_without_explain_returns_no_provenance() {
     let (mut dag, _dir) = make_dag();

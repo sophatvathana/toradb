@@ -225,6 +225,8 @@ struct SearchApiResponse {
     strategy: Option<String>,
     hits: Vec<SearchHitResponse>,
     explain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<serde_json::Value>,
     latency_ms: f64,
     search_ms: f64,
     fetch_ms: f64,
@@ -233,6 +235,11 @@ struct SearchApiResponse {
 
 #[derive(Deserialize)]
 struct SampleParams {
+    limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct SearchLogParams {
     limit: Option<u32>,
 }
 
@@ -348,6 +355,7 @@ pub fn serve_blocking(config: ServeConfig) -> Result<(), String> {
         .route("/api/tables/{name}/compact", post(table_compact))
         .route("/api/tables/{name}/ddl", get(table_ddl))
         .route("/api/tables/{name}/indexes", get(table_indexes))
+        .route("/api/tables/{name}/search-log", get(table_search_log))
         .route("/api/materialized-views", get(materialized_views).post(mv_create))
         .route("/api/materialized-views/{name}", get(mv_detail))
         .route(
@@ -483,6 +491,18 @@ async fn table_sample(
     let limit = params.limit.unwrap_or(20).max(1).min(500);
     let query = format!("SELECT id, score FROM {name} LIMIT {limit}");
     Ok(Json(execute_sql(&state, &query, false)?))
+}
+
+async fn table_search_log(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+    Query(params): Query<SearchLogParams>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let limit = params.limit.unwrap_or(50).max(1).min(500) as usize;
+    let records = persist::read_search_log(&state.db_path, &name, limit)
+        .map_err(ApiError::internal)?;
+    let value = serde_json::to_value(&records).map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(Json(serde_json::json!({ "table": name, "records": value })))
 }
 
 async fn materialized_views(
@@ -1371,12 +1391,18 @@ fn execute_native_search(
         );
     }
 
+    let provenance = out
+        .provenance
+        .as_ref()
+        .and_then(|p| serde_json::to_value(p).ok());
+
     Ok(SearchApiResponse {
         table: body.table,
         query: body.query,
         strategy: strategy_report,
         hits,
         explain: out.explain_text,
+        provenance,
         latency_ms,
         search_ms,
         fetch_ms,

@@ -24,6 +24,7 @@ import { buildBm25SearchSql } from "@/lib/search";
 import {
   runTableSearch,
   SEARCH_STRATEGIES,
+  type ProvenanceRecord,
   type QueryMetricsResponse,
   type SearchHit,
 } from "@/lib/api";
@@ -60,6 +61,7 @@ function SearchPageInner() {
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [activeStrategy, setActiveStrategy] = useState<string | null>(null);
   const [explainText, setExplainText] = useState<string | null>(null);
+  const [provenance, setProvenance] = useState<ProvenanceRecord | null>(null);
   const [metrics, setMetrics] = useState<QueryMetricsResponse | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [searchMs, setSearchMs] = useState<number | null>(null);
@@ -119,6 +121,7 @@ function SearchPageInner() {
       setHits(data.hits);
       setActiveStrategy(data.strategy);
       setExplainText(data.explain);
+      setProvenance(data.provenance ?? null);
       setMetrics(data.metrics);
       setLatencyMs(data.latency_ms);
       setSearchMs(data.search_ms);
@@ -127,6 +130,7 @@ function SearchPageInner() {
       setError(err instanceof Error ? err.message : String(err));
       setHits([]);
       setExplainText(null);
+      setProvenance(null);
       setMetrics(null);
       setLatencyMs(null);
       setSearchMs(null);
@@ -380,7 +384,7 @@ function SearchPageInner() {
         </div>
       )}
 
-      <ExplainPanel text={explainText} />
+      <ExplainPanel text={explainText} provenance={provenance} />
       <QueryMetricsCard metrics={metrics} />
 
       <Card>

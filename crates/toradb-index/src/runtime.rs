@@ -25,6 +25,7 @@ impl RetrievalRuntime {
         let q = batch.query.as_str();
         let query_vec = batch.query_vector.as_deref().unwrap_or(&[]);
         let mut merged = CandidateSet::with_capacity(cap);
+        let mut prov = batch.provenance.take();
 
         let push_cap = |merged: &mut CandidateSet, c: CandidateSet| {
             for (i, id) in c.ids.iter().enumerate() {
@@ -45,6 +46,11 @@ impl RetrievalRuntime {
                     .map(|t| t.bm25_search(q, cap))
                     .unwrap_or_default(),
             };
+            if let Some(p) = prov.as_mut() {
+                for (i, &id) in sparse.ids.iter().enumerate() {
+                    p.record_bm25(id, sparse.scores[i]);
+                }
+            }
             push_cap(&mut merged, sparse);
         }
 
@@ -56,6 +62,11 @@ impl RetrievalRuntime {
             } else {
                 dense::hnsw::search(&self.store, table, query_vec, cap)
             };
+            if let Some(p) = prov.as_mut() {
+                for (i, &id) in dense.ids.iter().enumerate() {
+                    p.record_hnsw(id, dense.scores[i]);
+                }
+            }
             push_cap(&mut merged, dense);
         }
 
@@ -67,6 +78,7 @@ impl RetrievalRuntime {
         }
 
         batch.candidates = merged;
+        batch.provenance = prov;
     }
 
     pub fn segment_candidates(

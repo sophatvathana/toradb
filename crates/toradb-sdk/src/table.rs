@@ -241,6 +241,54 @@ impl SearchResults {
     fn provenance(&self) -> Option<String> {
         self.provenance_json.clone()
     }
+
+    #[getter]
+    fn provenance_dict<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        match &self.provenance_json {
+            Some(s) => {
+                let value: serde_json::Value = serde_json::from_str(s).map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!("invalid provenance JSON: {e}"))
+                })?;
+                Ok(Some(json_to_py(py, &value)?))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+pub(crate) fn json_to_py<'py>(
+    py: Python<'py>,
+    value: &serde_json::Value,
+) -> PyResult<Bound<'py, PyAny>> {
+    use serde_json::Value;
+    Ok(match value {
+        Value::Null => py.None().into_bound(py),
+        Value::Bool(b) => b.into_pyobject(py)?.to_owned().into_any(),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.into_pyobject(py)?.into_any()
+            } else if let Some(u) = n.as_u64() {
+                u.into_pyobject(py)?.into_any()
+            } else {
+                n.as_f64().unwrap_or(0.0).into_pyobject(py)?.into_any()
+            }
+        }
+        Value::String(s) => s.into_pyobject(py)?.into_any(),
+        Value::Array(arr) => {
+            let list = PyList::empty(py);
+            for item in arr {
+                list.append(json_to_py(py, item)?)?;
+            }
+            list.into_any()
+        }
+        Value::Object(map) => {
+            let dict = PyDict::new(py);
+            for (k, v) in map {
+                dict.set_item(k, json_to_py(py, v)?)?;
+            }
+            dict.into_any()
+        }
+    })
 }
 
 #[pyclass]

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
+use toradb_core::provenance::DropStage;
 use toradb_core::{Batch, CandidateSet, DocId, ExecCtx, IngestOptions, QueryMetrics};
 use toradb_index::RetrievalRuntime;
 use toradb_storage::columnar::IndexMode;
@@ -566,20 +567,55 @@ impl DagRunner {
                 .expand_query_terms(&batch.table, &batch.query);
         }
 
+        let tier1_start = std::time::Instant::now();
         self.retrieval.run_tier1(batch, ctx);
         metrics.tier1_candidates = batch.candidates.len() as u32;
         let t1 = lower_tier1();
         let _ = t1.execute(batch, ctx);
+        let tier1_survivors: Vec<u64> = batch.candidates.ids.clone();
+        batch.with_provenance(|p| {
+            p.record_tier_latency(1, tier1_start.elapsed().as_micros() as u64);
+        });
 
+        let tier2_start = std::time::Instant::now();
         let pre_tier2 = batch.candidates.clone();
         let t2 = lower_tier2();
         self.retrieval.run_tier2(batch, ctx);
         let fusion_k = batch.fusion_k.max(1);
         batch.candidates = rrf_merge(&pre_tier2, &batch.candidates, fusion_k);
+        if let Some(mut p) = batch.provenance.take() {
+            for (i, &id) in batch.candidates.ids.iter().enumerate() {
+                p.record_rrf(id, batch.candidates.scores[i]);
+            }
+            let kept: HashSet<_> = batch.candidates.ids.iter().copied().collect();
+            for id in &tier1_survivors {
+                if !kept.contains(id) {
+                    p.record_tier1_drop(*id, "did not survive tier1→tier2 fusion budget".to_string());
+                }
+            }
+            batch.provenance = Some(p);
+        }
         if batch.enable_crag {
+            let pre_crag: Vec<u64> = batch.candidates.ids.clone();
             apply_crag(batch);
+            if let Some(mut p) = batch.provenance.take() {
+                let kept: HashSet<_> = batch.candidates.ids.iter().copied().collect();
+                for id in &pre_crag {
+                    if !kept.contains(id) {
+                        p.record_drop(
+                            *id,
+                            DropStage::CragFilter,
+                            "removed by CRAG median relevance filter".to_string(),
+                        );
+                    }
+                }
+                batch.provenance = Some(p);
+            }
         }
         metrics.tier2_candidates = t2.execute(batch, ctx) as u32;
+        batch.with_provenance(|p| {
+            p.record_tier_latency(2, tier2_start.elapsed().as_micros() as u64);
+        });
 
         if !batch.table.is_empty() {
             let table = batch.table.clone();
@@ -836,6 +872,8 @@ impl DagRunner {
             }
         }
 
+        let tier3_start = std::time::Instant::now();
+        let pre_tier3: Vec<u64> = batch.candidates.ids.clone();
         if let Some(ref path) = self.db_path {
             tier3_rescore(
                 path.as_path(),
@@ -847,6 +885,20 @@ impl DagRunner {
         }
         let t3 = lower_tier3();
         metrics.tier3_candidates = t3.execute(batch, ctx) as u32;
+        if let Some(mut p) = batch.provenance.take() {
+            let kept: HashSet<_> = batch.candidates.ids.iter().copied().collect();
+            for id in &pre_tier3 {
+                if !kept.contains(id) {
+                    p.record_drop(
+                        *id,
+                        DropStage::Tier2BudgetCut,
+                        "cut at tier2→tier3 budget".to_string(),
+                    );
+                }
+            }
+            p.record_tier_latency(3, tier3_start.elapsed().as_micros() as u64);
+            batch.provenance = Some(p);
+        }
         if let Some(ref path) = self.db_path {
             if !batch.table.is_empty()
                 && persist::table_has_quant_sidecars(path.as_path(), &batch.table)
