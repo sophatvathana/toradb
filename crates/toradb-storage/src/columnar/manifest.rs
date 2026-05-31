@@ -90,6 +90,8 @@ pub struct TableManifestFile {
     pub query_mode: QueryMode,
     #[serde(default)]
     pub segment_meta: Vec<SegmentMeta>,
+    #[serde(default)]
+    pub column_types: Vec<(String, toradb_core::ColumnType)>,
 }
 
 impl Default for TableManifestFile {
@@ -103,6 +105,7 @@ impl Default for TableManifestFile {
             segment_id_ranges: Vec::new(),
             query_mode: QueryMode::default(),
             segment_meta: Vec::new(),
+            column_types: Vec::new(),
         }
     }
 }
@@ -263,6 +266,9 @@ impl TableManifestFile {
                 })
                 .collect();
         }
+        if !m.column_types.is_empty() {
+            m.schema_version = m.schema_version.max(3);
+        }
         let data = serde_json::to_string_pretty(&m).map_err(|e| e.to_string())?;
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, data).map_err(|e| e.to_string())?;
@@ -287,6 +293,17 @@ impl TableManifestFile {
                 deleted_count: 0,
             });
         }
+    }
+
+    pub fn set_column_types(&mut self, types: Vec<(String, toradb_core::ColumnType)>) {
+        self.column_types = types;
+    }
+
+    pub fn column_type(&self, name: &str) -> Option<toradb_core::ColumnType> {
+        self.column_types
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, ty)| *ty)
     }
 }
 
@@ -344,6 +361,38 @@ mod tests {
         assert_eq!(manifest.segment_meta[1].file, "seg_00002.parquet");
         assert_eq!(manifest.segment_meta[1].min_id, 50);
         assert_eq!(manifest.segment_meta[1].max_id, 99);
+    }
+
+    #[test]
+    fn column_types_round_trip_and_bump_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        let mut manifest = TableManifestFile::default();
+        manifest.set_column_types(vec![
+            ("published".to_string(), toradb_core::ColumnType::Date),
+            ("rank".to_string(), toradb_core::ColumnType::Int),
+        ]);
+        manifest.save(&path).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw["schema_version"], 3);
+        let parsed = TableManifestFile::load(&path).unwrap();
+        assert_eq!(parsed.column_type("PUBLISHED"), Some(toradb_core::ColumnType::Date));
+        assert_eq!(parsed.column_type("rank"), Some(toradb_core::ColumnType::Int));
+        assert_eq!(parsed.column_type("missing"), None);
+    }
+
+    #[test]
+    fn old_manifest_without_column_types_still_loads() {
+        let json = r#"{
+            "schema_version": 2,
+            "segments": ["seg_00001.parquet"],
+            "segment_id_ranges": [{"file": "seg_00001.parquet", "min_id": 0, "max_id": 9}],
+            "segment_meta": [{"file":"seg_00001.parquet","min_id":0,"max_id":9,"tier":0,"generation":1,"created_at":1,"byte_size":1,"row_count":10,"deleted_count":0}]
+        }"#;
+        let manifest: TableManifestFile = serde_json::from_str(json).unwrap();
+        assert!(manifest.column_types.is_empty());
+        assert_eq!(manifest.column_type("anything"), None);
     }
 
     #[test]

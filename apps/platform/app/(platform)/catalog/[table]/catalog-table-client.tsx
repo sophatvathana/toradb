@@ -153,6 +153,21 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
               </CardContent>
             </Card>
           )}
+          {detail && detail.column_types.length > 0 && (
+            <Card className="mt-3">
+              <CardHeader>
+                <CardTitle className="text-base">Columns</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1 text-sm">
+                {detail.column_types.map((c) => (
+                  <p key={c.name} className="flex items-center gap-2">
+                    <span className="font-mono">{c.name}</span>
+                    <Badge variant="outline">{c.type}</Badge>
+                  </p>
+                ))}
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="sample">

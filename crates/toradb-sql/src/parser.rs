@@ -19,6 +19,59 @@ fn expect_ident(tokens: &[Token], i: &mut usize, word: &str) -> Result<(), Strin
     Ok(())
 }
 
+fn parse_column_defs(tokens: &[Token], i: &mut usize) -> Result<Vec<(String, String)>, String> {
+    let mut columns = Vec::new();
+    if !matches!(tokens.get(*i), Some(Token::LParen)) {
+        return Ok(columns);
+    }
+    *i += 1; // consume '('
+    loop {
+        if matches!(tokens.get(*i), Some(Token::RParen)) {
+            *i += 1;
+            break;
+        }
+        let Some(name) = ident_at(tokens, *i) else {
+            return Err("expected column name in CREATE TABLE".into());
+        };
+        let name = name.to_lowercase();
+        *i += 1;
+        let mut ty = ident_at(tokens, *i).unwrap_or_else(|| "TEXT".into());
+        if ident_at(tokens, *i).is_some() {
+            *i += 1;
+        }
+        if matches!(tokens.get(*i), Some(Token::LParen)) {
+            ty.push('(');
+            *i += 1;
+            while !matches!(tokens.get(*i), Some(Token::RParen) | None) {
+                match tokens.get(*i) {
+                    Some(Token::Number(n)) => ty.push_str(&n.to_string()),
+                    Some(Token::Comma) => ty.push(','),
+                    Some(Token::Ident(s)) => ty.push_str(s),
+                    _ => {}
+                }
+                *i += 1;
+            }
+            if matches!(tokens.get(*i), Some(Token::RParen)) {
+                ty.push(')');
+                *i += 1;
+            }
+        }
+        columns.push((name, ty));
+        match tokens.get(*i) {
+            Some(Token::Comma) => {
+                *i += 1;
+                continue;
+            }
+            Some(Token::RParen) => {
+                *i += 1;
+                break;
+            }
+            _ => return Err("expected ',' or ')' in CREATE TABLE column list".into()),
+        }
+    }
+    Ok(columns)
+}
+
 fn parse_aggregate(tokens: &[Token], i: &mut usize) -> Result<SelectExpr, String> {
     let func = match ident_at(tokens, *i).as_deref() {
         Some("COUNT") => AggFunc::CountStar,
@@ -155,6 +208,26 @@ fn parse_predicate_clause(tokens: &[Token], i: &mut usize, clause_name: &str) ->
             return Err("IN requires at least one value".into());
         }
         return Ok(WherePred::In { column, values });
+    }
+
+    let mut negated = false;
+    if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "NOT")
+        && matches!(tokens.get(*i + 1), Some(Token::Ident(k)) if k == "BETWEEN")
+    {
+        negated = true;
+        *i += 1;
+    }
+    if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "BETWEEN") {
+        *i += 1;
+        let low = parse_literal(tokens, i)?;
+        expect_ident(tokens, i, "AND")?;
+        let high = parse_literal(tokens, i)?;
+        return Ok(WherePred::Between {
+            column,
+            low,
+            high,
+            negated,
+        });
     }
 
     let op = tokens
@@ -578,7 +651,7 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 i += 2;
                 let (namespace, name) = parse_qualified_table(&tokens, &mut i)?;
                 let mut mode = "HYBRID".into();
-                let columns = vec![];
+                let columns = parse_column_defs(&tokens, &mut i)?;
                 if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "USING") {
                     i += 2;
                     if let Some(Token::Ident(m)) = tokens.get(i - 1) {

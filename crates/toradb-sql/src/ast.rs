@@ -80,6 +80,12 @@ pub enum WherePred {
         column: String,
         values: Vec<String>,
     },
+    Between {
+        column: String,
+        low: String,
+        high: String,
+        negated: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -55,3 +55,36 @@ fn parse_where_numeric_compare() {
     assert_eq!(*op, CompareOp::Gt);
     assert_eq!(value, "10");
 }
+
+#[test]
+fn parse_where_between() {
+    let stmts =
+        parse("SELECT tag, COUNT(*) FROM docs WHERE rank BETWEEN 10 AND 20 GROUP BY tag").unwrap();
+    let Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+    let WherePred::Between { column, low, high, negated } = sel.where_clause.as_ref().unwrap()
+    else {
+        panic!("between");
+    };
+    assert_eq!(column, "rank");
+    assert_eq!(low, "10");
+    assert_eq!(high, "20");
+    assert!(!negated);
+}
+
+#[test]
+fn parse_where_not_between() {
+    let stmts = parse(
+        "SELECT tag, COUNT(*) FROM docs WHERE published NOT BETWEEN '2024-01-01' AND '2024-12-31' GROUP BY tag",
+    )
+    .unwrap();
+    let Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+    let WherePred::Between { column, negated, .. } = sel.where_clause.as_ref().unwrap() else {
+        panic!("between");
+    };
+    assert_eq!(column, "published");
+    assert!(negated);
+}

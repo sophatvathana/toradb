@@ -101,6 +101,18 @@ impl Database {
                         t.name.to_lowercase()
                     };
                     self.ensure_table(&table);
+                    let column_types: Vec<(String, toradb_core::ColumnType)> = t
+                        .columns
+                        .iter()
+                        .map(|(name, ty)| (name.clone(), toradb_core::ColumnType::parse(ty)))
+                        .collect();
+                    if !column_types.is_empty() {
+                        let _ = persist::set_table_column_types(
+                            Path::new(&self.path),
+                            &table,
+                            &column_types,
+                        );
+                    }
                     let _ = toradb_sql::catalog_store::save_catalog(
                         Path::new(&self.path),
                         &self.binder.catalog,
@@ -134,9 +146,24 @@ impl Database {
                                 "unknown table {table}"
                             ))
                         })?;
+        
+                    let col_clause = self
+                        .dag
+                        .db_path()
+                        .map(|base| persist::table_column_types_ordered(base, &table))
+                        .filter(|v| !v.is_empty())
+                        .map(|cols| {
+                            let body = cols
+                                .iter()
+                                .map(|(n, ty)| format!("{n} {}", ty.as_str()))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            format!(" ({body})")
+                        })
+                        .unwrap_or_default();
                     let ddl = format!(
-                        "CREATE TABLE {} USING {:?}",
-                        manifest.name, manifest.index_mode
+                        "CREATE TABLE {}{} USING {:?}",
+                        manifest.name, col_clause, manifest.index_mode
                     );
                     return Ok(SqlOutcome::Message(ddl));
                 }

@@ -134,6 +134,56 @@ pub fn table_query_mode(base: &Path, table: &str) -> Result<QueryMode, String> {
     Ok(TableManifestFile::load(&path)?.query_mode)
 }
 
+pub fn set_table_column_types(
+    base: &Path,
+    table: &str,
+    types: &[(String, toradb_core::ColumnType)],
+) -> Result<(), String> {
+    if types.is_empty() {
+        return Ok(());
+    }
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    let mut manifest = if manifest_path.exists() {
+        TableManifestFile::load(&manifest_path)?
+    } else {
+        TableManifestFile::default()
+    };
+    manifest.set_column_types(types.to_vec());
+    manifest.save(&manifest_path)
+}
+
+pub fn table_column_types_ordered(
+    base: &Path,
+    table: &str,
+) -> Vec<(String, toradb_core::ColumnType)> {
+    let path = TableManifestFile::path_for_table(base, table);
+    if !path.exists() {
+        return Vec::new();
+    }
+    match TableManifestFile::load(&path) {
+        Ok(m) => m.column_types,
+        Err(_) => Vec::new(),
+    }
+}
+
+pub fn table_column_types(
+    base: &Path,
+    table: &str,
+) -> std::collections::HashMap<String, toradb_core::ColumnType> {
+    let path = TableManifestFile::path_for_table(base, table);
+    if !path.exists() {
+        return std::collections::HashMap::new();
+    }
+    match TableManifestFile::load(&path) {
+        Ok(m) => m
+            .column_types
+            .into_iter()
+            .map(|(name, ty)| (name.to_ascii_lowercase(), ty))
+            .collect(),
+        Err(_) => std::collections::HashMap::new(),
+    }
+}
+
 fn table_vectors_bin_path(base: &Path, table: &str) -> PathBuf {
     indexes_dir(base, table).join("vectors.bin")
 }

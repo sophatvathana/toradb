@@ -1,8 +1,19 @@
-use toradb_core::{Catalog, CompressionConfig, IndexMode, Schema, TableManifest};
+use toradb_core::{
+    Catalog, ColumnDef, ColumnKind, ColumnType, CompressionConfig, IndexMode, Schema, TableManifest,
+};
 use crate::ast::*;
 
 pub struct Binder {
     pub catalog: Catalog,
+}
+
+fn kind_for(ty: ColumnType) -> ColumnKind {
+    match ty {
+        ColumnType::Int | ColumnType::Float => ColumnKind::Int,
+        ColumnType::Uuid => ColumnKind::Uuid,
+        ColumnType::Vector => ColumnKind::Vector,
+        _ => ColumnKind::Text,
+    }
 }
 
 impl Binder {
@@ -27,9 +38,21 @@ impl Binder {
                     } else {
                         t.name.clone()
                     };
+                    let columns = t
+                        .columns
+                        .iter()
+                        .map(|(name, ty)| {
+                            let column_type = ColumnType::parse(ty);
+                            ColumnDef {
+                                name: name.clone(),
+                                kind: kind_for(column_type),
+                                column_type,
+                            }
+                        })
+                        .collect();
                     self.catalog.register(TableManifest {
                         name: table_name,
-                        schema: Schema::default(),
+                        schema: Schema { columns },
                         index_mode: mode,
                         vector_dim: None,
                         sparse_enabled: true,

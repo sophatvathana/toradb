@@ -13,39 +13,76 @@ pub struct SqlAggregateResult {
     pub value_rows: Vec<Vec<f64>>,
 }
 
+use std::cmp::Ordering;
+
+use toradb_core::ColumnType;
+
 fn parse_numeric_metadata(value: &str) -> Option<f64> {
     value.trim().parse().ok()
 }
 
-fn metadata_matches(pred: &WherePred, metadata: &std::collections::HashMap<String, String>) -> bool {
+fn untyped_cmp(a: &str, b: &str) -> Option<Ordering> {
+    let (x, y) = (parse_numeric_metadata(a)?, parse_numeric_metadata(b)?);
+    x.partial_cmp(&y)
+}
+
+fn ordered(col_types: &HashMap<String, ColumnType>, column: &str, stored: &str, literal: &str) -> Option<Ordering> {
+    match col_types.get(column) {
+        Some(ty) if *ty != ColumnType::Text => {
+            toradb_core::typed_cmp(*ty, stored, literal).or_else(|| untyped_cmp(stored, literal))
+        }
+        _ => untyped_cmp(stored, literal),
+    }
+}
+
+fn metadata_matches(
+    pred: &WherePred,
+    metadata: &HashMap<String, String>,
+    col_types: &HashMap<String, ColumnType>,
+) -> bool {
     match pred {
         WherePred::Compare { column, op, value } => {
             let Some(v) = metadata.get(column) else {
                 return false;
             };
             match op {
-                CompareOp::Eq => v == value,
-                CompareOp::Ne => v != value,
-                CompareOp::Lt | CompareOp::Lte | CompareOp::Gt | CompareOp::Gte => {
-                    let (Some(a), Some(b)) =
-                        (parse_numeric_metadata(v), parse_numeric_metadata(value))
-                    else {
-                        return false;
-                    };
-                    match op {
-                        CompareOp::Lt => a < b,
-                        CompareOp::Lte => a <= b,
-                        CompareOp::Gt => a > b,
-                        CompareOp::Gte => a >= b,
-                        CompareOp::Eq | CompareOp::Ne => false,
-                    }
-                }
+                CompareOp::Eq => match ordered(col_types, column, v, value) {
+                    Some(ord) => ord == Ordering::Equal,
+                    None => v == value,
+                },
+                CompareOp::Ne => match ordered(col_types, column, v, value) {
+                    Some(ord) => ord != Ordering::Equal,
+                    None => v != value,
+                },
+                CompareOp::Lt => matches!(ordered(col_types, column, v, value), Some(Ordering::Less)),
+                CompareOp::Lte => matches!(
+                    ordered(col_types, column, v, value),
+                    Some(Ordering::Less | Ordering::Equal)
+                ),
+                CompareOp::Gt => matches!(ordered(col_types, column, v, value), Some(Ordering::Greater)),
+                CompareOp::Gte => matches!(
+                    ordered(col_types, column, v, value),
+                    Some(Ordering::Greater | Ordering::Equal)
+                ),
             }
         }
         WherePred::In { column, values } => metadata
             .get(column)
             .map(|v| values.iter().any(|x| x == v))
             .unwrap_or(false),
+        WherePred::Between { column, low, high, negated } => {
+            let Some(v) = metadata.get(column) else {
+                return false;
+            };
+            let in_range = matches!(
+                ordered(col_types, column, v, low),
+                Some(Ordering::Greater | Ordering::Equal)
+            ) && matches!(
+                ordered(col_types, column, v, high),
+                Some(Ordering::Less | Ordering::Equal)
+            );
+            in_range ^ negated
+        }
     }
 }
 
@@ -194,6 +231,7 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
     };
 
     dag.ensure_table(&sel.table);
+    let col_types = dag.column_types_for(&sel.table);
     let mut groups: HashMap<String, Vec<GroupAccum>> = HashMap::new();
     if group_cols.is_empty() && filter_ids.is_none() && sel.where_clause.is_none() {
         let rows = dag.table_row_count(&sel.table)? as u64;
@@ -216,7 +254,7 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
                 }
             }
             if let Some(ref pred) = sel.where_clause {
-                if !metadata_matches(pred, metadata) {
+                if !metadata_matches(pred, metadata, &col_types) {
                     return Ok(());
                 }
             }
@@ -287,6 +325,16 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
             WherePred::In { column, values: allow } => {
                 if !group_cols.is_empty() && group_cols[0] == *column {
                     allow.iter().any(|v| v == group_key)
+                } else {
+                    false
+                }
+            }
+            WherePred::Between { column, low, high, negated } => {
+                if let Some(idx) = value_col_lookup.get(column) {
+                    let a = values.get(*idx).copied().unwrap_or(0.0);
+                    let lo = parse_numeric_metadata(low).unwrap_or(f64::NEG_INFINITY);
+                    let hi = parse_numeric_metadata(high).unwrap_or(f64::INFINITY);
+                    (a >= lo && a <= hi) ^ negated
                 } else {
                     false
                 }

@@ -118,6 +118,14 @@ struct TableDetailResponse {
     index_sidecars: Vec<String>,
     is_materialized_view: bool,
     bulk_ingest_active: bool,
+    column_types: Vec<ColumnTypeEntry>,
+}
+
+#[derive(Serialize)]
+struct ColumnTypeEntry {
+    name: String,
+    #[serde(rename = "type")]
+    column_type: String,
 }
 
 #[derive(Serialize)]
@@ -436,6 +444,13 @@ fn table_detail_for(
         .table_index_sidecars(name)
         .unwrap_or_default();
     let is_materialized_view = materialized::is_materialized_view(&state.db_path, name);
+    let column_types = persist::table_column_types_ordered(&state.db_path, name)
+        .into_iter()
+        .map(|(name, ty)| ColumnTypeEntry {
+            name,
+            column_type: ty.as_str().to_string(),
+        })
+        .collect();
     Ok(TableDetailResponse {
         name: name.to_string(),
         rows: dag.table_row_count(name).unwrap_or(0),
@@ -447,6 +462,7 @@ fn table_detail_for(
         index_sidecars,
         is_materialized_view,
         bulk_ingest_active: dag.bulk_ingest_active(name),
+        column_types,
     })
 }
 
@@ -579,9 +595,25 @@ async fn table_ddl(
     AxumPath(name): AxumPath<String>,
 ) -> Result<Json<DdlResponse>, ApiError> {
     let table = name.to_lowercase();
+    let col_clause = {
+        let cols = persist::table_column_types_ordered(&state.db_path, &table);
+        if cols.is_empty() {
+            String::new()
+        } else {
+            let body = cols
+                .iter()
+                .map(|(n, ty)| format!("{n} {}", ty.as_str()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(" ({body})")
+        }
+    };
     let mut binder = load_binder(&state.db_path);
     let ddl = if let Some(manifest) = binder.catalog.get(&table) {
-        format!("CREATE TABLE {} USING {:?}", manifest.name, manifest.index_mode)
+        format!(
+            "CREATE TABLE {}{} USING {:?}",
+            manifest.name, col_clause, manifest.index_mode
+        )
     } else {
         let dag = state.dag.lock().map_err(|_| ApiError::internal("lock"))?;
         if !dag
@@ -592,7 +624,7 @@ async fn table_ddl(
         {
             return Err(ApiError::not_found(format!("table not found: {table}")));
         }
-        format!("CREATE TABLE {table} USING HYBRID")
+        format!("CREATE TABLE {table}{col_clause} USING HYBRID")
     };
     Ok(Json(DdlResponse { ddl }))
 }

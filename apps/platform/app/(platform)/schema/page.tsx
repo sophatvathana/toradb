@@ -17,13 +17,36 @@ import { usePlatformStore } from "@/stores/platform-store";
 import { type ColumnDef } from "@tanstack/react-table";
 import { useMemo } from "react";
 
+const COLUMN_TYPES = [
+  "text",
+  "int",
+  "float",
+  "bool",
+  "date",
+  "timestamp",
+  "json",
+] as const;
+
+type ColumnRow = { name: string; type: string };
+
 export default function SchemaPage() {
   const [tableName, setTableName] = useState("passages");
   const [namespace, setNamespace] = useState("");
   const [mode, setMode] = useState<"TEXT" | "VECTOR" | "HYBRID">("HYBRID");
+  const [columns, setColumns] = useState<ColumnRow[]>([]);
   const [ddlResult, setDdlResult] = useState<SqlResponse | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  function addColumn() {
+    setColumns((cols) => [...cols, { name: "", type: "text" }]);
+  }
+  function updateColumn(idx: number, patch: Partial<ColumnRow>) {
+    setColumns((cols) => cols.map((c, i) => (i === idx ? { ...c, ...patch } : c)));
+  }
+  function removeColumn(idx: number) {
+    setColumns((cols) => cols.filter((_, i) => i !== idx));
+  }
 
   const refreshTables = usePlatformStore((s) => s.refreshTables);
 
@@ -46,7 +69,11 @@ export default function SchemaPage() {
     const qualified = namespace.trim()
       ? `${namespace.trim()}.${tableName.trim()}`
       : tableName.trim();
-    void runDdl(`CREATE TABLE ${qualified} USING ${mode}`);
+    const cols = columns.filter((c) => c.name.trim());
+    const colClause = cols.length
+      ? ` (${cols.map((c) => `${c.name.trim()} ${c.type}`).join(", ")})`
+      : "";
+    void runDdl(`CREATE TABLE ${qualified}${colClause} USING ${mode}`);
   }
 
   const resultColumns = useMemo<ColumnDef<Record<string, unknown>>[]>(() => {
@@ -95,6 +122,51 @@ export default function SchemaPage() {
               <option value="HYBRID">HYBRID</option>
             </select>
           </label>
+          <div className="text-sm">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-muted-foreground">Columns (optional)</span>
+              <Button type="button" variant="outline" size="sm" onClick={addColumn}>
+                + Add column
+              </Button>
+            </div>
+            {columns.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No declared columns — metadata stays untyped (text).
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {columns.map((col, idx) => (
+                  <div key={idx} className="flex gap-2">
+                    <Input
+                      className="flex-1"
+                      value={col.name}
+                      placeholder="column name"
+                      onChange={(e) => updateColumn(idx, { name: e.target.value })}
+                    />
+                    <select
+                      className="w-32 rounded-md border border-border bg-card px-2 py-1.5 text-sm"
+                      value={col.type}
+                      onChange={(e) => updateColumn(idx, { type: e.target.value })}
+                    >
+                      {COLUMN_TYPES.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => removeColumn(idx)}
+                    >
+                      ✕
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <Button type="button" disabled={loading || !tableName.trim()} onClick={onCreateTable}>
             Create table
           </Button>

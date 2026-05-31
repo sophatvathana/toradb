@@ -487,6 +487,16 @@ impl DagRunner {
         self.db_path.as_ref().map(|p| p.as_path())
     }
 
+    pub fn column_types_for(
+        &self,
+        table: &str,
+    ) -> HashMap<String, toradb_core::ColumnType> {
+        match self.db_path.as_ref() {
+            Some(p) => persist::table_column_types(p.as_path(), table),
+            None => HashMap::new(),
+        }
+    }
+
     pub fn list_tables(&self) -> Result<Vec<String>, String> {
         match self.db_path.as_ref() {
             Some(p) => persist::list_tables(p.as_path()),
