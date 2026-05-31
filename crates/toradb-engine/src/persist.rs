@@ -610,17 +610,40 @@ pub fn filter_bm25_segment_indices(
     table: &str,
     num_segments: u32,
     query: &str,
+    caches: Option<&StorageCaches>,
 ) -> Result<Vec<u32>, String> {
     let terms: Vec<String> = tokenize(query);
     if terms.is_empty() {
         return Ok((0..num_segments).collect());
     }
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    let real_segments = if manifest_path.exists() {
+        TableManifestFile::load(&manifest_path)
+            .map(|m| m.segments.len())
+            .unwrap_or(num_segments as usize)
+    } else {
+        num_segments as usize
+    };
+    if real_segments <= 1 {
+        return Ok(vec![0]);
+    }
     let query_mode = table_query_mode(base, table)?;
     if query_mode == QueryMode::Routed {
         let route_path = table_bm25_route_path(base, table);
         if route_path.exists() {
-            let bytes = std::fs::read(&route_path).map_err(|e| e.to_string())?;
-            if let Ok(route) = Bm25RouteView::open(&bytes) {
+            let mmap = match caches {
+                Some(c) => c.route_mmap(&route_path).ok(),
+                None => None,
+            };
+            let owned;
+            let bytes: &[u8] = match &mmap {
+                Some(m) => m.as_ref(),
+                None => {
+                    owned = std::fs::read(&route_path).map_err(|e| e.to_string())?;
+                    &owned
+                }
+            };
+            if let Ok(route) = Bm25RouteView::open(bytes) {
                 let segs = route.segments_for_query(terms.iter().map(|s| s.as_str()));
                 if !segs.is_empty() {
                     return Ok(segs);

@@ -630,7 +630,7 @@ impl DagRunner {
                     } else {
                         Arc::new(Vec::new())
                     };
-                let active_segments: Vec<u32> = if use_disk_segments {
+                let active_segments: Vec<u32> = if use_disk_segments && num_segments > 1 {
                     self.db_path
                         .as_ref()
                         .map(|p| {
@@ -639,6 +639,7 @@ impl DagRunner {
                                 &table,
                                 num_segments,
                                 &query,
+                                Some(caches),
                             )
                             .unwrap_or_else(|_| (0..num_segments).collect())
                         })

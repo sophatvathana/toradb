@@ -10,3 +10,4 @@ toradb-simd = { workspace = true }
 serde = { workspace = true }
 rkyv = { workspace = true }
 memmap2 = { workspace = true }
+rayon = { workspace = true }

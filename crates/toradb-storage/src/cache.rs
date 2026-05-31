@@ -328,6 +328,7 @@ pub struct StorageCaches {
     pub segments: SegmentCache,
     pub index_blobs: IndexBlobCache,
     pub segment_bm25: RwLock<SegmentBm25Cache>,
+    pub route_blobs: RwLock<HashMap<PathBuf, Arc<Mmap>>>,
     pub numa: NumaConfig,
 }
 
@@ -349,8 +350,23 @@ impl StorageCaches {
             segments: SegmentCache::new(config.segment_entries),
             index_blobs: IndexBlobCache::new(config.index_bytes),
             segment_bm25: RwLock::new(SegmentBm25Cache::new(config.index_bytes)),
+            route_blobs: RwLock::new(HashMap::new()),
             numa: NumaConfig::from_env(),
         }
+    }
+
+    pub fn route_mmap(&self, path: &Path) -> Result<Arc<Mmap>, String> {
+        if let Ok(guard) = self.route_blobs.read() {
+            if let Some(hit) = guard.get(path) {
+                return Ok(Arc::clone(hit));
+            }
+        }
+        let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let arc = Arc::new(unsafe { Mmap::map(&file).map_err(|e| e.to_string())? });
+        if let Ok(mut guard) = self.route_blobs.write() {
+            guard.insert(path.to_path_buf(), Arc::clone(&arc));
+        }
+        Ok(arc)
     }
 
     pub fn default_from_env() -> Self {

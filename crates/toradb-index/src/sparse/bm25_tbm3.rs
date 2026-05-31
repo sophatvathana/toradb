@@ -7,7 +7,11 @@ use std::collections::{BinaryHeap, HashMap};
 use std::path::Path;
 
 use memmap2::Mmap;
+use rayon::prelude::*;
 use toradb_core::{CandidateSet, DocId};
+
+const PARALLEL_BLOCK_THRESHOLD: usize = 2048;
+const MIN_BLOCKS_PER_WORKER: usize = 512;
 
 use super::bm25::{tokenize, B, Bm25Snapshot, K1};
 
@@ -556,7 +560,11 @@ impl<'a> Bm25Tbm3View<'a> {
     }
 }
 
-fn single_term_topk(cursor: &mut TermCursor<'_>, k: usize, avg_dl: f32) -> CandidateSet {
+fn score_range_into_heap(
+    cursor: &mut TermCursor<'_>,
+    k: usize,
+    avg_dl: f32,
+) -> BinaryHeap<Reverse<ScoredDoc>> {
     let mut heap: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
     let mut deltas = [0u32; BLOCK_SIZE];
     let idf = cursor.idf;
@@ -572,7 +580,115 @@ fn single_term_topk(cursor: &mut TermCursor<'_>, k: usize, avg_dl: f32) -> Candi
         }
         cursor.advance_block();
     }
-    heap_to_candidates(heap)
+    heap
+}
+
+fn single_term_topk(cursor: &mut TermCursor<'_>, k: usize, avg_dl: f32) -> CandidateSet {
+    let num_blocks = cursor.num_blocks;
+
+    // Small posting lists: stay sequential, no thread overhead.
+    if num_blocks <= PARALLEL_BLOCK_THRESHOLD {
+        let heap = score_range_into_heap(cursor, k, avg_dl);
+        return heap_to_candidates(heap);
+    }
+
+    let workers = rayon::current_num_threads()
+        .min(num_blocks / MIN_BLOCKS_PER_WORKER)
+        .max(1);
+    if workers <= 1 {
+        let heap = score_range_into_heap(cursor, k, avg_dl);
+        return heap_to_candidates(heap);
+    }
+
+    let starts = cursor.block_starts();
+    let per_worker = num_blocks.div_ceil(workers);
+    let ranges: Vec<(usize, usize)> = (0..workers)
+        .map(|w| {
+            let lo = (w * per_worker).min(num_blocks);
+            let hi = ((w + 1) * per_worker).min(num_blocks);
+            (lo, hi)
+        })
+        .filter(|(lo, hi)| lo < hi)
+        .collect();
+
+    let base: &TermCursor = cursor;
+    let local_heaps: Vec<BinaryHeap<Reverse<ScoredDoc>>> = ranges
+        .par_iter()
+        .map(|&(lo, hi)| {
+            let mut wc = base.at_block(lo, hi, &starts[lo]);
+            score_range_into_heap(&mut wc, k, avg_dl)
+        })
+        .collect();
+
+    let mut merged: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
+    for h in local_heaps {
+        for Reverse(item) in h {
+            push_topk(&mut merged, item, k);
+        }
+    }
+    heap_to_candidates(merged)
+}
+
+fn score_term_contributions(cursor: &TermCursor<'_>, avg_dl: f32) -> Vec<(DocId, f32)> {
+    let num_blocks = cursor.num_blocks;
+    let idf = cursor.idf;
+
+    let scan_range = |lo: usize, hi: usize, start: &BlockStart| -> Vec<(DocId, f32)> {
+        let mut wc = cursor.at_block(lo, hi, start);
+        let mut out = Vec::with_capacity((hi - lo) * BLOCK_SIZE);
+        let mut deltas = [0u32; BLOCK_SIZE];
+        while wc.has_block() {
+            wc.decode_current_block(&mut deltas);
+            let count = wc.block_count();
+            let decoded = wc.decoded.as_ref().unwrap();
+            for i in 0..count {
+                let doc_id = decoded.doc_ids[i];
+                let tf = decoded.tfs[i];
+                out.push((doc_id, idf * tf_component(tf as f32, avg_dl)));
+            }
+            wc.advance_block();
+        }
+        out
+    };
+
+    if num_blocks <= PARALLEL_BLOCK_THRESHOLD {
+        let start = BlockStart {
+            header_off: cursor.next_block_off,
+            prev_doc: 0,
+        };
+        return scan_range(0, num_blocks, &start);
+    }
+
+    let workers = rayon::current_num_threads()
+        .min(num_blocks / MIN_BLOCKS_PER_WORKER)
+        .max(1);
+    if workers <= 1 {
+        let start = BlockStart {
+            header_off: cursor.next_block_off,
+            prev_doc: 0,
+        };
+        return scan_range(0, num_blocks, &start);
+    }
+
+    let starts = cursor.block_starts();
+    let per_worker = num_blocks.div_ceil(workers);
+    let ranges: Vec<(usize, usize)> = (0..workers)
+        .map(|w| {
+            (
+                (w * per_worker).min(num_blocks),
+                ((w + 1) * per_worker).min(num_blocks),
+            )
+        })
+        .filter(|(lo, hi)| lo < hi)
+        .collect();
+
+    ranges
+        .par_iter()
+        .map(|&(lo, hi)| scan_range(lo, hi, &starts[lo]))
+        .reduce(Vec::new, |mut a, mut b| {
+            a.append(&mut b);
+            a
+        })
 }
 
 fn daat_maxscore<'a>(
@@ -582,22 +698,10 @@ fn daat_maxscore<'a>(
     avg_dl: f32,
 ) -> CandidateSet {
     let mut scores: HashMap<DocId, f32> = HashMap::with_capacity(1024);
-    let mut deltas = [0u32; BLOCK_SIZE];
-
-    for cursor in cursors.iter_mut() {
-        let idf = cursor.idf;
-        while cursor.has_block() {
-            cursor.decode_current_block(&mut deltas);
-            let count = cursor.block_count();
-            // Drop `cursor` borrow before mutating `scores`.
-            let decoded = cursor.decoded.as_ref().unwrap();
-            for i in 0..count {
-                let doc_id = decoded.doc_ids[i];
-                let tf = decoded.tfs[i];
-                let s = idf * tf_component(tf as f32, avg_dl);
-                *scores.entry(doc_id).or_default() += s;
-            }
-            cursor.advance_block();
+    for cursor in cursors.iter() {
+        let contributions = score_term_contributions(cursor, avg_dl);
+        for (doc_id, s) in contributions {
+            *scores.entry(doc_id).or_default() += s;
         }
     }
     scores_to_topk(scores, k)
@@ -619,6 +723,12 @@ struct DecodedBlock {
     doc_ids: [DocId; BLOCK_SIZE],
     tfs: [u32; BLOCK_SIZE],
     count: usize,
+}
+
+#[derive(Clone, Copy)]
+struct BlockStart {
+    header_off: usize,
+    prev_doc: DocId,
 }
 
 impl<'a> TermCursor<'a> {
@@ -655,6 +765,45 @@ impl<'a> TermCursor<'a> {
             prev_doc: 0,
             idf,
         })
+    }
+
+    fn block_starts(&self) -> Vec<BlockStart> {
+        let mut starts = Vec::with_capacity(self.num_blocks);
+        let mut off = self.next_block_off;  
+        let mut prev_doc: DocId = 0;
+        for _ in 0..self.num_blocks {
+            starts.push(BlockStart {
+                header_off: off,
+                prev_doc,
+            });
+            match read_block_header(self.bytes, off) {
+                Ok(h) => {
+                    prev_doc = h.block_last_docid;
+                    off = h.next_block_off;
+                }
+                Err(_) => break,
+            }
+        }
+        starts
+    }
+
+    fn at_block(&self, block_idx: usize, end_block: usize, start: &BlockStart) -> TermCursor<'a> {
+        let current_header = if block_idx < end_block {
+            read_block_header(self.bytes, start.header_off).ok()
+        } else {
+            None
+        };
+        TermCursor {
+            bytes: self.bytes,
+            total_docs: self.total_docs,
+            num_blocks: end_block,
+            block_idx,
+            next_block_off: start.header_off,
+            current_header,
+            decoded: None,
+            prev_doc: start.prev_doc,
+            idf: self.idf,
+        }
     }
 
     #[inline]
@@ -963,6 +1112,33 @@ mod tests {
             });
             assert_eq!(a, b, "mismatch on query {q}");
         }
+    }
+
+    #[test]
+    fn parallel_single_term_matches_sequential() {
+        let n: u64 = 270_000;
+        let mut docs = Vec::with_capacity(n as usize);
+        for i in 0..n {
+            docs.push((i, format!("common rare{} body{}", i % 100, i)));
+        }
+        let snap = Bm25Snapshot::from_documents(docs);
+        let bytes = encode_tbm3(&snap);
+        let view = Bm25Tbm3View::open(&bytes).unwrap();
+
+        let parallel = view.search("common", 10);
+        let brute = view.brute_search("common", 10);
+
+        let sort_key = |a: &(DocId, f32), b: &(DocId, f32)| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        };
+        let mut p: Vec<(DocId, f32)> =
+            parallel.ids.into_iter().zip(parallel.scores).collect();
+        let mut b: Vec<(DocId, f32)> = brute.ids.into_iter().zip(brute.scores).collect();
+        p.sort_by(sort_key);
+        b.sort_by(sort_key);
+        assert_eq!(p, b, "parallel single-term result must match brute force");
     }
 
     #[test]

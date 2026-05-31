@@ -51,19 +51,6 @@ impl<'a> Bm25RouteView<'a> {
             return Err("invalid TBRT magic".into());
         }
         let num_terms = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
-        let mut pos = 12usize;
-        for _ in 0..num_terms {
-            if pos + 2 > bytes.len() {
-                return Err("truncated route".into());
-            }
-            let tlen = u16::from_le_bytes(bytes[pos..pos + 2].try_into().unwrap()) as usize;
-            pos += 2 + tlen + 4;
-            if pos > bytes.len() {
-                return Err("truncated route segs".into());
-            }
-            let nseg = u32::from_le_bytes(bytes[pos - 4..pos].try_into().unwrap()) as usize;
-            pos += nseg * 4;
-        }
         Ok(Self {
             bytes,
             num_terms,
@@ -72,22 +59,36 @@ impl<'a> Bm25RouteView<'a> {
     }
 
     fn term_at(&self, index: u32) -> Result<(&str, Vec<u32>), String> {
+        let read_u16 = |b: &[u8], p: usize| -> Result<usize, String> {
+            b.get(p..p + 2)
+                .ok_or_else(|| "truncated route".to_string())
+                .map(|s| u16::from_le_bytes(s.try_into().unwrap()) as usize)
+        };
+        let read_u32 = |b: &[u8], p: usize| -> Result<usize, String> {
+            b.get(p..p + 4)
+                .ok_or_else(|| "truncated route".to_string())
+                .map(|s| u32::from_le_bytes(s.try_into().unwrap()) as usize)
+        };
         let mut pos = self.dict_start;
         for _ in 0..index {
-            let tlen = u16::from_le_bytes(self.bytes[pos..pos + 2].try_into().unwrap()) as usize;
+            let tlen = read_u16(self.bytes, pos)?;
             pos += 2 + tlen;
-            let nseg = u32::from_le_bytes(self.bytes[pos..pos + 4].try_into().unwrap()) as usize;
+            let nseg = read_u32(self.bytes, pos)?;
             pos += 4 + nseg * 4;
         }
-        let tlen = u16::from_le_bytes(self.bytes[pos..pos + 2].try_into().unwrap()) as usize;
+        let tlen = read_u16(self.bytes, pos)?;
         pos += 2;
-        let t = std::str::from_utf8(&self.bytes[pos..pos + tlen]).map_err(|e| e.to_string())?;
+        let t = self
+            .bytes
+            .get(pos..pos + tlen)
+            .ok_or_else(|| "truncated route term".to_string())
+            .and_then(|s| std::str::from_utf8(s).map_err(|e| e.to_string()))?;
         pos += tlen;
-        let nseg = u32::from_le_bytes(self.bytes[pos..pos + 4].try_into().unwrap()) as usize;
+        let nseg = read_u32(self.bytes, pos)?;
         pos += 4;
         let mut segs = Vec::with_capacity(nseg);
         for _ in 0..nseg {
-            segs.push(u32::from_le_bytes(self.bytes[pos..pos + 4].try_into().unwrap()));
+            segs.push(read_u32(self.bytes, pos)? as u32);
             pos += 4;
         }
         Ok((t, segs))
