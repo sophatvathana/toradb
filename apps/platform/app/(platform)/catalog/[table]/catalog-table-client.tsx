@@ -12,8 +12,22 @@ import { useToast } from "@/components/toast-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { runSql } from "@/lib/api";
 import { usePlatformStore } from "@/stores/platform-store";
+
+const COLUMN_TYPES = [
+  "text",
+  "int",
+  "float",
+  "bool",
+  "date",
+  "timestamp",
+  "json",
+  "uuid",
+  "vector",
+] as const;
 
 export function CatalogTableClient({ tableName }: { tableName: string }) {
   const { toast } = useToast();
@@ -35,6 +49,9 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
   const [compactFull, setCompactFull] = useState(false);
   const [tab, setTab] = useState("overview");
   const [sampleFilter, setSampleFilter] = useState("");
+  const [editColName, setEditColName] = useState("");
+  const [editColType, setEditColType] = useState<string>("int");
+  const [typeAlterLoading, setTypeAlterLoading] = useState(false);
 
   useEffect(() => {
     if (tableName) {
@@ -153,18 +170,81 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
               </CardContent>
             </Card>
           )}
-          {detail && detail.column_types.length > 0 && (
+          {detail && (
             <Card className="mt-3">
               <CardHeader>
-                <CardTitle className="text-base">Columns</CardTitle>
+                <CardTitle className="text-base">Column types</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-1 text-sm">
-                {detail.column_types.map((c) => (
-                  <p key={c.name} className="flex items-center gap-2">
-                    <span className="font-mono">{c.name}</span>
-                    <Badge variant="outline">{c.type}</Badge>
+              <CardContent className="space-y-3 text-sm">
+                {detail.column_types.length > 0 ? (
+                  <div className="space-y-1">
+                    {detail.column_types.map((c) => (
+                      <p key={c.name} className="flex items-center gap-2">
+                        <span className="font-mono">{c.name}</span>
+                        <Badge variant="outline">{c.type}</Badge>
+                      </p>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground">
+                    No typed columns declared. Metadata filters use legacy string heuristics.
                   </p>
-                ))}
+                )}
+                <div className="flex flex-wrap items-end gap-2 border-t pt-3">
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Column</label>
+                    <Input
+                      className="h-8 w-36 font-mono text-xs"
+                      placeholder="rank"
+                      value={editColName}
+                      onChange={(e) => setEditColName(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Type</label>
+                    <select
+                      className="h-8 rounded-md border bg-background px-2 text-xs"
+                      value={editColType}
+                      onChange={(e) => setEditColType(e.target.value)}
+                    >
+                      {COLUMN_TYPES.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={typeAlterLoading || !editColName.trim()}
+                    onClick={() => {
+                      const col = editColName.trim();
+                      const sql = `ALTER TABLE ${tableName} ALTER COLUMN ${col} TYPE ${editColType}`;
+                      setTypeAlterLoading(true);
+                      void runSql(sql)
+                        .then(async () => {
+                          toast({
+                            title: "Column type updated",
+                            description: `${col} → ${editColType}`,
+                          });
+                          await fetchTableDetailAction(tableName);
+                        })
+                        .catch((err) => {
+                          toast({
+                            title: "ALTER failed",
+                            description:
+                              err instanceof Error ? err.message : String(err),
+                            variant: "destructive",
+                          });
+                        })
+                        .finally(() => setTypeAlterLoading(false));
+                    }}
+                  >
+                    {typeAlterLoading ? "Applying…" : "Set type"}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           )}

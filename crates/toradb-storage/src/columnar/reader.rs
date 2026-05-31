@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow::array::{Array, BooleanArray, Float32Array, ListArray, StringArray, UInt64Array};
+use arrow::array::{Array, BooleanArray, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::{
     ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowFilter,
@@ -13,8 +13,9 @@ use parquet::arrow::arrow_reader::{
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::statistics::Statistics;
-use toradb_core::CompressionConfig;
+use toradb_core::{ColumnType, CompressionConfig};
 
+use super::metadata_codec::{batch_to_docs, batch_to_id_metadata};
 use super::writer::ColumnarDoc;
 
 pub fn read_segment(path: &Path) -> Result<Vec<ColumnarDoc>, String> {
@@ -58,17 +59,14 @@ fn read_segment_by_row_selection(
             .map_err(|e| e.to_string())?;
     let total_rows = builder.metadata().file_metadata().num_rows() as usize;
     let selection = row_selection_for_ids(ids, min_id, total_rows)?;
-    let schema = builder.parquet_schema();
-    let out_mask = ProjectionMask::leaves(schema, [0, 1, 2]);
     let mut reader = builder
         .with_row_selection(selection)
-        .with_projection(out_mask)
         .build()
         .map_err(|e| e.to_string())?;
     let mut out = Vec::with_capacity(ids.len());
     for batch in reader.by_ref() {
         let batch: RecordBatch = batch.map_err(|e| e.to_string())?;
-        out.extend(batch_to_docs(&batch)?);
+        out.extend(batch_to_docs(&batch, &[])?);
     }
     Ok(out)
 }
@@ -179,8 +177,7 @@ fn read_segment_by_id_filter(path: &Path, want: &HashSet<u64>) -> Result<Vec<Col
         }
     });
     let row_filter = RowFilter::new(vec![Box::new(id_predicate)]);
-    let out_mask = ProjectionMask::leaves(schema, [0, 1, 2]);
-    let mut builder = builder.with_row_filter(row_filter).with_projection(out_mask);
+    let mut builder = builder.with_row_filter(row_filter);
     if let Some(sel) = rg_selection {
         builder = builder.with_row_selection(sel);
     }
@@ -188,7 +185,7 @@ fn read_segment_by_id_filter(path: &Path, want: &HashSet<u64>) -> Result<Vec<Col
     let mut out = Vec::with_capacity(want.len());
     for batch in reader.by_ref() {
         let batch: RecordBatch = batch.map_err(|e| e.to_string())?;
-        out.extend(batch_to_docs(&batch)?);
+        out.extend(batch_to_docs(&batch, &[])?);
         if out.len() >= want.len() {
             break;
         }
@@ -261,21 +258,17 @@ pub fn read_segment_texts(path: &Path) -> Result<Vec<(u64, String)>, String> {
 
 pub fn scan_segment_id_metadata(
     path: &Path,
+    column_types: &[(String, ColumnType)],
     mut f: impl FnMut(u64, HashMap<String, String>) -> Result<(), String>,
 ) -> Result<(), String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
     let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
         .map_err(|e| e.to_string())?;
-    let schema = builder.parquet_schema();
-    let mask = ProjectionMask::leaves(schema, [0, 2]);
-    let mut reader = builder
-        .with_projection(mask)
-        .build()
-        .map_err(|e| e.to_string())?;
+    let mut reader = builder.build().map_err(|e| e.to_string())?;
     for batch in reader.by_ref() {
         let batch: RecordBatch = batch.map_err(|e| e.to_string())?;
-        for (id, metadata) in batch_to_id_metadata(&batch)? {
+        for (id, metadata) in batch_to_id_metadata(&batch, column_types)? {
             f(id, metadata)?;
         }
     }
@@ -293,7 +286,7 @@ pub fn read_segment_with_compression(
     let mut docs = Vec::new();
     for batch in reader.by_ref() {
         let batch: RecordBatch = batch.map_err(|e| e.to_string())?;
-        docs.extend(batch_to_docs(&batch)?);
+        docs.extend(batch_to_docs(&batch, &[])?);
     }
     Ok(docs)
 }
@@ -336,83 +329,6 @@ fn batch_to_text_rows(batch: &RecordBatch) -> Result<Vec<(u64, String)>, String>
         out.push((ids.value(row), texts.value(row).to_string()));
     }
     Ok(out)
-}
-
-fn batch_to_docs(batch: &RecordBatch) -> Result<Vec<ColumnarDoc>, String> {
-    let ids = batch
-        .column_by_name("id")
-        .ok_or("missing id column")?
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .ok_or("id type")?;
-    let texts = batch
-        .column_by_name("text")
-        .ok_or("missing text column")?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or("text type")?;
-    let meta = batch
-        .column_by_name("metadata_json")
-        .ok_or("missing metadata_json column")?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or("metadata_json type")?;
-    let emb_col = batch.column_by_name("embedding");
-
-    let mut out = Vec::with_capacity(batch.num_rows());
-    for row in 0..batch.num_rows() {
-        let metadata = if meta.is_null(row) {
-            std::collections::HashMap::new()
-        } else {
-            serde_json::from_str(meta.value(row)).map_err(|e| e.to_string())?
-        };
-        let embedding = emb_col.and_then(|c| {
-            c.as_any()
-                .downcast_ref::<ListArray>()
-                .and_then(|list| list_value(list, row))
-        });
-        out.push(ColumnarDoc {
-            id: ids.value(row),
-            text: texts.value(row).to_string(),
-            metadata,
-            embedding,
-        });
-    }
-    Ok(out)
-}
-
-fn batch_to_id_metadata(batch: &RecordBatch) -> Result<Vec<(u64, HashMap<String, String>)>, String> {
-    let ids = batch
-        .column_by_name("id")
-        .ok_or("missing id column")?
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .ok_or("id type")?;
-    let meta = batch
-        .column_by_name("metadata_json")
-        .ok_or("missing metadata_json column")?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or("metadata_json type")?;
-    let mut out = Vec::with_capacity(batch.num_rows());
-    for row in 0..batch.num_rows() {
-        let metadata = if meta.is_null(row) {
-            HashMap::new()
-        } else {
-            serde_json::from_str(meta.value(row)).map_err(|e| e.to_string())?
-        };
-        out.push((ids.value(row), metadata));
-    }
-    Ok(out)
-}
-
-fn list_value(list: &ListArray, row: usize) -> Option<Vec<f32>> {
-    if list.is_null(row) {
-        return None;
-    }
-    let values = list.value(row);
-    let floats = values.as_any().downcast_ref::<Float32Array>()?;
-    Some((0..floats.len()).map(|i| floats.value(i)).collect())
 }
 
 #[cfg(all(feature = "io-uring", target_os = "linux"))]

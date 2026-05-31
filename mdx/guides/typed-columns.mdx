@@ -1,0 +1,79 @@
+---
+title: "Typed metadata columns"
+description: "Declare column types for correct numeric and date filters in SQL"
+---
+
+ToraDB attaches a **type manifest** per table (`column_types` in `manifest.json`) so `WHERE`, `IN`, and `BETWEEN` compare values numerically or chronologically instead of lexically.
+
+When types are declared, new Parquet segments use a **hybrid native layout**: typed Arrow columns for declared fields plus `metadata_json` for any other keys.
+
+## Declare types at create time
+
+```sql
+CREATE TABLE articles (id uuid, title text, year int, published date) USING text
+```
+
+Python:
+
+```python
+db.sql(
+    "CREATE TABLE articles (year int, published date) USING text"
+)
+# or
+db.create_table(
+    "articles",
+    mode="text",
+    schema={"year": "int", "published": "date"},
+)
+```
+
+Supported type names: `text`, `int`, `float`, `bool`, `date`, `timestamp`, `json`, `uuid`, `vector` (with optional dimension, e.g. `vector[384]`).
+
+## Fix legacy tables
+
+```sql
+ALTER TABLE articles ALTER COLUMN year TYPE int
+```
+
+Types are persisted in the table `manifest.json` sidecar (`column_types`).
+
+## Filter behavior
+
+| Column type | Example | Behavior |
+|-------------|---------|----------|
+| `int` | `WHERE rank > 9` | `10` and `100` match; `9` does not |
+| `int` | `WHERE rank IN (9, 10)` | Typed equality, not string match |
+| `date` | `WHERE published >= '2024-01-01'` | Chronological compare |
+| untyped | `WHERE score > 10` | Legacy numeric heuristic on strings |
+
+Typed filters apply to:
+
+- Analytics `SELECT` with `GROUP BY` / aggregates
+- Retrieval `SELECT` with `SPARSE SEARCH` / `VECTOR SEARCH` and a `WHERE` clause (post-filter on candidates)
+
+## Introspection
+
+```sql
+DESCRIBE articles
+SHOW CREATE TABLE articles
+```
+
+Both include declared `column_types` when present.
+
+## On-disk layout (native hybrid)
+
+Segment columns (when `column_types` is non-empty, `schema_version` ≥ 4):
+
+| Column | Role |
+|--------|------|
+| `id`, `text`, `embedding` | Document identity and body (unchanged) |
+| Declared fields (e.g. `rank`, `published`) | Native Parquet types (`Int64`, `Date32`, …) |
+| `metadata_json` | Overflow metadata not listed in `CREATE TABLE` |
+
+Legacy segments (four columns only) remain readable. Migrate them with:
+
+```sql
+COMPACT TABLE articles FULL
+```
+
+After compact, declared fields are stored natively; filters and scans use the same SQL as before.

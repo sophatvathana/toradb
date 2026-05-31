@@ -15,7 +15,7 @@ fn compressed_parquet_roundtrip() {
         metadata: Default::default(),
         embedding: Some(vec![0.1, 0.2, 0.3]),
     }];
-    write_segment_with_compression(&path, &docs, Some(&cfg)).expect("write");
+    write_segment_with_compression(&path, &docs, Some(&cfg), &[]).expect("write");
     let out = read_segment(&path).expect("read");
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].text, "hello compressed");

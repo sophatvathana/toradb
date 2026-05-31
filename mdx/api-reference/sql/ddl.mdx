@@ -49,6 +49,16 @@ Merges small Parquet segments. `FULL` forces a more aggressive merge policy.
 ALTER TABLE articles SET SEGMENT_WORKERS = 4
 ```
 
+## ALTER column type
+
+Assign or change a metadata column type on an existing table:
+
+```sql
+ALTER TABLE articles ALTER COLUMN year TYPE int
+```
+
+See [Typed metadata columns](/guides/typed-columns) for supported types and filter behavior.
+
 ## SHOW TABLES
 
 ```sql

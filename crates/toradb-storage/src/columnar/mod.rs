@@ -1,6 +1,8 @@
 mod manifest;
+mod metadata_codec;
 mod reader;
 mod schema;
+mod typed_schema;
 mod writer;
 
 pub use manifest::{
@@ -13,4 +15,5 @@ pub use reader::{
     read_segment_texts, scan_segment_id_metadata,
 };
 pub use schema::doc_schema;
+pub use typed_schema::table_doc_schema;
 pub use writer::{write_segment, write_segment_from_batches, write_segment_with_compression, ColumnarDoc};

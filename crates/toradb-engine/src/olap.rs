@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use toradb_sql::ast::{AggFunc, CompareOp, SelectExpr, SelectStmt, WherePred};
 
 use crate::dag::DagRunner;
+use crate::metadata_filter::metadata_matches;
 use crate::sql_exec::run_search;
 
 #[derive(Debug, Clone)]
@@ -13,77 +14,8 @@ pub struct SqlAggregateResult {
     pub value_rows: Vec<Vec<f64>>,
 }
 
-use std::cmp::Ordering;
-
-use toradb_core::ColumnType;
-
 fn parse_numeric_metadata(value: &str) -> Option<f64> {
     value.trim().parse().ok()
-}
-
-fn untyped_cmp(a: &str, b: &str) -> Option<Ordering> {
-    let (x, y) = (parse_numeric_metadata(a)?, parse_numeric_metadata(b)?);
-    x.partial_cmp(&y)
-}
-
-fn ordered(col_types: &HashMap<String, ColumnType>, column: &str, stored: &str, literal: &str) -> Option<Ordering> {
-    match col_types.get(column) {
-        Some(ty) if *ty != ColumnType::Text => {
-            toradb_core::typed_cmp(*ty, stored, literal).or_else(|| untyped_cmp(stored, literal))
-        }
-        _ => untyped_cmp(stored, literal),
-    }
-}
-
-fn metadata_matches(
-    pred: &WherePred,
-    metadata: &HashMap<String, String>,
-    col_types: &HashMap<String, ColumnType>,
-) -> bool {
-    match pred {
-        WherePred::Compare { column, op, value } => {
-            let Some(v) = metadata.get(column) else {
-                return false;
-            };
-            match op {
-                CompareOp::Eq => match ordered(col_types, column, v, value) {
-                    Some(ord) => ord == Ordering::Equal,
-                    None => v == value,
-                },
-                CompareOp::Ne => match ordered(col_types, column, v, value) {
-                    Some(ord) => ord != Ordering::Equal,
-                    None => v != value,
-                },
-                CompareOp::Lt => matches!(ordered(col_types, column, v, value), Some(Ordering::Less)),
-                CompareOp::Lte => matches!(
-                    ordered(col_types, column, v, value),
-                    Some(Ordering::Less | Ordering::Equal)
-                ),
-                CompareOp::Gt => matches!(ordered(col_types, column, v, value), Some(Ordering::Greater)),
-                CompareOp::Gte => matches!(
-                    ordered(col_types, column, v, value),
-                    Some(Ordering::Greater | Ordering::Equal)
-                ),
-            }
-        }
-        WherePred::In { column, values } => metadata
-            .get(column)
-            .map(|v| values.iter().any(|x| x == v))
-            .unwrap_or(false),
-        WherePred::Between { column, low, high, negated } => {
-            let Some(v) = metadata.get(column) else {
-                return false;
-            };
-            let in_range = matches!(
-                ordered(col_types, column, v, low),
-                Some(Ordering::Greater | Ordering::Equal)
-            ) && matches!(
-                ordered(col_types, column, v, high),
-                Some(Ordering::Less | Ordering::Equal)
-            );
-            in_range ^ negated
-        }
-    }
 }
 
 fn value_column_name(func: &AggFunc, column: Option<&str>) -> String {

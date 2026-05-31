@@ -39,7 +39,8 @@
               "guides/provenance",
               "guides/sql",
               "guides/cli",
-              "guides/reindex-compact"
+              "guides/reindex-compact",
+              "guides/typed-columns"
             ]
           },
           {

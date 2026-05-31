@@ -155,8 +155,8 @@ fn compact_merge_produces_sorted_output() {
 
     let seg_a_name = "seg_00001.parquet";
     let seg_b_name = "seg_00002.parquet";
-    write_segment_with_compression(&seg_dir.join(seg_a_name), &seg_a, None).unwrap();
-    write_segment_with_compression(&seg_dir.join(seg_b_name), &seg_b, None).unwrap();
+    write_segment_with_compression(&seg_dir.join(seg_a_name), &seg_a, None, &[]).unwrap();
+    write_segment_with_compression(&seg_dir.join(seg_b_name), &seg_b, None, &[]).unwrap();
 
     let v2 = serde_json::json!({
         "schema_version": 2,
@@ -284,9 +284,9 @@ fn legacy_db_compacts_without_error() {
     let seg2 = "seg_00002.parquet";
     use toradb_storage::columnar::ColumnarDoc;
     let doc = ColumnarDoc { id: 1, text: "hello".into(), metadata: Default::default(), embedding: None };
-    toradb_storage::columnar::write_segment_with_compression(&seg_dir.join(seg1), &[doc.clone()], None).unwrap();
+    toradb_storage::columnar::write_segment_with_compression(&seg_dir.join(seg1), &[doc.clone()], None, &[]).unwrap();
     let doc2 = ColumnarDoc { id: 2, text: "world".into(), metadata: Default::default(), embedding: None };
-    toradb_storage::columnar::write_segment_with_compression(&seg_dir.join(seg2), &[doc2], None).unwrap();
+    toradb_storage::columnar::write_segment_with_compression(&seg_dir.join(seg2), &[doc2], None, &[]).unwrap();
 
     let v1_json = serde_json::json!({
         "schema_version": 1,
@@ -368,7 +368,7 @@ fn fetch_text_correct_with_noncontiguous_sorted_ids() {
     std::fs::create_dir_all(&seg_dir).unwrap();
     let seg_name = "seg_00001.parquet";
     let seg_path = seg_dir.join(seg_name);
-    write_segment_with_compression(&seg_path, &docs, None).unwrap();
+    write_segment_with_compression(&seg_path, &docs, None, &[]).unwrap();
 
     let actual_min = docs.iter().map(|d| d.id).min().unwrap();
     let actual_max = docs.iter().map(|d| d.id).max().unwrap();

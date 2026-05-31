@@ -13,6 +13,7 @@ pub mod persist;
 pub mod scheduler;
 pub mod join;
 pub mod materialized;
+pub mod metadata_filter;
 pub mod olap;
 pub mod sql_exec;
 pub mod table_search;

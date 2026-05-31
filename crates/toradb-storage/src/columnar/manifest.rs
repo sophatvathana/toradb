@@ -267,7 +267,7 @@ impl TableManifestFile {
                 .collect();
         }
         if !m.column_types.is_empty() {
-            m.schema_version = m.schema_version.max(3);
+            m.schema_version = m.schema_version.max(4);
         }
         let data = serde_json::to_string_pretty(&m).map_err(|e| e.to_string())?;
         let tmp = path.with_extension("json.tmp");

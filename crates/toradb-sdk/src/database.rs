@@ -149,24 +149,17 @@ impl Database {
                             ))
                         })?;
         
-                    let col_clause = self
+                    let cols = self
                         .dag
                         .db_path()
                         .map(|base| persist::table_column_types_ordered(base, &table))
-                        .filter(|v| !v.is_empty())
-                        .map(|cols| {
-                            let body = cols
-                                .iter()
-                                .map(|(n, ty)| format!("{n} {}", ty.as_str()))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            format!(" ({body})")
-                        })
                         .unwrap_or_default();
-                    let ddl = format!(
-                        "CREATE TABLE {}{} USING {:?}",
-                        manifest.name, col_clause, manifest.index_mode
-                    );
+                    let using = match manifest.index_mode {
+                        toradb_core::IndexMode::Text => "TEXT",
+                        toradb_core::IndexMode::Hybrid => "HYBRID",
+                        toradb_core::IndexMode::Vector => "VECTOR",
+                    };
+                    let ddl = persist::format_create_table_ddl(&manifest.name, &cols, using);
                     return Ok(SqlOutcome::Message(ddl));
                 }
                 Stmt::CreateMaterializedView(mv) => {
@@ -210,6 +203,25 @@ impl Database {
                     return Ok(SqlOutcome::Message(format!(
                         "ok: refreshed materialized view {} ({} rows)",
                         name, rows
+                    )));
+                }
+                Stmt::AlterTableAlterColumnType {
+                    table,
+                    column,
+                    column_type,
+                } => {
+                    let table = table.to_lowercase();
+                    let base = self.dag.db_path().ok_or_else(|| {
+                        pyo3::exceptions::PyValueError::new_err(
+                            "ALTER COLUMN TYPE requires a local on-disk database",
+                        )
+                    })?;
+                    let ty = toradb_core::ColumnType::parse(column_type);
+                    persist::alter_table_column_type(base, &table, column, ty)
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                    return Ok(SqlOutcome::Message(format!(
+                        "ok: set column {column} type {} on {table}",
+                        ty.as_str()
                     )));
                 }
                 Stmt::AlterTableSetSegmentWorkers { table, workers } => {
@@ -278,36 +290,29 @@ impl Database {
                         }
                     }
                     let row_count = self.dag.table_row_count(&table).unwrap_or(0);
-                    let vector_dim = self
-                        .dag
-                        .vector_dim(&table)
-                        .map(|d| d.to_string())
-                        .unwrap_or_else(|| "none".to_string());
-                    let segments = self
-                        .dag
-                        .db_path()
-                        .and_then(|p| persist::table_segment_count(p, &table).ok())
-                        .map(|n| n.to_string())
-                        .unwrap_or_else(|| "n/a".to_string());
-                    let segment_workers = self
-                        .dag
-                        .db_path()
-                        .and_then(|p| persist::table_segment_workers(p, &table).ok())
-                        .map(|n| n.to_string())
-                        .unwrap_or_else(|| "n/a".to_string());
+                    let vector_dim = self.dag.vector_dim(&table);
+                    let base = self.dag.db_path();
+                    let segments = base
+                        .and_then(|p| persist::table_segment_count(p, &table).ok());
+                    let segment_workers = base
+                        .and_then(|p| persist::table_segment_workers(p, &table).ok());
                     let indexes = self
                         .dag
                         .table_index_sidecars(&table)
-                        .unwrap_or_default()
-                        .join(", ");
-                    let indexes_line = if indexes.is_empty() {
-                        "none".to_string()
-                    } else {
-                        indexes
-                    };
-                    return Ok(SqlOutcome::Message(format!(
-                        "table: {table}\nrows: {row_count}\nvector_dim: {vector_dim}\nsegments: {segments}\nsegment_workers: {segment_workers}\nindexes: {indexes_line}"
-                    )));
+                        .unwrap_or_default();
+                    let column_types = base
+                        .map(|p| persist::table_column_types_ordered(p, &table))
+                        .unwrap_or_default();
+                    let text = persist::format_describe_table(
+                        &table,
+                        row_count,
+                        vector_dim,
+                        segments,
+                        segment_workers,
+                        &indexes,
+                        &column_types,
+                    );
+                    return Ok(SqlOutcome::Message(text));
                 }
                 Stmt::Select(sel) => {
                     if sel.explain && sel.stream {

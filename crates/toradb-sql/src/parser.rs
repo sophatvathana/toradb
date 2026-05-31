@@ -72,6 +72,29 @@ fn parse_column_defs(tokens: &[Token], i: &mut usize) -> Result<Vec<(String, Str
     Ok(columns)
 }
 
+fn parse_type_at(tokens: &[Token], i: &mut usize) -> Result<String, String> {
+    let mut ty = ident_at(tokens, *i).ok_or("expected column type")?;
+    *i += 1;
+    if matches!(tokens.get(*i), Some(Token::LParen)) {
+        ty.push('(');
+        *i += 1;
+        while !matches!(tokens.get(*i), Some(Token::RParen) | None) {
+            match tokens.get(*i) {
+                Some(Token::Number(n)) => ty.push_str(&n.to_string()),
+                Some(Token::Comma) => ty.push(','),
+                Some(Token::Ident(s)) => ty.push_str(s),
+                _ => {}
+            }
+            *i += 1;
+        }
+        if matches!(tokens.get(*i), Some(Token::RParen)) {
+            ty.push(')');
+            *i += 1;
+        }
+    }
+    Ok(ty.to_ascii_lowercase())
+}
+
 fn parse_aggregate(tokens: &[Token], i: &mut usize) -> Result<SelectExpr, String> {
     let func = match ident_at(tokens, *i).as_deref() {
         Some("COUNT") => AggFunc::CountStar,
@@ -734,6 +757,22 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 .ok_or("table name after ALTER TABLE")?
                 .to_lowercase();
             i += 1;
+            if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "ALTER") {
+                i += 1;
+                expect_ident(&tokens, &mut i, "COLUMN")?;
+                let column = ident_at(&tokens, i)
+                    .ok_or("column name after ALTER COLUMN")?
+                    .to_lowercase();
+                i += 1;
+                expect_ident(&tokens, &mut i, "TYPE")?;
+                let column_type = parse_type_at(&tokens, &mut i)?;
+                out.push(Stmt::AlterTableAlterColumnType {
+                    table,
+                    column,
+                    column_type,
+                });
+                continue;
+            }
             expect_ident(&tokens, &mut i, "SET")?;
             expect_ident(&tokens, &mut i, "SEGMENT_WORKERS")?;
             if !matches!(tokens.get(i), Some(Token::Eq)) {

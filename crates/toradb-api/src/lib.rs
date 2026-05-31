@@ -1211,13 +1211,62 @@ fn execute_sql(
         }
         Stmt::ShowCreateTable { table } => {
             let table = table.to_lowercase();
-            let mut binder = load_binder(&state.db_path);
-            let ddl = if let Some(manifest) = binder.catalog.get(&table) {
-                format!("CREATE TABLE {} USING {:?}", manifest.name, manifest.index_mode)
-            } else {
-                format!("CREATE TABLE {table} USING HYBRID")
-            };
+            let binder = load_binder(&state.db_path);
+            let cols = persist::table_column_types_ordered(&state.db_path, &table);
+            let using = binder
+                .catalog
+                .get(&table)
+                .map(|m| match m.index_mode {
+                    toradb_core::IndexMode::Text => "TEXT",
+                    toradb_core::IndexMode::Hybrid => "HYBRID",
+                    toradb_core::IndexMode::Vector => "VECTOR",
+                })
+                .unwrap_or("HYBRID");
+            let name = binder
+                .catalog
+                .get(&table)
+                .map(|m| m.name.as_str())
+                .unwrap_or(table.as_str());
+            let ddl = persist::format_create_table_ddl(name, &cols, using);
             message_response("show_create", &ddl, started)
+        }
+        Stmt::AlterTableAlterColumnType {
+            table,
+            column,
+            column_type,
+        } => {
+            let table = table.to_lowercase();
+            let ty = toradb_core::ColumnType::parse(column_type);
+            persist::alter_table_column_type(&state.db_path, &table, column, ty)
+                .map_err(|e| {
+                    if record_history {
+                        record_error_history(state, query, started);
+                    }
+                    ApiError::bad_request(e)
+                })?;
+            message_response(
+                "ddl",
+                &format!(
+                    "ok: set column {column} type {} on {table}",
+                    ty.as_str()
+                ),
+                started,
+            )
+        }
+        Stmt::AlterTableSetSegmentWorkers { table, workers } => {
+            let table = table.to_lowercase();
+            dag.set_segment_workers(&table, *workers)
+                .map_err(|e| {
+                    if record_history {
+                        record_error_history(state, query, started);
+                    }
+                    ApiError::bad_request(e)
+                })?;
+            message_response(
+                "ddl",
+                &format!("ok: set segment_workers={workers} on {table}"),
+                started,
+            )
         }
         Stmt::CreateMaterializedView(mv) => {
             let rows = materialized::create_materialized_view(
@@ -1285,11 +1334,22 @@ fn execute_sql(
                 format!("materialized_view: {table}\nrows: {rows}")
             } else {
                 let row_count = dag.table_row_count(&table).unwrap_or(0);
-                let vector_dim = dag
-                    .vector_dim(&table)
-                    .map(|d| d.to_string())
-                    .unwrap_or_else(|| "none".to_string());
-                format!("table: {table}\nrows: {row_count}\nvector_dim: {vector_dim}")
+                let vector_dim = dag.vector_dim(&table);
+                let segments = persist::table_segment_count(&state.db_path, &table).ok();
+                let segment_workers =
+                    persist::table_segment_workers(&state.db_path, &table).ok();
+                let indexes = dag.table_index_sidecars(&table).unwrap_or_default();
+                let column_types =
+                    persist::table_column_types_ordered(&state.db_path, &table);
+                persist::format_describe_table(
+                    &table,
+                    row_count,
+                    vector_dim,
+                    segments,
+                    segment_workers,
+                    &indexes,
+                    &column_types,
+                )
             };
             message_response("describe", &text, started)
         }

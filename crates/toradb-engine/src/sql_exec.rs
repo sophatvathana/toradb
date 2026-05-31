@@ -7,6 +7,7 @@ use toradb_sql::ast::{SelectExpr, SelectStmt};
 use crate::dag::DagRunner;
 use crate::join::apply_metadata_join;
 use crate::materialized;
+use crate::metadata_filter::filter_candidates_by_where;
 use crate::olap::{run_aggregate, SqlAggregateResult};
 use crate::persist;
 use crate::table_search::{run_table_search, TableSearchOptions};
@@ -415,6 +416,9 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
     );
     let metrics = dag.run(&mut batch, &ctx);
     let mut candidates = batch.candidates;
+    if let Some(ref pred) = sel.where_clause {
+        filter_candidates_by_where(dag, &sel.table, pred, &mut candidates)?;
+    }
     if let Some(ref join) = sel.join {
         apply_metadata_join(dag, &sel.table, join, &mut candidates)?;
     }

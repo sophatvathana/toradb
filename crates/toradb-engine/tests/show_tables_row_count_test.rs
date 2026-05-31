@@ -25,7 +25,7 @@ fn table_row_count_from_segment_id_ranges_without_parquet_scan() {
         })
         .collect();
     let seg_name = "seg_00001.parquet";
-    write_segment_with_compression(&seg_dir.join(seg_name), &docs, None).unwrap();
+    write_segment_with_compression(&seg_dir.join(seg_name), &docs, None, &[]).unwrap();
 
     let mut manifest = TableManifestFile::default();
     manifest.segments.push(seg_name.to_string());
@@ -58,7 +58,7 @@ fn table_row_count_prefers_in_memory_corpus() {
         metadata: Default::default(),
         embedding: None,
     }];
-    write_segment_with_compression(&seg_dir.join("seg_00001.parquet"), &docs, None).unwrap();
+    write_segment_with_compression(&seg_dir.join("seg_00001.parquet"), &docs, None, &[]).unwrap();
     let mut manifest = TableManifestFile::default();
     manifest.segments.push("seg_00001.parquet".into());
     manifest.record_segment_id_range("seg_00001.parquet", 1, 1);

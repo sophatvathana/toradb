@@ -21,7 +21,7 @@ Typical output includes:
 
 | Component | Purpose |
 |-----------|---------|
-| Parquet segments | Columnar document storage per flush |
+| Parquet segments | Columnar document storage per flush (`id`, `text`, optional typed metadata columns, `metadata_json`, `embedding`) |
 | WAL | Replay safety for recent writes |
 | `bm25` sidecar | Sparse lexical index (`TBM3` mmap-friendly `*.bm25.bin`) |
 | `{seg}.bm25.lex.bin` | Per-segment term lexicon for query pruning |
@@ -35,7 +35,7 @@ Typical output includes:
 1. **Ingest** — documents append to the active segment; indexes update incrementally where supported.
 2. **Flush** — segments are written as Parquet under the table directory.
 3. **Reindex** — rebuild a specific index type (`BM25`, `HNSW`, `DISKANN`) after bulk loads or schema changes.
-4. **Compact** — merge small segments to reduce file count (`COMPACT TABLE`; see [Reindex and compact](/guides/reindex-compact)).
+4. **Compact** — merge small segments to reduce file count (`COMPACT TABLE`; see [Reindex and compact](/guides/reindex-compact)). `COMPACT TABLE … FULL` also migrates legacy JSON-only segments to [native typed metadata columns](/guides/typed-columns).
 
 ## Segment-only bulk ingest
 

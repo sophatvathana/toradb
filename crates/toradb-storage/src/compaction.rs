@@ -1,4 +1,3 @@
-use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,10 +9,7 @@ use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 
-use crate::columnar::{
-    iter_segment_batches, write_segment_from_batches, SegmentMeta, TableManifestFile,
-    TIER_BYTE_BOUNDS,
-};
+use crate::columnar::{iter_segment_batches, SegmentMeta, TableManifestFile};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompactMode {
@@ -496,6 +492,7 @@ fn merge_segments_streaming(
     out_path: &Path,
     compression: Option<&toradb_core::CompressionConfig>,
     batch_size: usize,
+    canonical_schema: &Arc<Schema>,
 ) -> Result<(u64, u64, u64), String> {
     if seg_paths.is_empty() {
         return Err("merge_segments_streaming: no source segments".into());
@@ -509,8 +506,7 @@ fn merge_segments_streaming(
     if let Some(parent) = out_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    use crate::columnar::doc_schema;
-    let schema = doc_schema();
+    let schema = Arc::clone(canonical_schema);
     let file = std::fs::File::create(out_path).map_err(|e| e.to_string())?;
     let mut props_builder = WriterProperties::builder();
     if let Some(cfg) = compression {
@@ -671,11 +667,13 @@ pub fn compact_table_segments(
         let new_name = next_segment_name(&manifest);
         let new_path = seg_dir.join(&new_name);
 
+        let canonical = crate::columnar::table_doc_schema(&manifest.column_types);
         let (min_id, max_id, row_count) = merge_segments_streaming(
             &seg_paths,
             &new_path,
             manifest.compression.as_ref(),
             policy.merge_batch_size,
+            &canonical,
         )?;
 
         let byte_size = new_path.metadata().map(|m| m.len()).unwrap_or(0);
@@ -752,6 +750,7 @@ mod tests {
                     embedding: None,
                 }],
                 None,
+                &[],
             )
             .unwrap();
         }
@@ -915,13 +914,14 @@ mod tests {
                 id += 1;
                 d
             }).collect();
-            write_segment_with_compression(&seg_dir.join(name), &docs, None).unwrap();
+            write_segment_with_compression(&seg_dir.join(name), &docs, None, &[]).unwrap();
         }
 
         let paths: Vec<PathBuf> = names.iter().map(|n| seg_dir.join(n)).collect();
         let out = seg_dir.join("merged.parquet");
+        let schema = crate::columnar::table_doc_schema(&[]);
         let (min_id, max_id, row_count) =
-            merge_segments_streaming(&paths, &out, None, 4096).unwrap();
+            merge_segments_streaming(&paths, &out, None, 4096, &schema).unwrap();
 
         assert_eq!(min_id, 0);
         assert_eq!(max_id, 14);

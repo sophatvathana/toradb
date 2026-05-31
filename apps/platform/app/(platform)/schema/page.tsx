@@ -25,6 +25,8 @@ const COLUMN_TYPES = [
   "date",
   "timestamp",
   "json",
+  "uuid",
+  "vector",
 ] as const;
 
 type ColumnRow = { name: string; type: string };

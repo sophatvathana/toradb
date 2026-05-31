@@ -158,6 +158,83 @@ pub fn set_table_column_types(
     manifest.save(&manifest_path)
 }
 
+pub fn alter_table_column_type(
+    base: &Path,
+    table: &str,
+    column: &str,
+    ty: toradb_core::ColumnType,
+) -> Result<(), String> {
+    ensure_table_on_disk(base, table)?;
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    let mut manifest = TableManifestFile::load(&manifest_path)?;
+    let col = column.to_ascii_lowercase();
+    let mut types = std::mem::take(&mut manifest.column_types);
+    if let Some(entry) = types.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(&col)) {
+        entry.1 = ty;
+    } else {
+        types.push((col, ty));
+    }
+    manifest.set_column_types(types);
+    manifest.save(&manifest_path)
+}
+
+pub fn format_create_table_ddl(
+    table: &str,
+    columns: &[(String, toradb_core::ColumnType)],
+    using: &str,
+) -> String {
+    if columns.is_empty() {
+        format!("CREATE TABLE {table} USING {using}")
+    } else {
+        let cols = columns
+            .iter()
+            .map(|(n, t)| format!("{} {}", n, t.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("CREATE TABLE {table} ({cols}) USING {using}")
+    }
+}
+
+pub fn format_describe_table(
+    table: &str,
+    row_count: usize,
+    vector_dim: Option<usize>,
+    segments: Option<u32>,
+    segment_workers: Option<u32>,
+    indexes: &[String],
+    column_types: &[(String, toradb_core::ColumnType)],
+) -> String {
+    let mut lines = vec![
+        format!("table: {table}"),
+        format!("rows: {row_count}"),
+        format!(
+            "vector_dim: {}",
+            vector_dim
+                .map(|d| d.to_string())
+                .unwrap_or_else(|| "none".into())
+        ),
+    ];
+    if let Some(n) = segments {
+        lines.push(format!("segments: {n}"));
+    }
+    if let Some(w) = segment_workers {
+        lines.push(format!("segment_workers: {w}"));
+    }
+    let indexes_line = if indexes.is_empty() {
+        "none".to_string()
+    } else {
+        indexes.join(", ")
+    };
+    lines.push(format!("indexes: {indexes_line}"));
+    if !column_types.is_empty() {
+        lines.push("column_types:".into());
+        for (name, ty) in column_types {
+            lines.push(format!("  {name} {}", ty.as_str()));
+        }
+    }
+    lines.join("\n")
+}
+
 pub fn table_column_types_ordered(
     base: &Path,
     table: &str,
@@ -1037,7 +1114,9 @@ pub fn scan_table_id_metadata(
         if !path.exists() {
             continue;
         }
-        scan_segment_id_metadata(&path, |id, metadata| f(id, &metadata))?;
+        scan_segment_id_metadata(&path, &manifest.column_types, |id, metadata| {
+            f(id, &metadata)
+        })?;
     }
     Ok(())
 }
@@ -1516,7 +1595,12 @@ pub fn flush_batch_with_opts(
     };
     let seg_name = format!("seg_{:05}.parquet", manifest.segments.len() + 1);
     let seg_path = TableManifestFile::segments_dir(base, table).join(&seg_name);
-    write_segment_with_compression(&seg_path, docs, manifest.compression.as_ref())?;
+    write_segment_with_compression(
+        &seg_path,
+        docs,
+        manifest.compression.as_ref(),
+        &manifest.column_types,
+    )?;
     if !opts.defer_bm25 {
         let seg_snap = snapshot_for_columnar_docs(docs);
         save_segment_bm25_sidecar(base, table, &seg_name, &seg_snap)?;

@@ -6,6 +6,11 @@ pub enum Stmt {
     RefreshMaterializedView { name: String },
     DropMaterializedView { name: String },
     AlterTableSetSegmentWorkers { table: String, workers: u32 },
+    AlterTableAlterColumnType {
+        table: String,
+        column: String,
+        column_type: String,
+    },
     CompactTable { table: String, full: bool },
     DropTable { name: String },
     ShowTables,
