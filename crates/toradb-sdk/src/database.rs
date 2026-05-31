@@ -101,6 +101,8 @@ impl Database {
                         t.name.to_lowercase()
                     };
                     self.ensure_table(&table);
+                    persist::ensure_table_on_disk(Path::new(&self.path), &table)
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
                     let column_types: Vec<(String, toradb_core::ColumnType)> = t
                         .columns
                         .iter()

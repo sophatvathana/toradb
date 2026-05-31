@@ -16,6 +16,31 @@ fn catalog_json_persists_create_table() {
 }
 
 #[test]
+fn create_table_ensure_on_disk_lists_in_catalog() {
+    let dir = std::env::temp_dir().join(format!(
+        "toradb_create_table_disk_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    toradb_engine::persist::ensure_table_on_disk(&dir, "passages").expect("ensure");
+    let tables = toradb_engine::persist::list_tables(&dir).expect("list");
+    assert!(tables.iter().any(|t| t == "passages"));
+
+    let types = vec![
+        ("id".to_string(), toradb_core::ColumnType::Int),
+        ("body".to_string(), toradb_core::ColumnType::Text),
+    ];
+    toradb_engine::persist::set_table_column_types(&dir, "passages", &types).expect("types");
+    let ordered = toradb_engine::persist::table_column_types_ordered(&dir, "passages");
+    assert_eq!(ordered.len(), 2);
+    assert_eq!(ordered[0].0, "id");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn show_indexes_and_create_table_sql() {
     let dir = std::env::temp_dir().join("toradb_show_indexes");
     let _ = std::fs::remove_dir_all(&dir);

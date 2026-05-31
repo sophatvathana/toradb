@@ -134,6 +134,15 @@ pub fn table_query_mode(base: &Path, table: &str) -> Result<QueryMode, String> {
     Ok(TableManifestFile::load(&path)?.query_mode)
 }
 
+
+pub fn ensure_table_on_disk(base: &Path, table: &str) -> Result<(), String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if manifest_path.exists() {
+        return Ok(());
+    }
+    TableManifestFile::default().save(&manifest_path)
+}
+
 pub fn set_table_column_types(
     base: &Path,
     table: &str,
@@ -142,12 +151,9 @@ pub fn set_table_column_types(
     if types.is_empty() {
         return Ok(());
     }
+    ensure_table_on_disk(base, table)?;
     let manifest_path = TableManifestFile::path_for_table(base, table);
-    let mut manifest = if manifest_path.exists() {
-        TableManifestFile::load(&manifest_path)?
-    } else {
-        TableManifestFile::default()
-    };
+    let mut manifest = TableManifestFile::load(&manifest_path)?;
     manifest.set_column_types(types.to_vec());
     manifest.save(&manifest_path)
 }

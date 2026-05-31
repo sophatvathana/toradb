@@ -1146,6 +1146,24 @@ fn execute_sql(
             })?;
             let table = qualified_table_name(t);
             dag.ensure_table(&table);
+            persist::ensure_table_on_disk(&state.db_path, &table).map_err(|e| {
+                if record_history {
+                    record_error_history(state, query, started);
+                }
+                ApiError::bad_request(e)
+            })?;
+            let column_types: Vec<(String, toradb_core::ColumnType)> = t
+                .columns
+                .iter()
+                .map(|(name, ty)| (name.clone(), toradb_core::ColumnType::parse(ty)))
+                .collect();
+            if !column_types.is_empty() {
+                let _ = persist::set_table_column_types(
+                    &state.db_path,
+                    &table,
+                    &column_types,
+                );
+            }
             let _ = catalog_store::save_catalog(&state.db_path, &binder.catalog);
             message_response("ddl", &format!("ok: created table {table}"), started)
         }
