@@ -36,6 +36,7 @@
               "guides/python",
               "guides/ingest",
               "guides/search",
+              "guides/provenance",
               "guides/sql",
               "guides/cli",
               "guides/reindex-compact"

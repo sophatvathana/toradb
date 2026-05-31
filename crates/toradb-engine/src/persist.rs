@@ -1504,21 +1504,17 @@ pub fn finalize_bulk_wal(base: &Path, table: &str) -> Result<(), String> {
 }
 
 fn remove_segment_sidecars(base: &Path, table: &str, segment_parquet: &str) -> Result<(), String> {
-    let bm25 = segment_bm25_bin_path(base, table, segment_parquet);
-    if bm25.exists() {
-        std::fs::remove_file(&bm25).map_err(|e| e.to_string())?;
-    }
-    let vec = segment_vectors_bin_path(base, table, segment_parquet);
-    if vec.exists() {
-        std::fs::remove_file(&vec).map_err(|e| e.to_string())?;
-    }
-    let quant = segment_quant_bin_path(base, table, segment_parquet);
-    if quant.exists() {
-        std::fs::remove_file(&quant).map_err(|e| e.to_string())?;
-    }
-    let tq = segment_turboquant_bin_path(base, table, segment_parquet);
-    if tq.exists() {
-        std::fs::remove_file(&tq).map_err(|e| e.to_string())?;
+    let paths = [
+        segment_bm25_bin_path(base, table, segment_parquet),
+        segment_bm25_lex_path(base, table, segment_parquet),
+        segment_vectors_bin_path(base, table, segment_parquet),
+        segment_quant_bin_path(base, table, segment_parquet),
+        segment_turboquant_bin_path(base, table, segment_parquet),
+    ];
+    for p in &paths {
+        if p.exists() {
+            std::fs::remove_file(p).map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
 }
@@ -1623,6 +1619,7 @@ pub fn compact_table(
     let manifest = TableManifestFile::load(&TableManifestFile::path_for_table(base, table))?;
     wal::checkpoint_after_manifest(base, table, &manifest.segments, &seg_dir)?;
     wal::truncate_compactions(base, table)?;
+    rebuild_segment_id_ranges(base, table)?;
     Ok(report)
 }
 
@@ -2063,4 +2060,39 @@ impl DbPath {
     pub fn as_path(&self) -> &Path {
         &self.0
     }
+}
+
+fn search_log_path(base: &Path, table: &str) -> PathBuf {
+    base.join(table).join("_search_log.ndjson")
+}
+
+pub fn append_search_log(base: &Path, table: &str, record: &toradb_core::ProvenanceRecord) {
+    let path = search_log_path(base, table);
+    if let Ok(line) = serde_json::to_string(record) {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
+pub fn read_search_log(
+    base: &Path,
+    table: &str,
+    limit: usize,
+) -> Result<Vec<toradb_core::ProvenanceRecord>, String> {
+    let path = search_log_path(base, table);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut records: Vec<toradb_core::ProvenanceRecord> = content
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    if records.len() > limit {
+        let start = records.len() - limit;
+        records = records[start..].to_vec();
+    }
+    Ok(records)
 }

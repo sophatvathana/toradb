@@ -12,6 +12,7 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::PageIndexPolicy;
+use parquet::file::statistics::Statistics;
 use toradb_core::CompressionConfig;
 
 use super::writer::ColumnarDoc;
@@ -34,7 +35,10 @@ pub fn read_segment_matching_ids(
         if want.iter().all(|id| (min_id..=max_id).contains(id)) {
             let ids: Vec<u64> = want.iter().copied().collect();
             if let Ok(docs) = read_segment_by_row_selection(path, &ids, min_id) {
-                return Ok(docs);
+                let returned: HashSet<u64> = docs.iter().map(|d| d.id).collect();
+                if ids.len() == docs.len() && ids.iter().all(|id| returned.contains(id)) {
+                    return Ok(docs);
+                }
             }
         }
     }
@@ -101,13 +105,60 @@ fn row_selection_for_ids(
     Ok(RowSelection::from_consecutive_ranges(ranges.into_iter(), total_rows))
 }
 
-/// Fallback: id predicate + column projection (skips embedding column).
+fn rg_id_min_max(stats: &Statistics) -> Option<(u64, u64)> {
+    let min_bytes = stats.min_bytes_opt()?;
+    let max_bytes = stats.max_bytes_opt()?;
+    if min_bytes.len() < 8 || max_bytes.len() < 8 {
+        return None;
+    }
+    let min = u64::from_le_bytes(min_bytes[..8].try_into().ok()?);
+    let max = u64::from_le_bytes(max_bytes[..8].try_into().ok()?);
+    Some((min, max))
+}
+
+fn row_selection_from_rg_stats(
+    builder: &ParquetRecordBatchReaderBuilder<File>,
+    want_min: u64,
+    want_max: u64,
+) -> Option<RowSelection> {
+    let row_groups = builder.metadata().row_groups();
+    if row_groups.is_empty() {
+        return None;
+    }
+    let mut ranges: Vec<parquet::arrow::arrow_reader::RowSelector> = Vec::new();
+    let mut any_skipped = false;
+    for rg in row_groups {
+        let n = rg.num_rows() as usize;
+        let keep = rg
+            .column(0) // id is always column 0
+            .statistics()
+            .and_then(|s| rg_id_min_max(s))
+            .map(|(rg_min, rg_max)| rg_max >= want_min && rg_min <= want_max)
+            .unwrap_or(true); // no stats → keep (safe default)
+        if keep {
+            ranges.push(parquet::arrow::arrow_reader::RowSelector::select(n));
+        } else {
+            ranges.push(parquet::arrow::arrow_reader::RowSelector::skip(n));
+            any_skipped = true;
+        }
+    }
+    if !any_skipped {
+        return None;
+    }
+    Some(RowSelection::from(ranges))
+}
+
 fn read_segment_by_id_filter(path: &Path, want: &HashSet<u64>) -> Result<Vec<ColumnarDoc>, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
     let builder =
         ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
             .map_err(|e| e.to_string())?;
+
+    let want_min = want.iter().copied().min().unwrap_or(0);
+    let want_max = want.iter().copied().max().unwrap_or(u64::MAX);
+    let rg_selection = row_selection_from_rg_stats(&builder, want_min, want_max);
+
     let schema = builder.parquet_schema();
     let want = Arc::new(want.clone());
     let id_mask = ProjectionMask::leaves(schema, [0]);
@@ -129,11 +180,11 @@ fn read_segment_by_id_filter(path: &Path, want: &HashSet<u64>) -> Result<Vec<Col
     });
     let row_filter = RowFilter::new(vec![Box::new(id_predicate)]);
     let out_mask = ProjectionMask::leaves(schema, [0, 1, 2]);
-    let mut reader = builder
-        .with_row_filter(row_filter)
-        .with_projection(out_mask)
-        .build()
-        .map_err(|e| e.to_string())?;
+    let mut builder = builder.with_row_filter(row_filter).with_projection(out_mask);
+    if let Some(sel) = rg_selection {
+        builder = builder.with_row_selection(sel);
+    }
+    let mut reader = builder.build().map_err(|e| e.to_string())?;
     let mut out = Vec::with_capacity(want.len());
     for batch in reader.by_ref() {
         let batch: RecordBatch = batch.map_err(|e| e.to_string())?;

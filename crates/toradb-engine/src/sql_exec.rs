@@ -9,6 +9,7 @@ use crate::join::apply_metadata_join;
 use crate::materialized;
 use crate::olap::{run_aggregate, SqlAggregateResult};
 use crate::persist;
+use crate::table_search::{run_table_search, TableSearchOptions};
 
 fn expand_cte_select(sel: &SelectStmt) -> Result<SelectStmt, String> {
     if sel.ctes.is_empty() {
@@ -161,6 +162,46 @@ pub fn run_select(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSelectResu
     if sel.explain {
         if sel.stream {
             return Err("EXPLAIN does not support STREAM".into());
+        }
+        if has_sparse(&sel) || has_vector(&sel) {
+            let query = sel
+                .sparse_query
+                .clone()
+                .or_else(|| sel.vector_text.clone())
+                .unwrap_or_default();
+            let strategy = sel.sparse.clone().or_else(|| {
+                if sel.vector && !has_sparse(&sel) {
+                    Some("dense".into())
+                } else if has_sparse(&sel) && sel.vector {
+                    Some("hybrid".into())
+                } else {
+                    None
+                }
+            });
+            let opts = TableSearchOptions {
+                table: sel.table.clone(),
+                query,
+                top_k: Some(sel.limit.max(1)),
+                offset: Some(sel.offset),
+                strategy,
+                explain: true,
+                graph_expand: Some(sel.graph_expand),
+                depth: Some(sel.graph_depth),
+                query_vector: sel.vector_query.clone(),
+            };
+            let result = run_table_search(dag, opts)?;
+            let provenance_text = result
+                .provenance
+                .as_ref()
+                .and_then(|p| serde_json::to_string_pretty(p).ok())
+                .or(result.explain_text);
+            return Ok(SqlSelectResult::Search(SqlSearchResult {
+                ids: result.ids,
+                scores: result.scores,
+                projected: Vec::new(),
+                metrics: result.metrics,
+                explain_text: provenance_text,
+            }));
         }
         let text = explain_plan(dag, &sel)?;
         return Ok(SqlSelectResult::Search(SqlSearchResult {

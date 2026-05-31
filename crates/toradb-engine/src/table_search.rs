@@ -1,4 +1,5 @@
-use toradb_core::{Batch, ExecCtx, QueryMetrics};
+use toradb_core::{Batch, ExecCtx, ProvenanceCollector, ProvenanceRecord, QueryMetrics};
+use toradb_core::provenance::DropStage;
 use toradb_index::dense::query_embed::lexical_proxy_vector;
 use toradb_storage::columnar::IndexMode;
 
@@ -27,6 +28,8 @@ pub struct TableSearchResult {
     pub explain_text: Option<String>,
     /// Strategy actually applied (after segment-only / auto defaults).
     pub strategy_used: Option<String>,
+    /// Structured provenance DAG (populated when `explain=true`).
+    pub provenance: Option<ProvenanceRecord>,
 }
 
 fn exec_ctx(top_k: Option<u32>, offset: Option<u32>) -> ExecCtx {
@@ -139,21 +142,83 @@ pub fn run_table_search(
     if !batch.table.is_empty() {
         dag.ensure_table_queryable(&batch.table)?;
     }
+    let t0 = std::time::Instant::now();
     let metrics = dag.run(&mut batch, &ctx);
-    let page = batch.candidates.slice_range(
-        opts.offset.unwrap_or(0) as usize,
-        opts.top_k.unwrap_or(20) as usize,
-    );
+    let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+    let top_k = opts.top_k.unwrap_or(20) as usize;
+    let offset = opts.offset.unwrap_or(0) as usize;
+    let page = batch.candidates.slice_range(offset, top_k);
+
     let explain_text = if opts.explain {
         Some(format_explain(&opts.table, strategy, &batch, &metrics))
     } else {
         None
     };
+
+    let provenance = if opts.explain {
+        let mut prov = ProvenanceCollector::new(
+            true,
+            opts.query.clone(),
+            strategy_used.clone(),
+        );
+
+        // Tier 1: record all BM25 candidates (if sparse was enabled)
+        if batch.tier1_enable_sparse {
+            for (&id, &score) in batch.candidates.ids.iter().zip(batch.candidates.scores.iter()) {
+                prov.record_bm25(id, score);
+            }
+        }
+        // Tier 1: record all HNSW candidates (if dense was enabled)
+        if batch.tier1_enable_dense {
+            for (&id, &score) in batch.candidates.ids.iter().zip(batch.candidates.scores.iter()) {
+                prov.record_hnsw(id, score);
+            }
+        }
+
+        // Tier 2: record RRF-merged candidates
+        for (&id, &score) in batch.candidates.ids.iter().zip(batch.candidates.scores.iter()) {
+            prov.record_rrf(id, score);
+        }
+
+        // Record tier2 budget cuts: candidates after tier2 that didn't reach tier3
+        let tier2_count = metrics.tier2_candidates as usize;
+        let tier3_count = metrics.tier3_candidates as usize;
+        if tier2_count > tier3_count {
+            let cuts = tier2_count.saturating_sub(tier3_count);
+            for i in tier3_count..(tier3_count + cuts).min(batch.candidates.len()) {
+                let id = batch.candidates.ids[i];
+                prov.record_drop(id, DropStage::Tier2BudgetCut, format!("tier2 budget cut at rank {i}"));
+            }
+        }
+
+        // Record CRAG drops
+        if batch.enable_crag {
+            let final_count = top_k.min(batch.candidates.len());
+            for i in final_count..batch.candidates.len() {
+                let id = batch.candidates.ids[i];
+                prov.record_drop(id, DropStage::CragFilter, "crag median filter".to_string());
+            }
+        }
+
+        prov.set_final(&page.ids);
+        prov.set_total_latency_ms(elapsed_ms);
+        prov.finish()
+    } else {
+        None
+    };
+
+    // Persist provenance to per-table search log when available.
+    if let (Some(ref prov), Some(db_path)) = (&provenance, dag.db_path()) {
+        persist::append_search_log(db_path, &opts.table, prov);
+    }
+
     Ok(TableSearchResult {
         ids: page.ids,
         scores: page.scores,
         metrics,
         explain_text,
         strategy_used,
+        provenance,
     })
 }

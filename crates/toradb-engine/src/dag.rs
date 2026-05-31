@@ -136,15 +136,28 @@ impl DagRunner {
                     break;
                 }
             }
-        
-            persist::compact_table(
-                path.as_path(),
-                table,
-                Some(&mut self.retrieval.store),
-                toradb_storage::compaction::CompactMode::Full,
-                &policy,
-                Some(&mut self.caches),
-            )?;
+
+            let pairwise_policy = toradb_storage::compaction::CompactPolicy {
+                min_segments_to_merge: 2,
+                tier: toradb_storage::compaction::TierPolicy {
+                    tier_merge_threshold: 2,
+                    ..policy.tier.clone()
+                },
+                ..policy.clone()
+            };
+            loop {
+                let report = persist::compact_table(
+                    path.as_path(),
+                    table,
+                    Some(&mut self.retrieval.store),
+                    toradb_storage::compaction::CompactMode::Normal,
+                    &pairwise_policy,
+                    Some(&mut self.caches),
+                )?;
+                if report.merges == 0 || report.segments_after <= 1 {
+                    break;
+                }
+            }
         }
         Ok(())
     }

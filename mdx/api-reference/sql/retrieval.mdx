@@ -57,7 +57,26 @@ SPARSE SEARCH body BM25('Tesla')
 LIMIT 5
 ```
 
-Returns a plan without executing retrieval (cannot combine with `STREAM`).
+`EXPLAIN` on a retrieval query **executes the search** and returns results alongside a structured JSON provenance trace in `explain_text`. The trace shows which documents were considered and dropped at each retrieval tier.
+
+```python
+result = db.sql("""
+    EXPLAIN SELECT id FROM docs
+    SPARSE SEARCH body BM25('Tesla')
+    LIMIT 5
+""")
+# result.explain_text contains the JSON provenance record
+import json
+prov = json.loads(result.explain_text)
+print(prov["tier1"]["bm25_candidates"])
+print(prov["tier2"]["drops"])
+```
+
+For **non-retrieval** queries (analytics, `COUNT(*)`), `EXPLAIN` still returns a plan string without executing.
+
+Cannot combine with `STREAM`.
+
+See [Retrieval provenance](/guides/provenance) for the full provenance schema.
 
 ## DISTRIBUTED
 

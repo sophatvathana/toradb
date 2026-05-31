@@ -22,12 +22,74 @@ Convert to Polars (requires `polars` installed).
 
 ### `explain() -> str`
 
-Human-readable plan and metrics when `explain=True` was passed to search.
+Human-readable metrics string (tier candidate counts, decompressions).
 
 ```python
 results = table.search("Tesla", explain=True)
 print(results.explain())
+# "tier1=84 tier2=20 tier3=5 decompressions=5"
 ```
+
+## Properties
+
+### `provenance -> str | None`
+
+Structured JSON provenance trace. Only populated when `explain=True` was passed to `Table.search`. Returns `None` otherwise.
+
+The JSON string contains a `ProvenanceRecord` with per-tier candidate lists, drop reasons, and latency:
+
+```python
+import json
+
+results = table.search("financial crisis 2008", top_k=5, explain=True)
+prov = json.loads(results.provenance)
+```
+
+**Schema:**
+
+```json
+{
+  "query": "financial crisis 2008",
+  "strategy": null,
+  "tier1": {
+    "bm25_candidates": [{"id": 42, "score": 0.91}, ...],
+    "hnsw_candidates": [{"id": 42, "score": 0.87}, ...],
+    "rrf_merged": [],
+    "drops": [],
+    "latency_us": 0
+  },
+  "tier2": {
+    "bm25_candidates": [],
+    "hnsw_candidates": [],
+    "rrf_merged": [{"id": 42, "score": 0.94}, ...],
+    "drops": [{"id": 77, "stage": "crag_filter", "reason": "crag median filter"}],
+    "latency_us": 0
+  },
+  "tier3": {
+    "bm25_candidates": [],
+    "hnsw_candidates": [],
+    "rrf_merged": [],
+    "drops": [],
+    "latency_us": 0
+  },
+  "final_ids": [42, 11, 55],
+  "total_latency_ms": 3.4
+}
+```
+
+**Drop stages:**
+
+| Stage | Meaning |
+|-------|---------|
+| `metadata_filter` | Excluded by a `WHERE` clause |
+| `tier1_budget_cut` | Fell below Tier 1 candidate budget |
+| `tier2_budget_cut` | Fell below Tier 2 candidate budget |
+| `crag_filter` | Removed by CRAG median filter |
+| `tier3_budget_cut` | Fell below final top-k budget |
+
+The same record is appended to `<db>/<table>/_search_log.ndjson` on disk for offline analysis.
+
+See [Retrieval provenance](/guides/provenance) for query patterns and use cases.
 
 ## Analytics results
 

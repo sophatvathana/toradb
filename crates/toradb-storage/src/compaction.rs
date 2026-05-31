@@ -1,8 +1,10 @@
 use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::array::UInt64Array;
+use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
@@ -407,7 +409,8 @@ impl MergeSource {
         Ok(Self { path, peeked, reader, min_id })
     }
 
-    /// Take the peeked batch and advance.
+    /// Take the peeked batch and advance. When the source is fully consumed (peeked becomes
+    /// None), deletes the source file immediately to free disk space during the merge.
     fn take_batch(&mut self) -> Option<RecordBatch> {
         let batch = self.peeked.take();
         let next = self.reader.next().and_then(|r| r.ok());
@@ -417,6 +420,11 @@ impl MergeSource {
             .as_ref()
             .and_then(|b| batch_min_id(b))
             .unwrap_or(u64::MAX);
+        if self.peeked.is_none() {
+            // Source fully consumed — delete it now to reclaim disk space.
+            // Errors are ignored: the file will be cleaned up by compact_table_segments.
+            let _ = std::fs::remove_file(&self.path);
+        }
         batch
     }
 }
@@ -429,7 +437,7 @@ fn batch_min_id(batch: &RecordBatch) -> Option<u64> {
         .values()
         .iter()
         .copied()
-        .next()
+        .min()
 }
 
 fn batch_max_id(batch: &RecordBatch) -> Option<u64> {
@@ -440,7 +448,47 @@ fn batch_max_id(batch: &RecordBatch) -> Option<u64> {
         .values()
         .iter()
         .copied()
-        .last()
+        .max()
+}
+
+fn cast_batch_to_canonical(
+    batch: &RecordBatch,
+    canonical: &Arc<Schema>,
+) -> Result<RecordBatch, String> {
+    let mut columns = Vec::with_capacity(canonical.fields().len());
+    for field in canonical.fields() {
+        let col = batch
+            .column_by_name(field.name())
+            .ok_or_else(|| format!("merge: source batch missing column '{}'", field.name()))?;
+        let col = if col.data_type() == field.data_type() {
+            col.clone()
+        } else {
+            arrow::compute::cast(col, field.data_type())
+                .map_err(|e| format!("merge: cast column '{}': {e}", field.name()))?
+        };
+        columns.push(col);
+    }
+    RecordBatch::try_new(canonical.clone(), columns).map_err(|e| e.to_string())
+}
+
+fn split_batch_at(batch: &RecordBatch, cutoff: u64) -> (Option<RecordBatch>, Option<RecordBatch>) {
+    let ids = match batch.column_by_name("id")
+        .and_then(|c| c.as_any().downcast_ref::<UInt64Array>())
+    {
+        Some(a) => a,
+        None => return (None, Some(batch.clone())),
+    };
+
+    let split_pos = (0..ids.len()).find(|&i| ids.value(i) >= cutoff).unwrap_or(ids.len());
+    if split_pos == 0 {
+        return (None, Some(batch.clone()));
+    }
+    if split_pos == ids.len() {
+        return (Some(batch.clone()), None);
+    }
+    let left = batch.slice(0, split_pos);
+    let right = batch.slice(split_pos, ids.len() - split_pos);
+    (Some(left), Some(right))
 }
 
 fn merge_segments_streaming(
@@ -473,13 +521,14 @@ fn merge_segments_streaming(
     }
     let props = props_builder.build();
     let mut writer =
-        ArrowWriter::try_new(file, schema, Some(props)).map_err(|e| e.to_string())?;
+        ArrowWriter::try_new(file, Arc::clone(&schema), Some(props)).map_err(|e| e.to_string())?;
 
     let mut global_min = u64::MAX;
     let mut global_max = 0u64;
     let mut row_count = 0u64;
 
     loop {
+        // Pick source whose current peeked batch has the lowest minimum ID.
         let best = sources
             .iter()
             .enumerate()
@@ -488,8 +537,11 @@ fn merge_segments_streaming(
 
         let (idx, _) = match best {
             Some(x) => x,
-            None => break, // all sources exhausted
+            None => break,
         };
+
+        // Find the lowest min_id among all OTHER sources — this is the cutoff
+        // beyond which we must not write from the current source this iteration.
         let next_min = sources
             .iter()
             .enumerate()
@@ -499,24 +551,52 @@ fn merge_segments_streaming(
             .unwrap_or(u64::MAX);
 
         loop {
-            let src = &mut sources[idx];
-            match &src.peeked {
+            let peeked_max = match sources[idx].peeked.as_ref() {
                 None => break,
-                Some(b) => {
-                    if batch_min_id(b).unwrap_or(u64::MAX) >= next_min {
-                        break;
-                    }
-                }
+                Some(b) => match batch_max_id(b) {
+                    Some(m) => m,
+                    None => break,
+                },
+            };
+
+            if sources[idx].min_id >= next_min {
+                break;
             }
-            if let Some(batch) = sources[idx].take_batch() {
-                if let Some(bmin) = batch_min_id(&batch) {
-                    if bmin < global_min { global_min = bmin; }
+
+            if peeked_max < next_min {
+                if let Some(batch) = sources[idx].take_batch() {
+                    if let Some(bmin) = batch_min_id(&batch) {
+                        if bmin < global_min { global_min = bmin; }
+                    }
+                    if let Some(bmax) = batch_max_id(&batch) {
+                        if bmax > global_max { global_max = bmax; }
+                    }
+                    row_count += batch.num_rows() as u64;
+                    let batch = cast_batch_to_canonical(&batch, &schema)?;
+                    writer.write(&batch).map_err(|e| e.to_string())?;
                 }
-                if let Some(bmax) = batch_max_id(&batch) {
-                    if bmax > global_max { global_max = bmax; }
+            } else {
+
+                let batch = sources[idx].peeked.take().unwrap();
+                let (left, right) = split_batch_at(&batch, next_min);
+                if let Some(left) = left {
+                    if let Some(bmin) = batch_min_id(&left) {
+                        if bmin < global_min { global_min = bmin; }
+                    }
+                    if let Some(bmax) = batch_max_id(&left) {
+                        if bmax > global_max { global_max = bmax; }
+                    }
+                    row_count += left.num_rows() as u64;
+                    let left = cast_batch_to_canonical(&left, &schema)?;
+                    writer.write(&left).map_err(|e| e.to_string())?;
                 }
-                row_count += batch.num_rows() as u64;
-                writer.write(&batch).map_err(|e| e.to_string())?;
+                sources[idx].peeked = right;
+                sources[idx].min_id = sources[idx]
+                    .peeked
+                    .as_ref()
+                    .and_then(|b| batch_min_id(b))
+                    .unwrap_or(u64::MAX);
+                break;  
             }
         }
     }

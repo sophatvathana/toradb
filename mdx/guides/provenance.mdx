@@ -1,0 +1,171 @@
+---
+title: "Retrieval provenance"
+description: "Understand exactly why a document was returned — or why it wasn't"
+---
+
+ToraDB is the only retrieval database that shows its work. Every search can return a **provenance DAG** — a structured record of every candidate document at every retrieval tier, with scores, drop reasons, and latency breakdowns.
+
+This solves the most common debugging question in RAG systems: *why didn't the right document come back?*
+
+## Enabling provenance
+
+Pass `explain=True` to `Table.search`:
+
+```python
+import json
+import toradb
+
+db = toradb.local("./my_db")
+docs = db.table("articles")
+
+results = docs.search("2008 financial crisis causes", top_k=5, explain=True)
+prov = json.loads(results.provenance)
+```
+
+Or with SQL:
+
+```sql
+EXPLAIN SELECT id, text FROM articles
+SPARSE SEARCH body BM25('financial crisis')
+LIMIT 5
+```
+
+## Provenance record schema
+
+```json
+{
+  "query": "2008 financial crisis causes",
+  "strategy": null,
+  "tier1": {
+    "bm25_candidates": [
+      {"id": 42, "score": 0.91},
+      {"id": 77, "score": 0.88}
+    ],
+    "hnsw_candidates": [
+      {"id": 42, "score": 0.87}
+    ],
+    "rrf_merged": [],
+    "drops": [],
+    "latency_us": 0
+  },
+  "tier2": {
+    "bm25_candidates": [],
+    "hnsw_candidates": [],
+    "rrf_merged": [
+      {"id": 42, "score": 0.94},
+      {"id": 77, "score": 0.61}
+    ],
+    "drops": [
+      {
+        "id": 77,
+        "stage": "crag_filter",
+        "reason": "crag median filter"
+      }
+    ],
+    "latency_us": 0
+  },
+  "tier3": {
+    "bm25_candidates": [],
+    "hnsw_candidates": [],
+    "rrf_merged": [],
+    "drops": [],
+    "latency_us": 0
+  },
+  "final_ids": [42, 11, 55, 88, 13],
+  "total_latency_ms": 3.4
+}
+```
+
+## Retrieval tiers
+
+| Tier | What happens |
+|------|-------------|
+| **Tier 1** | BM25 sparse candidates + HNSW/DiskANN dense candidates are gathered independently |
+| **Tier 2** | Candidates are merged via RRF (Reciprocal Rank Fusion); CRAG filtering and budget cuts apply |
+| **Tier 3** | Final top-k selection; quantization re-scoring if TurboQuant sidecars are present |
+
+## Drop stages
+
+| Stage | Meaning |
+|-------|---------|
+| `metadata_filter` | Excluded by a `WHERE` clause predicate |
+| `tier1_budget_cut` | Fell below Tier 1 candidate budget (`tier1_budget` × 50) |
+| `tier2_budget_cut` | Fell below Tier 2 candidate budget |
+| `crag_filter` | Removed by CRAG median score filter |
+| `tier3_budget_cut` | Fell below final top-k budget |
+
+## Common debugging patterns
+
+### Find a specific document's fate
+
+```python
+prov = json.loads(results.provenance)
+
+doc_id = 77
+
+in_bm25 = any(c["id"] == doc_id for c in prov["tier1"]["bm25_candidates"])
+in_rrf  = any(c["id"] == doc_id for c in prov["tier2"]["rrf_merged"])
+drop    = next((d for d in prov["tier2"]["drops"] if d["id"] == doc_id), None)
+
+print(f"In BM25 tier1: {in_bm25}")
+print(f"In RRF tier2:  {in_rrf}")
+print(f"Drop reason:   {drop['reason'] if drop else 'reached final results'}")
+```
+
+### Compare BM25 vs HNSW agreement
+
+```python
+bm25_ids  = {c["id"] for c in prov["tier1"]["bm25_candidates"]}
+hnsw_ids  = {c["id"] for c in prov["tier1"]["hnsw_candidates"]}
+
+agreement = bm25_ids & hnsw_ids
+disagreement = bm25_ids ^ hnsw_ids
+
+print(f"Agreed on {len(agreement)} docs, disagreed on {len(disagreement)}")
+```
+
+### Measure tier latency (future)
+
+`latency_us` on each `TierTrace` is reserved for per-tier timing — currently emitted as 0 and will be populated in a future release. Use `total_latency_ms` for end-to-end wall time.
+
+## Persistent search log
+
+Every search with `explain=True` appends a JSON record to `<db>/<table>/_search_log.ndjson`. This file is newline-delimited JSON (one record per line).
+
+```python
+import json
+from pathlib import Path
+
+log_path = Path("./my_db/articles/_search_log.ndjson")
+records = [json.loads(line) for line in log_path.read_text().splitlines()]
+
+# Which documents are most frequently dropped at tier 2?
+from collections import Counter
+drop_counts = Counter(
+    d["id"]
+    for r in records
+    for d in r["tier2"]["drops"]
+)
+print(drop_counts.most_common(5))
+```
+
+This enables cross-query analysis: find documents that consistently drop before the final results, identify which tier is slowest, or A/B test retrieval strategy changes.
+
+## SQL provenance
+
+`EXPLAIN` on a retrieval query in SQL executes the search and returns the provenance JSON as the explanation text:
+
+```python
+result = db.sql("""
+    EXPLAIN SELECT id FROM articles
+    SPARSE SEARCH body BM25('mortgage backed securities')
+    LIMIT 10
+""")
+
+prov = json.loads(result.explain_text)
+print(f"BM25 found {len(prov['tier1']['bm25_candidates'])} candidates")
+print(f"RRF kept {len(prov['tier2']['rrf_merged'])} after fusion")
+print(f"Dropped: {[d['reason'] for d in prov['tier2']['drops']]}")
+```
+
+For analytics queries (`COUNT(*)`, `GROUP BY`), `EXPLAIN` still returns a plan string rather than provenance.

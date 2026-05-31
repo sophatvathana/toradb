@@ -134,12 +134,16 @@ impl Table {
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
             })
         })?;
+        let provenance_json = out.provenance.as_ref().and_then(|p| {
+            serde_json::to_string_pretty(p).ok()
+        });
         Ok(SearchResults {
             ids: out.ids,
             scores: out.scores,
             projected: Vec::new(),
             metrics: out.metrics,
             explain_text: out.explain_text,
+            provenance_json,
         })
     }
 
@@ -172,6 +176,7 @@ pub struct SearchResults {
     projected: Vec<(String, SearchColumn)>,
     metrics: toradb_core::QueryMetrics,
     explain_text: Option<String>,
+    provenance_json: Option<String>,
 }
 
 impl SearchResults {
@@ -191,6 +196,7 @@ impl SearchResults {
                 .collect(),
             metrics,
             explain_text,
+            provenance_json: None,
         }
     }
 }
@@ -229,6 +235,11 @@ impl SearchResults {
             self.metrics.tier3_candidates,
             self.metrics.decompressions
         )
+    }
+
+    #[getter]
+    fn provenance(&self) -> Option<String> {
+        self.provenance_json.clone()
     }
 }
 

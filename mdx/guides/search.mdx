@@ -1,6 +1,6 @@
 ---
 title: "Search strategies"
-description: "BM25, dense ANN, hybrid, DiskANN, HYDE, and CRAG"
+description: "BM25, dense ANN, hybrid, DiskANN, HYDE, CRAG, and retrieval provenance"
 ---
 
 `table.search(query, ...)` runs retrieval against a table. Control behavior with `strategy` and related kwargs.
@@ -30,10 +30,42 @@ results = articles.search("Nikola Tesla alternating current", top_k=3)
 |-----------|---------|-------------|
 | `top_k` | `20` | Max results returned |
 | `offset` | `0` | Skip first N hits (pagination) |
-| `explain` | `false` | Include plan/metrics string |
+| `explain` | `false` | Execute with provenance — returns a structured DAG of candidate flow |
 | `graph_expand` | `false` | Graph neighbor expansion |
 | `depth` | `2` | Graph expansion depth |
 | `query_vector` | `None` | Query embedding for dense / DiskANN |
+
+## Retrieval provenance (`explain=True`)
+
+ToraDB is the only retrieval database that shows its work. When `explain=True`, every search returns a structured provenance trace alongside results — showing exactly which documents were considered and why each was kept or dropped at every tier.
+
+```python
+import json
+
+results = docs.search("why did the 2008 financial crisis happen", top_k=5, explain=True)
+
+prov = json.loads(results.provenance)
+
+# What BM25 found in Tier 1
+print(prov["tier1"]["bm25_candidates"])
+# [{"id": 42, "score": 0.91}, {"id": 77, "score": 0.88}, ...]
+
+# What RRF fusion produced in Tier 2
+print(prov["tier2"]["rrf_merged"])
+# [{"id": 42, "score": 0.94}, ...]
+
+# What was dropped and why
+print(prov["tier2"]["drops"])
+# [{"id": 77, "stage": "crag_filter", "reason": "crag median filter"}]
+
+# End-to-end latency
+print(prov["total_latency_ms"])
+# 3.4
+```
+
+The provenance record is also appended to `<table>/_search_log.ndjson` on disk for cross-query analysis.
+
+See [Retrieval provenance](/guides/provenance) for the full schema and use cases.
 
 ## Examples
 
@@ -43,10 +75,10 @@ results = articles.search("Nikola Tesla alternating current", top_k=3)
 articles.search("year:1888", top_k=5)
 ```
 
-**Hybrid with explain and graph expansion:**
+**Hybrid with provenance and graph expansion:**
 
 ```python
-articles.search(
+results = articles.search(
     "Nikola Tesla wireless",
     top_k=5,
     strategy="hybrid",
@@ -54,6 +86,9 @@ articles.search(
     graph_expand=True,
     depth=2,
 )
+prov = json.loads(results.provenance)
+print(f"BM25 candidates: {len(prov['tier1']['bm25_candidates'])}")
+print(f"Drops at tier2: {len(prov['tier2']['drops'])}")
 ```
 
 **Dense search with explicit vector:**
@@ -86,7 +121,7 @@ After bulk ingest, the first search may mmap many segment indexes (cold start). 
 - Use **serving** profile settings: `TORADB_CACHE_AUTO=1` or set `TORADB_CACHE_INDEX_BYTES` high enough to hold hot segment sidecars (see [Production serving profiles](/guides/production-serving)).
 - Enable `TORADB_WARMUP_ON_START=1` so the API warms indexes in the background.
 - Run `toradb-ingest resume` after ingest so TBM3 block-max sidecars, lexicons, and `bm25.route.bin` exist (required once after upgrading index format).
-- Use `explain=True` to see `cache_hits` / `cache_misses` in the demo API.
+- Use `explain=True` to inspect the provenance trace and identify which tier is slowest.
 
 ## Stream search
 

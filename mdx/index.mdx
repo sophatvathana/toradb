@@ -1,15 +1,18 @@
 ---
 title: "Introduction"
-description: "Retrieval-focused database for local text, vector, and hybrid search"
+description: "The retrieval database that shows its work"
 icon: "database"
 ---
 
 ToraDB is a **retrieval-focused database** for local workloads: on-disk tables, BM25 sparse search, dense ANN (HNSW / DiskANN), hybrid fusion, plus a Python SDK, CLI, and retrieval SQL.
 
+**The defining feature:** ToraDB is the only retrieval database that shows its work. Every search can return a structured provenance trace — which documents were considered at each tier, why they were kept or dropped, and where time was spent. This turns RAG debugging from guesswork into a precise, auditable workflow.
+
 ## What you can do
 
 - Store documents locally with Parquet segments and index sidecars
 - Run **text**, **vector**, and **hybrid** search from Python or SQL
+- Inspect **retrieval provenance**: per-tier candidate lists, drop reasons, latency
 - Aggregate with `GROUP BY`, build indexes, and compact segments on disk
 
 ## Get started
@@ -21,8 +24,8 @@ ToraDB is a **retrieval-focused database** for local workloads: on-disk tables, 
   <Card title="Quickstart" icon="rocket" href="/quickstart">
     Create a table, ingest docs, and run your first query.
   </Card>
-  <Card title="SQL guide" icon="code" href="/guides/sql">
-    Sparse search, vector ANN, analytics, and catalog commands.
+  <Card title="Provenance" icon="magnifying-glass" href="/guides/provenance">
+    See exactly why each document was returned — or why it wasn't.
   </Card>
   <Card title="API reference" icon="book" href="/api-reference/introduction">
     Python SDK, SQL grammar, and CLI commands.
@@ -32,6 +35,7 @@ ToraDB is a **retrieval-focused database** for local workloads: on-disk tables, 
 ## Example
 
 ```python
+import json
 import toradb
 
 db = toradb.local("./my_db")
@@ -40,8 +44,15 @@ docs.add([
     "Nikola Tesla invented the alternating current induction motor",
     "Marie Curie studied radioactivity",
 ])
-results = docs.search("Nikola Tesla alternating current motor", top_k=3)
+
+# Search with provenance — see exactly what happened inside
+results = docs.search("Tesla motor", top_k=3, explain=True)
 print(results.to_pandas())
+
+prov = json.loads(results.provenance)
+print(f"BM25 found: {len(prov['tier1']['bm25_candidates'])} candidates")
+print(f"Dropped:    {[d['reason'] for d in prov['tier2']['drops']]}")
+print(f"Latency:    {prov['total_latency_ms']:.1f}ms")
 ```
 
 ## License

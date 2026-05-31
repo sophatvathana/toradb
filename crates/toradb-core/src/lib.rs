@@ -8,6 +8,7 @@ pub mod compression;
 pub mod exec_ctx;
 pub mod ingest;
 pub mod metrics;
+pub mod provenance;
 pub mod quant;
 pub mod schema;
 
@@ -19,3 +20,4 @@ pub use exec_ctx::ExecCtx;
 pub use ingest::IngestOptions;
 pub use schema::{ColumnDef, ColumnKind, DocId, Schema, SegmentId};
 pub use metrics::QueryMetrics;
+pub use provenance::{DropStage, ProvenanceCollector, ProvenanceRecord, TierTrace};

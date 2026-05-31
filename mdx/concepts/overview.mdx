@@ -23,6 +23,7 @@ flowchart LR
 | `Database` | Open a path on disk (`toradb.local(path)`). |
 | `Table` | Named collection of documents; created with `mode="text"` or `mode="hybrid"`. |
 | `SearchResults` | Ranked hits from `table.search` or retrieval `SELECT`. |
+| `SearchResults.provenance` | Structured JSON trace of candidate flow across retrieval tiers (when `explain=True`). |
 | Analytics result | Tabular output from `GROUP BY` / aggregates via `db.sql`. |
 
 ## Two ways to query
@@ -37,3 +38,4 @@ Indexes are built automatically on ingest where possible; use [reindex and compa
 - [Table modes](/concepts/table-modes)
 - [On-disk layout](/concepts/on-disk-layout)
 - [Python SDK guide](/guides/python)
+- [Retrieval provenance](/guides/provenance)
