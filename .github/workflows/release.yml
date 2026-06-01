@@ -56,7 +56,8 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: ${{ env.MATURIN_BUILD_ARGS }}
           rust-toolchain: stable
-          sccache: true
+          # sccache breaks ring's aarch64 assembly under QEMU cross-compile (cc-rs + .S files).
+          sccache: ${{ matrix.platform.target == 'x86_64' }}
           manylinux: auto
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -91,7 +92,7 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: ${{ env.MATURIN_BUILD_ARGS }}
           rust-toolchain: stable
-          sccache: true
+          sccache: ${{ matrix.platform.target == 'x86_64' }}
           manylinux: musllinux_1_2
       - name: Upload wheels
         uses: actions/upload-artifact@v4
