@@ -2525,7 +2525,7 @@ dependencies = [
 
 [[package]]
 name = "toradb-api"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "axum",
  "serde",
@@ -2539,7 +2539,7 @@ dependencies = [
 
 [[package]]
 name = "toradb-cli"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "arrow",
  "clap",
@@ -2558,7 +2558,7 @@ dependencies = [
 
 [[package]]
 name = "toradb-core"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -2566,7 +2566,7 @@ dependencies = [
 
 [[package]]
 name = "toradb-distributed"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2578,7 +2578,7 @@ dependencies = [
 
 [[package]]
 name = "toradb-engine"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "arrow",
  "futures",
@@ -2602,7 +2602,7 @@ dependencies = [
 
 [[package]]
 name = "toradb-index"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "memmap2",
  "rayon",
@@ -2614,7 +2614,7 @@ dependencies = [
 
 [[package]]
 name = "toradb-sdk"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "arrow",
  "pyo3",
@@ -2629,14 +2629,14 @@ dependencies = [
 
 [[package]]
 name = "toradb-simd"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "criterion 0.5.1",
 ]
 
 [[package]]
 name = "toradb-sql"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2646,7 +2646,7 @@ dependencies = [
 
 [[package]]
 name = "toradb-storage"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "arrow",
  "criterion 0.8.2",
