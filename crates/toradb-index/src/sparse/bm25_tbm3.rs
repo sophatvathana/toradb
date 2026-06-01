@@ -13,7 +13,7 @@ use toradb_core::{CandidateSet, DocId};
 const PARALLEL_BLOCK_THRESHOLD: usize = 2048;
 const MIN_BLOCKS_PER_WORKER: usize = 512;
 
-use super::bm25::{tokenize, Bm25Snapshot, B, K1};
+use super::bm25::{tokenize, Bm25Snapshot, B, K1, MAX_QUERY_TERMS};
 
 pub fn decode_snapshot(bytes: &[u8]) -> Result<Bm25Snapshot, String> {
     snapshot_from_tbm3(bytes)
@@ -543,8 +543,12 @@ impl<'a> Bm25Tbm3View<'a> {
     }
 
     fn cursors_for(&self, query: &str) -> Vec<TermCursor<'a>> {
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut cursors = Vec::new();
         for term in tokenize(query) {
+            if !seen.insert(term.clone()) {
+                continue;
+            }
             if let Some((df, rel_off, _plen)) = self.find_term_entry(&term) {
                 if let Ok(c) = self.open_cursor(df, rel_off) {
                     if c.total_docs > 0 {
@@ -552,6 +556,15 @@ impl<'a> Bm25Tbm3View<'a> {
                     }
                 }
             }
+        }
+        if cursors.len() > MAX_QUERY_TERMS {
+            cursors.sort_by(|a, b| {
+                b.idf
+                    .partial_cmp(&a.idf)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.total_docs.cmp(&b.total_docs))
+            });
+            cursors.truncate(MAX_QUERY_TERMS);
         }
         cursors
     }
@@ -570,7 +583,56 @@ impl<'a> Bm25Tbm3View<'a> {
         }
         // Sort by document frequency ascending: cheaper terms first.
         cursors.sort_by_key(|c| c.total_docs);
-        daat_maxscore(&mut cursors, &[], k, self.avg_dl)
+
+        let plans: Vec<std::sync::Arc<TermPlan>> = cursors
+            .iter()
+            .map(|c| std::sync::Arc::new(TermPlan::build(c)))
+            .collect();
+
+        let max_blocks = plans.iter().map(|p| p.blocks.len()).max().unwrap_or(0);
+        let workers = rayon::current_num_threads();
+        if workers <= 1 || max_blocks <= PARALLEL_BLOCK_THRESHOLD {
+            return block_max_wand(cursors, &plans, k, self.avg_dl, 0, DocId::MAX);
+        }
+
+        let max_doc = plans
+            .iter()
+            .filter_map(|p| p.blocks.last().map(|b| b.last_docid))
+            .max()
+            .unwrap_or(0);
+        let parts = workers.min(8).max(1);
+        let span = (max_doc / parts as u64).max(1);
+        let ranges: Vec<(DocId, DocId)> = (0..parts)
+            .map(|w| {
+                let lo = w as u64 * span;
+                let hi = if w + 1 == parts {
+                    DocId::MAX
+                } else {
+                    (w as u64 + 1) * span
+                };
+                (lo, hi)
+            })
+            .filter(|(lo, hi)| lo < hi)
+            .collect();
+
+        let avg_dl = self.avg_dl;
+        let cursors_ref = &cursors;
+        let plans_ref = &plans;
+        let partials: Vec<CandidateSet> = ranges
+            .par_iter()
+            .map(|&(lo, hi)| {
+                let local: Vec<TermCursor> = cursors_ref.iter().map(|c| c.reopen()).collect();
+                block_max_wand(local, plans_ref, k, avg_dl, lo, hi)
+            })
+            .collect();
+
+        let mut merged: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
+        for set in &partials {
+            for (i, &doc_id) in set.ids.iter().enumerate() {
+                push_topk(&mut merged, ScoredDoc { score: set.scores[i], doc_id }, k);
+            }
+        }
+        heap_to_candidates(merged)
     }
 }
 
@@ -643,82 +705,318 @@ fn single_term_topk(cursor: &mut TermCursor<'_>, k: usize, avg_dl: f32) -> Candi
     heap_to_candidates(merged)
 }
 
-fn score_term_contributions(cursor: &TermCursor<'_>, avg_dl: f32) -> Vec<(DocId, f32)> {
-    let num_blocks = cursor.num_blocks;
-    let idf = cursor.idf;
-
-    let scan_range = |lo: usize, hi: usize, start: &BlockStart| -> Vec<(DocId, f32)> {
-        let mut wc = cursor.at_block(lo, hi, start);
-        let mut out = Vec::with_capacity((hi - lo) * BLOCK_SIZE);
-        let mut deltas = [0u32; BLOCK_SIZE];
-        while wc.has_block() {
-            wc.decode_current_block(&mut deltas);
-            let count = wc.block_count();
-            let decoded = wc.decoded.as_ref().unwrap();
-            for i in 0..count {
-                let doc_id = decoded.doc_ids[i];
-                let tf = decoded.tfs[i];
-                out.push((doc_id, idf * tf_component(tf as f32, avg_dl)));
-            }
-            wc.advance_block();
-        }
-        out
-    };
-
-    if num_blocks <= PARALLEL_BLOCK_THRESHOLD {
-        let start = BlockStart {
-            header_off: cursor.next_block_off,
-            prev_doc: 0,
-        };
-        return scan_range(0, num_blocks, &start);
-    }
-
-    let workers = rayon::current_num_threads()
-        .min(num_blocks / MIN_BLOCKS_PER_WORKER)
-        .max(1);
-    if workers <= 1 {
-        let start = BlockStart {
-            header_off: cursor.next_block_off,
-            prev_doc: 0,
-        };
-        return scan_range(0, num_blocks, &start);
-    }
-
-    let starts = cursor.block_starts();
-    let per_worker = num_blocks.div_ceil(workers);
-    let ranges: Vec<(usize, usize)> = (0..workers)
-        .map(|w| {
-            (
-                (w * per_worker).min(num_blocks),
-                ((w + 1) * per_worker).min(num_blocks),
-            )
-        })
-        .filter(|(lo, hi)| lo < hi)
-        .collect();
-
-    ranges
-        .par_iter()
-        .map(|&(lo, hi)| scan_range(lo, hi, &starts[lo]))
-        .reduce(Vec::new, |mut a, mut b| {
-            a.append(&mut b);
-            a
-        })
+struct BlockMeta {
+    last_docid: DocId,
+    /// idf * block_max_tf — upper bound on this term's score for any doc here.
+    block_max: f32,
+    start: BlockStart,
 }
 
-fn daat_maxscore<'a>(
-    cursors: &mut [TermCursor<'a>],
-    _term_ceiling: &[f32],
-    k: usize,
-    avg_dl: f32,
-) -> CandidateSet {
-    let mut scores: HashMap<DocId, f32> = HashMap::with_capacity(1024);
-    for cursor in cursors.iter() {
-        let contributions = score_term_contributions(cursor, avg_dl);
-        for (doc_id, s) in contributions {
-            *scores.entry(doc_id).or_default() += s;
+struct TermPlan {
+    blocks: Vec<BlockMeta>,
+    idf: f32,
+    term_max: f32,
+}
+
+impl TermPlan {
+    fn build(cursor: &TermCursor<'_>) -> Self {
+        let idf = cursor.idf;
+        let starts = cursor.block_starts();
+        let mut blocks = Vec::with_capacity(starts.len());
+        let mut term_max = 0.0f32;
+        for start in &starts {
+            if let Ok(h) = read_block_header(cursor.bytes, start.header_off) {
+                let bmax = idf * h.block_max_tf;
+                if bmax > term_max {
+                    term_max = bmax;
+                }
+                blocks.push(BlockMeta {
+                    last_docid: h.block_last_docid,
+                    block_max: bmax,
+                    start: *start,
+                });
+            }
+        }
+        TermPlan { blocks, idf, term_max }
+    }
+}
+
+struct BmwTerm<'a> {
+    bytes: &'a [u8],
+    plan: std::sync::Arc<TermPlan>,
+    idf: f32,
+    term_max: f32,
+    cur_block: usize,
+    in_block: usize,
+    dec: Option<DecodedBlock>,
+    exhausted: bool,
+}
+
+impl<'a> BmwTerm<'a> {
+    fn new(cursor: TermCursor<'a>, plan: std::sync::Arc<TermPlan>) -> Self {
+        let idf = plan.idf;
+        let term_max = plan.term_max;
+        let mut t = BmwTerm {
+            bytes: cursor.bytes,
+            plan,
+            idf,
+            term_max,
+            cur_block: usize::MAX,
+            in_block: 0,
+            dec: None,
+            exhausted: false,
+        };
+        t.decode_block(0);
+        t
+    }
+
+    #[inline(always)]
+    fn blocks(&self) -> &[BlockMeta] {
+        &self.plan.blocks
+    }
+
+    fn is_empty(&self) -> bool {
+        self.plan.blocks.is_empty()
+    }
+
+    fn decode_block(&mut self, b: usize) {
+        if b >= self.blocks().len() {
+            self.exhausted = true;
+            self.dec = None;
+            return;
+        }
+        if self.cur_block == b {
+            return;
+        }
+        self.dec = decode_block_at(self.bytes, &self.plan.blocks[b].start);
+        self.cur_block = b;
+        self.in_block = 0;
+    }
+
+    #[inline(always)]
+    fn current(&self) -> Option<DocId> {
+        if self.exhausted {
+            return None;
+        }
+        let d = self.dec.as_ref()?;
+        if self.in_block < d.count {
+            Some(d.doc_ids[self.in_block])
+        } else {
+            None
         }
     }
-    scores_to_topk(scores, k)
+
+    #[inline(always)]
+    fn block_max_here(&self) -> f32 {
+        self.blocks()
+            .get(self.cur_block)
+            .map(|b| b.block_max)
+            .unwrap_or(0.0)
+    }
+
+    fn advance_to(&mut self, target: DocId) {
+        if self.exhausted {
+            return;
+        }
+        if let Some(cur) = self.current() {
+            if cur >= target {
+                return;
+            }
+        }
+        let mut b = if self.cur_block == usize::MAX { 0 } else { self.cur_block };
+        let nblocks = self.blocks().len();
+        while b < nblocks && self.blocks()[b].last_docid < target {
+            b += 1;
+        }
+        if b >= nblocks {
+            self.exhausted = true;
+            self.dec = None;
+            return;
+        }
+        self.decode_block(b);
+        let Some(d) = self.dec.as_ref() else {
+            self.exhausted = true;
+            return;
+        };
+        let mut left = 0usize;
+        let mut right = d.count;
+        while left < right {
+            let mid = left + (right - left) / 2;
+            if d.doc_ids[mid] < target {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+        self.in_block = left;
+        if self.in_block >= d.count {
+            self.advance_block();
+        }
+    }
+
+    #[inline]
+    fn next(&mut self) {
+        if self.exhausted {
+            return;
+        }
+        self.in_block += 1;
+        if let Some(d) = self.dec.as_ref() {
+            if self.in_block >= d.count {
+                self.advance_block();
+            }
+        }
+    }
+
+    fn advance_block(&mut self) {
+        let next = if self.cur_block == usize::MAX { 0 } else { self.cur_block + 1 };
+        if next >= self.blocks().len() {
+            self.exhausted = true;
+            self.dec = None;
+        } else {
+            self.decode_block(next);
+        }
+    }
+
+    #[inline(always)]
+    fn score_current(&self, avg_dl: f32) -> f32 {
+        match self.dec.as_ref() {
+            Some(d) if self.in_block < d.count => {
+                self.idf * tf_component(d.tfs[self.in_block] as f32, avg_dl)
+            }
+            _ => 0.0,
+        }
+    }
+}
+
+fn decode_block_at(bytes: &[u8], start: &BlockStart) -> Option<DecodedBlock> {
+    let h = read_block_header(bytes, start.header_off).ok()?;
+    let count = h.count as usize;
+    let mut deltas = [0u32; BLOCK_SIZE];
+    bitunpack_into(
+        &bytes[h.docid_payload_off..h.docid_payload_off + (h.tf_payload_off - h.docid_payload_off)],
+        h.docid_bits,
+        count,
+        &mut deltas,
+    );
+    let mut block = DecodedBlock {
+        doc_ids: [0u64; BLOCK_SIZE],
+        tfs: [0u32; BLOCK_SIZE],
+        count,
+    };
+    let tf_slice = &bytes[h.tf_payload_off..h.tf_payload_off + h.tf_payload_len];
+    let mut tf_pos = 0usize;
+    let mut prev = start.prev_doc;
+    for i in 0..count {
+        prev = prev.wrapping_add(deltas[i] as u64);
+        block.doc_ids[i] = prev;
+        block.tfs[i] = varbyte_decode(tf_slice, &mut tf_pos).saturating_add(1);
+    }
+    Some(block)
+}
+
+fn block_max_wand(
+    cursors: Vec<TermCursor<'_>>,
+    plans: &[std::sync::Arc<TermPlan>],
+    k: usize,
+    avg_dl: f32,
+    lo: DocId,
+    hi: DocId,
+) -> CandidateSet {
+    let mut terms: Vec<BmwTerm> = cursors
+        .into_iter()
+        .zip(plans.iter())
+        .map(|(c, p)| BmwTerm::new(c, std::sync::Arc::clone(p)))
+        .filter(|t| !t.is_empty())
+        .collect();
+    if terms.is_empty() {
+        return CandidateSet::default();
+    }
+    if lo > 0 {
+        for t in terms.iter_mut() {
+            t.advance_to(lo);
+        }
+    }
+
+    let mut heap: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
+    let mut threshold = f32::NEG_INFINITY;
+    let n = terms.len();
+    let mut order: Vec<usize> = (0..n).collect();
+
+    let order_key = |terms: &[BmwTerm], ti: usize| -> u64 {
+        terms[ti].current().map(|id| id as u64).unwrap_or(u64::MAX)
+    };
+
+    loop {
+        for i in 1..order.len() {
+            let mut j = i;
+            while j > 0 && order_key(&terms, order[j - 1]) > order_key(&terms, order[j]) {
+                order.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+        if terms[order[0]].current().is_none() {
+            break;
+        }
+
+        let mut acc = 0.0f32;
+        let mut pivot_ord = None;
+        for (oi, &ti) in order.iter().enumerate() {
+            if terms[ti].current().is_none() {
+                break;
+            }
+            acc += terms[ti].term_max;
+            if acc >= threshold {
+                pivot_ord = Some(oi);
+                break;
+            }
+        }
+        let Some(pivot_ord) = pivot_ord else { break };
+        let pivot_doc = terms[order[pivot_ord]].current().unwrap();
+        if pivot_doc >= hi {
+            break;
+        }
+
+        if terms[order[0]].current() == Some(pivot_doc) {
+            let mut block_bound = 0.0f32;
+            for &ti in order.iter() {
+                if terms[ti].current() == Some(pivot_doc) {
+                    block_bound += terms[ti].block_max_here();
+                }
+            }
+            if heap.len() >= k && block_bound < threshold {
+                for &ti in order.iter() {
+                    if terms[ti].current() == Some(pivot_doc) {
+                        terms[ti].advance_to(pivot_doc + 1);
+                    }
+                }
+                continue;
+            }
+            let mut score = 0.0f32;
+            for ti in 0..n {
+                if terms[ti].current() == Some(pivot_doc) {
+                    score += terms[ti].score_current(avg_dl);
+                }
+            }
+            for ti in 0..n {
+                if terms[ti].current() == Some(pivot_doc) {
+                    terms[ti].next();
+                }
+            }
+            push_topk(&mut heap, ScoredDoc { score, doc_id: pivot_doc }, k);
+            if heap.len() >= k {
+                threshold = heap.peek().map(|m| m.0.score).unwrap_or(threshold);
+            }
+        } else {
+            for &ti in order.iter() {
+                match terms[ti].current() {
+                    Some(d) if d < pivot_doc => terms[ti].advance_to(pivot_doc),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    heap_to_candidates(heap)
 }
 
 struct TermCursor<'a> {
@@ -778,6 +1076,25 @@ impl<'a> TermCursor<'a> {
             prev_doc: 0,
             idf,
         })
+    }
+
+    fn reopen(&self) -> TermCursor<'a> {
+        let current_header = if self.num_blocks > 0 {
+            read_block_header(self.bytes, self.next_block_off).ok()
+        } else {
+            None
+        };
+        TermCursor {
+            bytes: self.bytes,
+            total_docs: self.total_docs,
+            num_blocks: self.num_blocks,
+            block_idx: 0,
+            next_block_off: self.next_block_off,
+            current_header,
+            decoded: None,
+            prev_doc: 0,
+            idf: self.idf,
+        }
     }
 
     fn block_starts(&self) -> Vec<BlockStart> {
@@ -975,6 +1292,50 @@ mod tests {
     }
 
     #[test]
+    fn range_partitioned_bmw_matches_full() {
+        let mut docs: Vec<(u64, String)> = Vec::new();
+        for d in 0..3000u64 {
+            docs.push((
+                d,
+                format!("common term{} rare{} body{}", d % 11, d % 257, d),
+            ));
+        }
+        let snap = Bm25Snapshot::from_documents(docs.iter().map(|(i, t)| (*i, t.as_str())));
+        let bytes = encode_tbm3(&snap);
+        let view = Bm25Tbm3View::open(&bytes).unwrap();
+        let k = 15;
+        let query = "common term3 rare40";
+
+        let plans_for = |c: &[TermCursor]| -> Vec<std::sync::Arc<TermPlan>> {
+            c.iter().map(|x| std::sync::Arc::new(TermPlan::build(x))).collect()
+        };
+        let full = {
+            let mut c = view.cursors_for(query);
+            c.sort_by_key(|x| x.total_docs);
+            let plans = plans_for(&c);
+            block_max_wand(c, &plans, k, view.avg_dl, 0, DocId::MAX)
+        };
+        // Four disjoint shards, merged like the parallel path does.
+        let bounds = [0u64, 750, 1500, 2250, DocId::MAX];
+        let mut merged: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
+        for w in 0..4 {
+            let mut c = view.cursors_for(query);
+            c.sort_by_key(|x| x.total_docs);
+            let plans = plans_for(&c);
+            let set = block_max_wand(c, &plans, k, view.avg_dl, bounds[w], bounds[w + 1]);
+            for (i, &doc_id) in set.ids.iter().enumerate() {
+                push_topk(&mut merged, ScoredDoc { score: set.scores[i], doc_id }, k);
+            }
+        }
+        let sharded = heap_to_candidates(merged);
+        let brute = view.brute_search(query, k);
+
+        let key = |c: &CandidateSet| -> Vec<u64> { c.ids.clone() };
+        assert_eq!(key(&full), key(&brute), "full BMW must equal brute force");
+        assert_eq!(key(&sharded), key(&brute), "sharded BMW must equal brute force");
+    }
+
+    #[test]
     fn tbm3_wand_matches_brute_on_small_corpus() {
         let mut docs = Vec::new();
         for i in 0..300u64 {
@@ -1150,6 +1511,70 @@ mod tests {
         p.sort_by(sort_key);
         b.sort_by(sort_key);
         assert_eq!(p, b, "parallel single-term result must match brute force");
+    }
+
+    #[test]
+    fn bmw_matches_brute_force_random() {
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut rng = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let vocab: Vec<String> = (0..300).map(|i| format!("v{i}")).collect();
+        let mut docs: Vec<(u64, String)> = Vec::new();
+        for d in 0..6000u64 {
+            let len = 8 + (rng() % 60) as usize;
+            let text: String = (0..len)
+                .map(|_| {
+                    let r = (rng() % vocab.len() as u64) as usize;
+                    let idx = (r * r) / vocab.len();
+                    vocab[idx.min(vocab.len() - 1)].clone()
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            docs.push((d, text));
+        }
+        let snap = Bm25Snapshot::from_documents(docs.iter().map(|(i, t)| (*i, t.as_str())));
+        let bytes = encode_tbm3(&snap);
+        let view = Bm25Tbm3View::open(&bytes).unwrap();
+
+        let sort_key = |a: &(DocId, f32), b: &(DocId, f32)| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        };
+        for _ in 0..150 {
+            let qlen = 2 + (rng() % 8) as usize; // multi-term to hit BMW
+            let query: String = (0..qlen)
+                .map(|_| {
+                    let r = (rng() % vocab.len() as u64) as usize;
+                    let idx = (r * r) / vocab.len();
+                    vocab[idx.min(vocab.len() - 1)].clone()
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let k = 1 + (rng() % 25) as usize;
+            let mut got: Vec<(DocId, f32)> = {
+                let c = view.search(&query, k);
+                c.ids.into_iter().zip(c.scores).collect()
+            };
+            let mut want: Vec<(DocId, f32)> = {
+                let c = view.brute_search(&query, k);
+                c.ids.into_iter().zip(c.scores).collect()
+            };
+            got.sort_by(sort_key);
+            want.sort_by(sort_key);
+            assert_eq!(
+                got.iter().map(|x| x.0).collect::<Vec<_>>(),
+                want.iter().map(|x| x.0).collect::<Vec<_>>(),
+                "id mismatch query={query:?} k={k}"
+            );
+            for (i, (_, ws)) in want.iter().enumerate() {
+                assert!((got[i].1 - ws).abs() < 1e-3, "score mismatch query={query:?}");
+            }
+        }
     }
 
     #[test]

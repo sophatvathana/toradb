@@ -1,10 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{BinaryHeap, HashMap};
 
 use serde::{Deserialize, Serialize};
 use toradb_core::{CandidateSet, DocId};
 
 pub(crate) const K1: f32 = 1.2;
 pub(crate) const B: f32 = 0.75;
+
+pub(crate) const MAX_QUERY_TERMS: usize = 32;
 
 #[derive(Debug, Default)]
 pub struct Bm25Index {
@@ -233,6 +235,73 @@ impl Bm25Interner {
     }
 }
 
+#[inline(always)]
+fn term_doc_score(weight: f32, tf: u32, dl: f32, avg_dl: f32) -> f32 {
+    let tf = tf as f32;
+    let denom = tf + K1 * (1.0 - B + B * dl / avg_dl.max(1.0));
+    weight * (tf * (K1 + 1.0)) / denom
+}
+
+struct TermCursor<'a> {
+    posts: &'a [(DocId, u32)],
+    pos: usize,
+    weight: f32,
+    max_contrib: f32,
+}
+
+impl<'a> TermCursor<'a> {
+    #[inline(always)]
+    fn current(&self) -> Option<DocId> {
+        self.posts.get(self.pos).map(|&(id, _)| id)
+    }
+
+    #[inline]
+    fn advance_to(&mut self, target: DocId) {
+        if self.pos >= self.posts.len() || self.posts[self.pos].0 >= target {
+            return;
+        }
+        let mut step = 1usize;
+        let mut lo = self.pos;
+        while lo + step < self.posts.len() && self.posts[lo + step].0 < target {
+            lo += step;
+            step *= 2;
+        }
+        let hi = (lo + step + 1).min(self.posts.len());
+        let mut left = lo;
+        let mut right = hi;
+        while left < right {
+            let mid = left + (right - left) / 2;
+            if self.posts[mid].0 < target {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+        self.pos = left;
+    }
+}
+
+#[derive(PartialEq)]
+struct HeapItem {
+    score: f32,
+    doc: DocId,
+}
+impl Eq for HeapItem {}
+impl Ord for HeapItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other
+            .score
+            .partial_cmp(&self.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(self.doc.cmp(&other.doc))
+    }
+}
+impl PartialOrd for HeapItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 fn bm25_search(
     postings: &HashMap<String, Vec<(DocId, u32)>>,
     doc_len: &HashMap<DocId, u32>,
@@ -242,32 +311,160 @@ fn bm25_search(
     query: &str,
     k: usize,
 ) -> CandidateSet {
-    let mut scores: HashMap<DocId, f32> = HashMap::new();
+    if k == 0 {
+        return CandidateSet::default();
+    }
     let n = num_docs.max(1) as f32;
-    for term in tokenize(query) {
-        let Some(posts) = postings.get(&term) else {
-            continue;
-        };
-        let df = *doc_freq.get(&term).unwrap_or(&0) as f32;
-        let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
-        for &(doc_id, tf) in posts {
-            let dl = *doc_len.get(&doc_id).unwrap_or(&0) as f32;
-            let tf = tf as f32;
-            let denom = tf + K1 * (1.0 - B + B * dl / avg_dl.max(1.0));
-            let score = idf * (tf * (K1 + 1.0)) / denom;
-            *scores.entry(doc_id).or_default() += score;
+
+    let mut qtf: HashMap<&str, u32> = HashMap::new();
+    let toks = tokenize(query);
+    for term in &toks {
+        *qtf.entry(term.as_str()).or_default() += 1;
+    }
+
+    let mut terms: Vec<(&str, f32, f32)> = qtf
+        .into_iter()
+        .filter_map(|(term, qf)| {
+            let posts = postings.get(term)?;
+            if posts.is_empty() {
+                return None;
+            }
+            let df = *doc_freq.get(term).unwrap_or(&0) as f32;
+            let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
+            Some((term, idf, idf * qf as f32))
+        })
+        .collect();
+    if terms.is_empty() {
+        return CandidateSet::default();
+    }
+    if terms.len() > MAX_QUERY_TERMS {
+        terms.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(b.0))
+        });
+        terms.truncate(MAX_QUERY_TERMS);
+    }
+
+    let mut owned: Vec<Vec<(DocId, u32)>> = Vec::new();
+    let mut sources: Vec<(usize, f32)> = Vec::with_capacity(terms.len()); // (owned_idx or usize::MAX, weight)
+    let mut borrowed: Vec<(&[(DocId, u32)], f32)> = Vec::with_capacity(terms.len());
+    for (term, _idf, weight) in &terms {
+        let raw = &postings[*term];
+        if raw.windows(2).all(|w| w[0].0 <= w[1].0) {
+            sources.push((usize::MAX, *weight));
+            borrowed.push((raw.as_slice(), *weight));
+        } else {
+            let mut s = raw.clone();
+            s.sort_unstable_by_key(|&(id, _)| id);
+            sources.push((owned.len(), *weight));
+            owned.push(s);
         }
     }
-    let mut ranked: Vec<(DocId, f32)> = scores.into_iter().collect();
+    let mut cursors: Vec<TermCursor> = Vec::with_capacity(terms.len());
+    let mut bi = 0usize;
+    for (owned_idx, weight) in &sources {
+        let posts: &[(DocId, u32)] = if *owned_idx == usize::MAX {
+            let p = borrowed[bi].0;
+            bi += 1;
+            p
+        } else {
+            owned[*owned_idx].as_slice()
+        };
+        cursors.push(TermCursor {
+            posts,
+            pos: 0,
+            weight: *weight,
+            max_contrib: *weight * (K1 + 1.0),
+        });
+    }
+
+    let mut heap: BinaryHeap<HeapItem> = BinaryHeap::with_capacity(k + 1);
+    let mut threshold = f32::NEG_INFINITY;
+
+    #[inline(always)]
+    fn key(c: &TermCursor) -> u64 {
+        c.current().map(|id| id as u64).unwrap_or(u64::MAX)
+    }
+    #[inline]
+    fn resort(cursors: &mut [TermCursor]) {
+        for i in 1..cursors.len() {
+            let mut j = i;
+            while j > 0 && key(&cursors[j - 1]) > key(&cursors[j]) {
+                cursors.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+    }
+    resort(&mut cursors);
+
+    loop {
+        if cursors[0].current().is_none() {
+            break;
+        }
+
+        let mut acc = 0.0f32;
+        let mut pivot = None;
+        for (i, c) in cursors.iter().enumerate() {
+            if c.current().is_none() {
+                break;
+            }
+            acc += c.max_contrib;
+            if acc > threshold {
+                pivot = Some(i);
+                break;
+            }
+        }
+        let Some(pivot) = pivot else {
+            break;
+        };
+        let pivot_doc = cursors[pivot].current().unwrap();
+
+        if cursors[0].current() == Some(pivot_doc) {
+            let dl = *doc_len.get(&pivot_doc).unwrap_or(&0) as f32;
+            let mut score = 0.0f32;
+            for c in cursors.iter_mut() {
+                if c.current() == Some(pivot_doc) {
+                    let tf = c.posts[c.pos].1;
+                    score += term_doc_score(c.weight, tf, dl, avg_dl);
+                    c.pos += 1;
+                } else {
+                    break;
+                }
+            }
+            if heap.len() < k {
+                heap.push(HeapItem { score, doc: pivot_doc });
+                if heap.len() == k {
+                    threshold = heap.peek().map(|h| h.score).unwrap_or(threshold);
+                }
+            } else if score > threshold
+                || (score == threshold && heap.peek().is_some_and(|h| pivot_doc < h.doc))
+            {
+                heap.pop();
+                heap.push(HeapItem { score, doc: pivot_doc });
+                threshold = heap.peek().map(|h| h.score).unwrap_or(threshold);
+            }
+        } else {
+            for c in cursors.iter_mut() {
+                match c.current() {
+                    Some(d) if d < pivot_doc => c.advance_to(pivot_doc),
+                    _ => {}
+                }
+            }
+        }
+        resort(&mut cursors);
+    }
+
+    let mut ranked: Vec<HeapItem> = heap.into_vec();
     ranked.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
+        b.score
+            .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.0.cmp(&b.0))
+            .then(a.doc.cmp(&b.doc))
     });
-    ranked.truncate(k);
     let mut out = CandidateSet::with_capacity(ranked.len());
-    for (id, score) in ranked {
-        out.push(id, score);
+    for item in ranked {
+        out.push(item.doc, item.score);
     }
     out
 }
@@ -382,5 +579,142 @@ mod tests {
         let index = Bm25Index::from_snapshot(merged);
         assert!(!index.search("alpha", 1).is_empty());
         assert!(!index.search("gamma", 1).is_empty());
+    }
+
+    fn ranking(set: &toradb_core::CandidateSet) -> Vec<u64> {
+        set.ids.clone()
+    }
+
+    #[test]
+    fn repeated_terms_match_distinct_ranking() {
+        let snap = Bm25Snapshot::from_documents([
+            (0u64, "alpha beta gamma"),
+            (1u64, "alpha alpha beta"),
+            (2u64, "gamma delta"),
+        ]);
+        let index = Bm25Index::from_snapshot(snap);
+
+        let distinct = index.search("alpha beta", 10);
+        let repeated = index.search("alpha beta alpha beta beta", 10);
+        assert_eq!(ranking(&distinct), ranking(&repeated));
+    }
+
+    fn brute_force(index: &Bm25Index, query: &str, k: usize) -> Vec<(u64, f32)> {
+        use super::{tokenize, K1, B, MAX_QUERY_TERMS};
+        let snap = index.snapshot();
+        let n = snap.num_docs.max(1) as f32;
+        let mut qtf: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        for t in tokenize(query) {
+            *qtf.entry(t).or_default() += 1;
+        }
+        let mut terms: Vec<(String, f32, f32)> = qtf
+            .into_iter()
+            .filter(|(t, _)| snap.postings.contains_key(t))
+            .map(|(t, qf)| {
+                let df = *snap.doc_freq.get(&t).unwrap_or(&0) as f32;
+                let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
+                (t, idf, idf * qf as f32)
+            })
+            .collect();
+        if terms.len() > MAX_QUERY_TERMS {
+            terms.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1).unwrap().then(a.0.cmp(&b.0))
+            });
+            terms.truncate(MAX_QUERY_TERMS);
+        }
+        let mut scores: std::collections::HashMap<u64, f32> = std::collections::HashMap::new();
+        for (t, _idf, weight) in &terms {
+            for &(doc, tf) in &snap.postings[t] {
+                let dl = *snap.doc_len.get(&doc).unwrap_or(&0) as f32;
+                let tf = tf as f32;
+                let denom = tf + K1 * (1.0 - B + B * dl / snap.avg_dl.max(1.0));
+                *scores.entry(doc).or_default() += weight * (tf * (K1 + 1.0)) / denom;
+            }
+        }
+        let mut v: Vec<(u64, f32)> = scores.into_iter().collect();
+        v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then(a.0.cmp(&b.0)));
+        v.truncate(k);
+        v
+    }
+
+    #[test]
+    fn wand_matches_brute_force_random() {
+        let mut state = 0x9e3779b97f4a7c15u64;
+        let mut rng = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let vocab: Vec<String> = (0..200).map(|i| format!("t{i}")).collect();
+        let mut docs: Vec<(u64, String)> = Vec::new();
+        for d in 0..2000u64 {
+            let len = 5 + (rng() % 40) as usize;
+            let text: String = (0..len)
+                .map(|_| {
+                    let r = (rng() % vocab.len() as u64) as usize;
+                    let idx = (r * r) / vocab.len();
+                    vocab[idx.min(vocab.len() - 1)].clone()
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            docs.push((d, text));
+        }
+        let snap = Bm25Snapshot::from_documents(docs.iter().map(|(id, t)| (*id, t.as_str())));
+        let index = Bm25Index::from_snapshot(snap);
+
+        for _ in 0..200 {
+            let qlen = 1 + (rng() % 50) as usize;
+            let query: String = (0..qlen)
+                .map(|_| {
+                    let r = (rng() % vocab.len() as u64) as usize;
+                    let idx = (r * r) / vocab.len();
+                    vocab[idx.min(vocab.len() - 1)].clone()
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let k = 1 + (rng() % 30) as usize;
+            let got = index.search(&query, k);
+            let want = brute_force(&index, &query, k);
+            assert_eq!(got.ids, want.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+                "ranking mismatch for query={query:?} k={k}");
+            for (i, (_, ws)) in want.iter().enumerate() {
+                assert!((got.scores[i] - ws).abs() < 1e-4,
+                    "score mismatch at {i} for query={query:?}: got {} want {}", got.scores[i], ws);
+            }
+        }
+    }
+
+    #[test]
+    fn wand_handles_unsorted_postings() {
+        let a = Bm25Snapshot::from_documents([(5u64, "alpha beta"), (9u64, "alpha")]);
+        let b = Bm25Snapshot::from_documents([(2u64, "alpha beta beta"), (7u64, "beta")]);
+        let mut merged = a;
+        merged.merge(b);
+        let index = Bm25Index::from_snapshot(merged);
+        let got = index.search("alpha beta", 10);
+        let want = brute_force(&index, "alpha beta", 10);
+        assert_eq!(got.ids, want.iter().map(|(id, _)| *id).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn long_query_scores_only_highest_idf_terms() {
+        use super::MAX_QUERY_TERMS;
+        let mut docs: Vec<(u64, String)> = Vec::new();
+        let common: Vec<String> = (0..MAX_QUERY_TERMS + 20)
+            .map(|i| format!("common{i}"))
+            .collect();
+        let filler = common.join(" ");
+        for id in 0..50u64 {
+            docs.push((id, filler.clone()));
+        }
+        docs.push((999u64, "rareword filler text".to_string()));
+        let snap = Bm25Snapshot::from_documents(
+            docs.iter().map(|(id, t)| (*id, t.as_str())),
+        );
+        let index = Bm25Index::from_snapshot(snap);
+        let query = format!("rareword {filler}");
+        let res = index.search(&query, 5);
+        assert_eq!(res.ids.first(), Some(&999u64));
     }
 }
