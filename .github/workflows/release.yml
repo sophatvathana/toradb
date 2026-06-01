@@ -228,7 +228,7 @@ jobs:
           find artifacts -type f \( -name '*.whl' -o -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
           ls -la release
       - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: 'release/*'
       - name: Create GitHub Release
