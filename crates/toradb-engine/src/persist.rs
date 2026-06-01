@@ -144,6 +144,70 @@ pub fn ensure_table_on_disk(base: &Path, table: &str) -> Result<(), String> {
     TableManifestFile::default().save(&manifest_path)
 }
 
+pub fn tombstones_path(base: &Path, table: &str) -> PathBuf {
+    indexes_dir(base, table).join("tombstones.bin")
+}
+
+pub fn load_tombstones(base: &Path, table: &str) -> std::collections::HashSet<u64> {
+    let path = tombstones_path(base, table);
+    if !path.exists() {
+        return std::collections::HashSet::new();
+    }
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice::<Vec<u64>>(&bytes)
+            .map(|v| v.into_iter().collect())
+            .unwrap_or_default(),
+        Err(_) => std::collections::HashSet::new(),
+    }
+}
+
+pub fn save_tombstones(
+    base: &Path,
+    table: &str,
+    ids: &std::collections::HashSet<u64>,
+) -> Result<(), String> {
+    let path = tombstones_path(base, table);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut sorted: Vec<u64> = ids.iter().copied().collect();
+    sorted.sort_unstable();
+    let data = serde_json::to_vec(&sorted).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("bin.tmp");
+    std::fs::write(&tmp, data).map_err(|e| e.to_string())?;
+    std::fs::rename(tmp, &path).map_err(|e| e.to_string())
+}
+
+pub fn add_tombstones(base: &Path, table: &str, ids: &[u64]) -> Result<usize, String> {
+    let mut set = load_tombstones(base, table);
+    let mut newly: Vec<u64> = Vec::new();
+    for &id in ids {
+        if set.insert(id) {
+            newly.push(id);
+        }
+    }
+    if newly.is_empty() {
+        return Ok(0);
+    }
+    save_tombstones(base, table, &set)?;
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if manifest_path.exists() {
+        if let Ok(mut manifest) = TableManifestFile::load(&manifest_path) {
+            for &id in &newly {
+                if let Some(seg) = manifest
+                    .segment_meta
+                    .iter_mut()
+                    .find(|m| id >= m.min_id && id <= m.max_id)
+                {
+                    seg.deleted_count = seg.deleted_count.saturating_add(1);
+                }
+            }
+            let _ = manifest.save(&manifest_path);
+        }
+    }
+    Ok(newly.len())
+}
+
 pub fn set_table_column_types(
     base: &Path,
     table: &str,
@@ -1198,10 +1262,11 @@ pub fn table_row_count_on_disk(
     base: &Path,
     table: &str,
 ) -> Result<usize, String> {
+    let deleted = load_tombstones(base, table).len();
     if let Some(t) = store.table(table) {
         let n = t.len();
         if n > 0 {
-            return Ok(n);
+            return Ok(n.saturating_sub(deleted));
         }
     }
     let manifest_path = TableManifestFile::path_for_table(base, table);
@@ -1215,7 +1280,7 @@ pub fn table_row_count_on_disk(
             .iter()
             .map(|r| r.max_id.saturating_sub(r.min_id) + 1)
             .sum();
-        return Ok(n as usize);
+        return Ok((n as usize).saturating_sub(deleted));
     }
     let seg_dir = TableManifestFile::segments_dir(base, table);
     let mut n = 0usize;
@@ -1225,7 +1290,7 @@ pub fn table_row_count_on_disk(
             n += parquet_row_count(&path)?;
         }
     }
-    Ok(n)
+    Ok(n.saturating_sub(deleted))
 }
 
 /// In-memory corpus first; fall back to columnar Parquet scan when empty.

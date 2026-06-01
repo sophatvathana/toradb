@@ -15,6 +15,7 @@ pub enum Stmt {
     },
     CompactTable { table: String, full: bool },
     DropTable { name: String },
+    Delete { table: String, where_clause: Option<WherePred> },
     ShowTables,
     ShowMaterializedViews,
     ShowIndexes { table: String },

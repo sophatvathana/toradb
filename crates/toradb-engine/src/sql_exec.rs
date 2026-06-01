@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use toradb_core::{Batch, ExecCtx, QueryMetrics};
 use toradb_index::dense::query_embed::lexical_proxy_vector;
-use toradb_sql::ast::{SelectExpr, SelectStmt};
+use toradb_sql::ast::{CompareOp, SelectExpr, SelectStmt, WherePred};
 
 use crate::dag::DagRunner;
 use crate::join::apply_metadata_join;
@@ -11,6 +11,47 @@ use crate::metadata_filter::filter_candidates_by_where;
 use crate::olap::{run_aggregate, SqlAggregateResult};
 use crate::persist;
 use crate::table_search::{run_table_search, TableSearchOptions};
+
+fn ids_from_delete_pred(pred: &WherePred) -> Result<Vec<u64>, String> {
+    fn parse_id(s: &str) -> Result<u64, String> {
+        s.trim()
+            .parse::<u64>()
+            .map_err(|_| format!("DELETE id value must be an integer, got '{s}'"))
+    }
+    match pred {
+        WherePred::Compare { column, op, value } if column == "id" => {
+            if !matches!(op, CompareOp::Eq) {
+                return Err("DELETE only supports `id = N` or `id IN (...)`".into());
+            }
+            Ok(vec![parse_id(value)?])
+        }
+        WherePred::In { column, values } if column == "id" => {
+            values.iter().map(|v| parse_id(v)).collect()
+        }
+        WherePred::Or(parts) => {
+            let mut ids = Vec::new();
+            for p in parts {
+                ids.extend(ids_from_delete_pred(p)?);
+            }
+            Ok(ids)
+        }
+        _ => Err(
+            "DELETE WHERE supports only `id = N` or `id IN (...)` in this version".into(),
+        ),
+    }
+}
+
+pub fn run_delete(
+    dag: &mut DagRunner,
+    table: &str,
+    where_clause: Option<&WherePred>,
+) -> Result<usize, String> {
+    let Some(pred) = where_clause else {
+        return Err("DELETE requires a WHERE clause (use DROP TABLE to remove all rows)".into());
+    };
+    let ids = ids_from_delete_pred(pred)?;
+    dag.delete_by_ids(&table.to_lowercase(), &ids)
+}
 
 fn expand_cte_select(sel: &SelectStmt) -> Result<SelectStmt, String> {
     expand_cte_select_depth(sel, 2)
@@ -230,7 +271,130 @@ pub fn run_select(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSelectResu
     if is_analytics_select(&sel) {
         return Ok(SqlSelectResult::Aggregate(run_aggregate(dag, &sel)?));
     }
+    if !has_sparse(&sel) && !has_vector(&sel) {
+        return Ok(SqlSelectResult::Search(run_scan(dag, &sel)?));
+    }
     Ok(SqlSelectResult::Search(run_search(dag, &sel)?))
+}
+
+pub(crate) fn run_scan(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSearchResult, String> {
+    dag.ensure_table(&sel.table);
+
+    let mut ids: Vec<u64> = match sel.where_clause.as_ref().and_then(direct_id_lookup) {
+        Some(direct) => direct,
+        None => {
+            let mut acc = Vec::new();
+            dag.scan_table_id_metadata(&sel.table, |id, _meta| {
+                acc.push(id);
+                Ok(())
+            })?;
+            acc
+        }
+    };
+    ids.sort_unstable();
+
+    let mut candidates = toradb_core::CandidateSet {
+        ids,
+        scores: Vec::new(),
+    };
+    candidates.scores = vec![0.0; candidates.ids.len()];
+
+    if let Some(ref pred) = sel.where_clause {
+        filter_candidates_by_where(dag, &sel.table, pred, &mut candidates)?;
+    }
+    if let Some(ref join) = sel.join {
+        apply_metadata_join(dag, &sel.table, join, &mut candidates)?;
+    }
+
+    let order_by_metadata = sel.order_by.as_ref().filter(|ob| ob.column != "score");
+    let shared_docs: Option<HashMap<u64, toradb_index::IngestDoc>> =
+        if order_by_metadata.is_some() || sel.distinct {
+            Some(dag.fetch_documents(&sel.table, &candidates.ids)?.into_iter().collect())
+        } else {
+            None
+        };
+    if let Some(ob) = order_by_metadata {
+        let docs = shared_docs.as_ref().expect("metadata fetched for ORDER BY");
+        let col_types = dag.column_types_for(&sel.table);
+        let ty = col_types
+            .get(&ob.column)
+            .copied()
+            .unwrap_or(toradb_core::ColumnType::Text);
+        let mut idx: Vec<usize> = (0..candidates.ids.len()).collect();
+        idx.sort_by(|&a, &b| {
+            let va = docs
+                .get(&candidates.ids[a])
+                .and_then(|d| d.metadata.get(&ob.column))
+                .map(String::as_str)
+                .unwrap_or("");
+            let vb = docs
+                .get(&candidates.ids[b])
+                .and_then(|d| d.metadata.get(&ob.column))
+                .map(String::as_str)
+                .unwrap_or("");
+            let ord = toradb_core::typed_cmp(ty, va, vb).unwrap_or_else(|| va.cmp(vb));
+            if ob.descending { ord.reverse() } else { ord }
+        });
+        candidates.reorder(&idx);
+    }
+
+    if sel.distinct {
+        let docs = shared_docs.as_ref();
+        let cols = resolve_retrieval_columns(sel)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut keep = Vec::with_capacity(candidates.ids.len());
+        for (i, id) in candidates.ids.iter().enumerate() {
+            let key: Vec<String> = cols
+                .iter()
+                .map(|c| match c.as_str() {
+                    "id" => id.to_string(),
+                    "score" => "0".into(),
+                    "text" => docs.and_then(|m| m.get(id)).map(|d| d.text.clone()).unwrap_or_default(),
+                    meta => docs
+                        .and_then(|m| m.get(id))
+                        .and_then(|d| d.metadata.get(meta))
+                        .cloned()
+                        .unwrap_or_default(),
+                })
+                .collect();
+            if seen.insert(key) {
+                keep.push(i);
+            }
+        }
+        candidates.retain_indices(&keep);
+    }
+
+    let limit = sel.limit.max(1) as usize;
+    let offset = sel.offset as usize;
+    let page = candidates.slice_range(offset, limit);
+    let projected = project_retrieval_columns(dag, &sel.table, sel, &page.ids, &page.scores)?;
+    Ok(SqlSearchResult {
+        ids: page.ids,
+        scores: page.scores,
+        projected,
+        metrics: QueryMetrics::default(),
+        explain_text: None,
+    })
+}
+
+fn direct_id_lookup(pred: &WherePred) -> Option<Vec<u64>> {
+    match pred {
+        WherePred::Compare { column, op: CompareOp::Eq, value } if column == "id" => {
+            value.trim().parse::<u64>().ok().map(|id| vec![id])
+        }
+        WherePred::In { column, values } if column == "id" => values
+            .iter()
+            .map(|v| v.trim().parse::<u64>().ok())
+            .collect::<Option<Vec<u64>>>(),
+        WherePred::Or(parts) => {
+            let mut out = Vec::new();
+            for p in parts {
+                out.extend(direct_id_lookup(p)?);
+            }
+            Some(out)
+        }
+        _ => None,
+    }
 }
 
 pub fn explain_plan(dag: &DagRunner, sel: &SelectStmt) -> Result<String, String> {
@@ -267,10 +431,21 @@ pub fn explain_plan(dag: &DagRunner, sel: &SelectStmt) -> Result<String, String>
     let sparse = has_sparse(sel);
     let vector = has_vector(sel);
     if !sparse && !vector {
-        return Err(
-            "SELECT retrieval requires SPARSE SEARCH ... BM25('query') and/or VECTOR SEARCH ... ANN([...])"
-                .into(),
-        );
+        let by_id = sel
+            .where_clause
+            .as_ref()
+            .map(|p| direct_id_lookup(p).is_some())
+            .unwrap_or(false);
+        let mode = if by_id { "id_lookup" } else { "full" };
+        return Ok(format!(
+            "TableScan(table={} mode={mode} where={} order_by={:?} distinct={} limit={} offset={})",
+            sel.table,
+            sel.where_clause.is_some(),
+            sel.order_by,
+            sel.distinct,
+            sel.limit.max(1),
+            sel.offset
+        ));
     }
 
     let dense_backend = if vector && !sparse && dag.table_has_diskann_sidecar(&sel.table) {

@@ -874,6 +874,18 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             out.push(Stmt::AlterTableSetSegmentWorkers { table, workers });
             continue;
         }
+        if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "DELETE") {
+            i += 1;
+            expect_ident(&tokens, &mut i, "FROM")?;
+            let (_ns, table) = parse_qualified_table(&tokens, &mut i)?;
+            let where_clause = if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "WHERE") {
+                Some(parse_where_clause(&tokens, &mut i)?)
+            } else {
+                None
+            };
+            out.push(Stmt::Delete { table, where_clause });
+            continue;
+        }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "DROP") {
             if matches!(tokens.get(i + 1), Some(Token::Ident(k)) if k == "MATERIALIZED")
                 && matches!(tokens.get(i + 2), Some(Token::Ident(k)) if k == "VIEW")

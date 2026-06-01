@@ -487,12 +487,38 @@ fn split_batch_at(batch: &RecordBatch, cutoff: u64) -> (Option<RecordBatch>, Opt
     (Some(left), Some(right))
 }
 
+fn filter_batch_by_deleted(
+    batch: &RecordBatch,
+    deleted: &std::collections::HashSet<u64>,
+) -> Option<RecordBatch> {
+    if deleted.is_empty() {
+        return None;
+    }
+    let ids = batch
+        .column_by_name("id")?
+        .as_any()
+        .downcast_ref::<arrow::array::UInt64Array>()?;
+    let keep: Vec<bool> = (0..ids.len()).map(|i| !deleted.contains(&ids.value(i))).collect();
+    if keep.iter().all(|&k| k) {
+        return None; // nothing deleted in this batch
+    }
+    let mask = arrow::array::BooleanArray::from(keep);
+    let cols: Vec<arrow::array::ArrayRef> = batch
+        .columns()
+        .iter()
+        .map(|c| arrow::compute::filter(c, &mask))
+        .collect::<Result<_, _>>()
+        .ok()?;
+    RecordBatch::try_new(batch.schema(), cols).ok()
+}
+
 fn merge_segments_streaming(
     seg_paths: &[PathBuf],
     out_path: &Path,
     compression: Option<&toradb_core::CompressionConfig>,
     batch_size: usize,
     canonical_schema: &Arc<Schema>,
+    deleted: &std::collections::HashSet<u64>,
 ) -> Result<(u64, u64, u64), String> {
     if seg_paths.is_empty() {
         return Err("merge_segments_streaming: no source segments".into());
@@ -561,6 +587,10 @@ fn merge_segments_streaming(
 
             if peeked_max < next_min {
                 if let Some(batch) = sources[idx].take_batch() {
+                    let batch = filter_batch_by_deleted(&batch, deleted).unwrap_or(batch);
+                    if batch.num_rows() == 0 {
+                        continue;
+                    }
                     if let Some(bmin) = batch_min_id(&batch) {
                         if bmin < global_min { global_min = bmin; }
                     }
@@ -576,15 +606,18 @@ fn merge_segments_streaming(
                 let batch = sources[idx].peeked.take().unwrap();
                 let (left, right) = split_batch_at(&batch, next_min);
                 if let Some(left) = left {
-                    if let Some(bmin) = batch_min_id(&left) {
-                        if bmin < global_min { global_min = bmin; }
+                    let left = filter_batch_by_deleted(&left, deleted).unwrap_or(left);
+                    if left.num_rows() > 0 {
+                        if let Some(bmin) = batch_min_id(&left) {
+                            if bmin < global_min { global_min = bmin; }
+                        }
+                        if let Some(bmax) = batch_max_id(&left) {
+                            if bmax > global_max { global_max = bmax; }
+                        }
+                        row_count += left.num_rows() as u64;
+                        let left = cast_batch_to_canonical(&left, &schema)?;
+                        writer.write(&left).map_err(|e| e.to_string())?;
                     }
-                    if let Some(bmax) = batch_max_id(&left) {
-                        if bmax > global_max { global_max = bmax; }
-                    }
-                    row_count += left.num_rows() as u64;
-                    let left = cast_batch_to_canonical(&left, &schema)?;
-                    writer.write(&left).map_err(|e| e.to_string())?;
                 }
                 sources[idx].peeked = right;
                 sources[idx].min_id = sources[idx]
@@ -650,6 +683,14 @@ pub fn compact_table_segments(
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
+    let tombstones_path = base.join(table).join("indexes").join("tombstones.bin");
+    let deleted: std::collections::HashSet<u64> = std::fs::read(&tombstones_path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Vec<u64>>(&b).ok())
+        .map(|v| v.into_iter().collect())
+        .unwrap_or_default();
+    let mut reclaimed: Vec<u64> = Vec::new();
+
     for candidate in candidates {
         let group = candidate.group;
         if group.segments.len() < 2 {
@@ -667,6 +708,28 @@ pub fn compact_table_segments(
         let new_name = next_segment_name(&manifest);
         let new_path = seg_dir.join(&new_name);
 
+        if !deleted.is_empty() {
+            let group_min = group
+                .segments
+                .iter()
+                .filter_map(|s| manifest.segment_meta.iter().find(|m| &m.file == s))
+                .map(|m| m.min_id)
+                .min()
+                .unwrap_or(0);
+            let group_max = group
+                .segments
+                .iter()
+                .filter_map(|s| manifest.segment_meta.iter().find(|m| &m.file == s))
+                .map(|m| m.max_id)
+                .max()
+                .unwrap_or(u64::MAX);
+            for &id in &deleted {
+                if id >= group_min && id <= group_max {
+                    reclaimed.push(id);
+                }
+            }
+        }
+
         let canonical = crate::columnar::table_doc_schema(&manifest.column_types);
         let (min_id, max_id, row_count) = merge_segments_streaming(
             &seg_paths,
@@ -674,6 +737,7 @@ pub fn compact_table_segments(
             manifest.compression.as_ref(),
             policy.merge_batch_size,
             &canonical,
+            &deleted,
         )?;
 
         let byte_size = new_path.metadata().map(|m| m.len()).unwrap_or(0);
@@ -711,6 +775,24 @@ pub fn compact_table_segments(
     }
 
     manifest.save(&manifest_path)?;
+
+    if !reclaimed.is_empty() {
+        let remaining: Vec<u64> = {
+            let reclaimed_set: std::collections::HashSet<u64> = reclaimed.into_iter().collect();
+            let mut v: Vec<u64> = deleted
+                .into_iter()
+                .filter(|id| !reclaimed_set.contains(id))
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        if remaining.is_empty() {
+            let _ = std::fs::remove_file(&tombstones_path);
+        } else if let Ok(data) = serde_json::to_vec(&remaining) {
+            let _ = std::fs::write(&tombstones_path, data);
+        }
+    }
+
     report.segments_after = manifest.segments.len();
     Ok(report)
 }
@@ -921,7 +1003,7 @@ mod tests {
         let out = seg_dir.join("merged.parquet");
         let schema = crate::columnar::table_doc_schema(&[]);
         let (min_id, max_id, row_count) =
-            merge_segments_streaming(&paths, &out, None, 4096, &schema).unwrap();
+            merge_segments_streaming(&paths, &out, None, 4096, &schema, &std::collections::HashSet::new()).unwrap();
 
         assert_eq!(min_id, 0);
         assert_eq!(max_id, 14);

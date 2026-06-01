@@ -175,7 +175,8 @@ pub fn filter_candidates_by_where(
     if candidates.is_empty() {
         return Ok(());
     }
-    let col_types = dag.column_types_for(table);
+    let mut col_types = dag.column_types_for(table);
+    col_types.insert("id".to_string(), ColumnType::Int);
     let ids = candidates.ids.clone();
     let docs: HashMap<u64, _> = dag
         .fetch_documents(table, &ids)?
@@ -187,7 +188,9 @@ pub fn filter_candidates_by_where(
         let Some(doc) = docs.get(id) else {
             continue;
         };
-        if metadata_matches(pred, &doc.metadata, &col_types) {
+        let mut meta = doc.metadata.clone();
+        meta.insert("id".to_string(), id.to_string());
+        if metadata_matches(pred, &meta, &col_types) {
             kept_ids.push(*id);
             kept_scores.push(candidates.scores[i]);
         }

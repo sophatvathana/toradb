@@ -294,6 +294,14 @@ impl Database {
                         idx.name, idx.column, idx.using
                     )));
                 }
+                Stmt::Delete { table, where_clause } => {
+                    let n = sql_exec::run_delete(&mut self.dag, table, where_clause.as_ref())
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                    return Ok(SqlOutcome::Message(format!(
+                        "ok: deleted {n} rows from {}",
+                        table.to_lowercase()
+                    )));
+                }
                 Stmt::DropTable { name } => {
                     let table = name.to_lowercase();
                     self.dag

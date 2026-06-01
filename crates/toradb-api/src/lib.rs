@@ -361,6 +361,7 @@ pub fn serve_blocking(config: ServeConfig) -> Result<(), String> {
         .route("/api/tables/{name}/finish", post(table_finish))
         .route("/api/tables/{name}/resume", post(table_resume))
         .route("/api/tables/{name}/drop", post(table_drop))
+        .route("/api/tables/{name}/delete", post(table_delete))
         .route("/api/tables/{name}/compact", post(table_compact))
         .route("/api/tables/{name}/ddl", get(table_ddl))
         .route("/api/tables/{name}/indexes", get(table_indexes))
@@ -1372,6 +1373,11 @@ fn execute_sql(
             *dag = fresh;
             message_response("ddl", &format!("ok: dropped table {table}"), started)
         }
+        Stmt::Delete { table, where_clause } => {
+            let n = sql_exec::run_delete(&mut dag, table, where_clause.as_ref())
+                .map_err(ApiError::bad_request)?;
+            message_response("delete", &format!("ok: deleted {n} rows from {table}"), started)
+        }
         Stmt::Describe { name } => {
             let table = name.to_lowercase();
             let text = if materialized::is_materialized_view(&state.db_path, &table) {
@@ -1675,6 +1681,33 @@ async fn table_drop(
     let mut dag = state.dag.lock().map_err(|_| ApiError::internal("lock"))?;
     *dag = fresh;
     Ok(Json(serde_json::json!({ "dropped": name })))
+}
+
+#[derive(Deserialize)]
+struct DeleteBody {
+    ids: Vec<u64>,
+}
+
+/// Soft-delete documents by id: `POST /api/tables/{name}/delete  {"ids":[..]}`.
+async fn table_delete(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+    Json(body): Json<DeleteBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let table = name.to_lowercase();
+    let mut dag = state.dag.lock().map_err(|_| ApiError::internal("lock"))?;
+    if !dag
+        .list_tables()
+        .map_err(ApiError::internal)?
+        .iter()
+        .any(|t| t == &table)
+    {
+        return Err(ApiError::not_found(format!("table not found: {table}")));
+    }
+    let deleted = dag
+        .delete_by_ids(&table, &body.ids)
+        .map_err(ApiError::internal)?;
+    Ok(Json(serde_json::json!({ "table": table, "deleted": deleted })))
 }
 
 async fn ingest_begin(

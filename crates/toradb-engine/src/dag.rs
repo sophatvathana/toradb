@@ -33,6 +33,7 @@ pub struct DagRunner {
     db_path: Option<DbPath>,
     bulk_tables: HashSet<String>,
     bulk_disk_state: HashMap<String, BulkDiskState>,
+    tombstones: HashMap<String, HashSet<u64>>,
     /// When set, `DISTRIBUTED` uses multi-node segment RPC instead of local rayon only.
     cluster: Option<ClusterClient>,
 }
@@ -51,6 +52,7 @@ impl DagRunner {
             db_path: None,
             bulk_tables: HashSet::new(),
             bulk_disk_state: HashMap::new(),
+            tombstones: HashMap::new(),
             cluster: ClusterClient::from_env(),
         }
     }
@@ -523,10 +525,44 @@ impl DagRunner {
     pub fn scan_table_id_metadata(
         &self,
         table: &str,
-        f: impl FnMut(u64, &std::collections::HashMap<String, String>) -> Result<(), String>,
+        mut f: impl FnMut(u64, &std::collections::HashMap<String, String>) -> Result<(), String>,
     ) -> Result<(), String> {
         let base = self.db_path().map(|p| p.to_path_buf());
-        crate::persist::scan_table_id_metadata(&self.retrieval.store, base.as_deref(), table, f)
+        let deleted = base
+            .as_deref()
+            .map(|b| crate::persist::load_tombstones(b, table))
+            .unwrap_or_default();
+        let wrapped = |id: u64, meta: &std::collections::HashMap<String, String>| {
+            if deleted.contains(&id) {
+                return Ok(());
+            }
+            f(id, meta)
+        };
+        crate::persist::scan_table_id_metadata(&self.retrieval.store, base.as_deref(), table, wrapped)
+    }
+
+    fn tombstones_for(&mut self, table: &str) -> &HashSet<u64> {
+        if !self.tombstones.contains_key(table) {
+            let set = match self.db_path.as_ref() {
+                Some(p) => persist::load_tombstones(p.as_path(), table),
+                None => HashSet::new(),
+            };
+            self.tombstones.insert(table.to_string(), set);
+        }
+        self.tombstones.get(table).expect("just inserted")
+    }
+
+    pub fn delete_by_ids(&mut self, table: &str, ids: &[u64]) -> Result<usize, String> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let Some(path) = self.db_path.as_ref().map(|p| p.as_path().to_path_buf()) else {
+            return Err("DELETE requires a local on-disk database".into());
+        };
+        let n = persist::add_tombstones(&path, table, ids)?;
+        // Invalidate cache so the next read reloads the updated set.
+        self.tombstones.remove(table);
+        Ok(n)
     }
 
     /// Row count without loading full Parquet when the table is segment-only on disk.
@@ -534,7 +570,12 @@ impl DagRunner {
         if let Some(t) = self.retrieval.store.table(table) {
             let n = t.len();
             if n > 0 {
-                return Ok(n);
+                let deleted = self
+                    .db_path
+                    .as_ref()
+                    .map(|p| crate::persist::load_tombstones(p.as_path(), table).len())
+                    .unwrap_or(0);
+                return Ok(n.saturating_sub(deleted));
             }
         }
         if let Some(ref path) = self.db_path {
@@ -554,13 +595,21 @@ impl DagRunner {
         ids: &[u64],
     ) -> Result<Vec<(u64, toradb_index::IngestDoc)>, String> {
         let base = self.db_path().map(|p| p.to_path_buf());
-        crate::persist::fetch_documents_by_ids(
+        let docs = crate::persist::fetch_documents_by_ids(
             &self.retrieval.store,
             base.as_deref(),
             table,
             ids,
             Some(&mut self.caches),
-        )
+        )?;
+        let deleted = base
+            .as_deref()
+            .map(|b| crate::persist::load_tombstones(b, table))
+            .unwrap_or_default();
+        if deleted.is_empty() {
+            return Ok(docs);
+        }
+        Ok(docs.into_iter().filter(|(id, _)| !deleted.contains(id)).collect())
     }
 
     pub fn run(&mut self, batch: &mut Batch, ctx: &ExecCtx) -> QueryMetrics {
@@ -580,8 +629,15 @@ impl DagRunner {
                 .expand_query_terms(&batch.table, &batch.query);
         }
 
+        let tombstones: HashSet<u64> = if batch.table.is_empty() {
+            HashSet::new()
+        } else {
+            self.tombstones_for(&batch.table).clone()
+        };
+
         let tier1_start = std::time::Instant::now();
         self.retrieval.run_tier1(batch, ctx);
+        batch.candidates.remove_ids(&tombstones);
         metrics.tier1_candidates = batch.candidates.len() as u32;
         let t1 = lower_tier1();
         let _ = t1.execute(batch, ctx);

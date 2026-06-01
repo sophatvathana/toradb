@@ -69,6 +69,22 @@ impl CandidateSet {
         self.reorder(keep);
     }
 
+    pub fn remove_ids(&mut self, deleted: &std::collections::HashSet<DocId>) {
+        if deleted.is_empty() || self.ids.is_empty() {
+            return;
+        }
+        let mut new_ids = Vec::with_capacity(self.ids.len());
+        let mut new_scores = Vec::with_capacity(self.ids.len());
+        for (i, &id) in self.ids.iter().enumerate() {
+            if !deleted.contains(&id) {
+                new_ids.push(id);
+                new_scores.push(self.scores[i]);
+            }
+        }
+        self.ids = new_ids;
+        self.scores = new_scores;
+    }
+
     pub fn slice_range(&self, offset: usize, limit: usize) -> Self {
         if offset >= self.len() {
             return Self::default();
