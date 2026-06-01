@@ -30,74 +30,85 @@ jobs:
   # ---- Python wheels ----
   linux:
     needs: test
-    runs-on: ${{ matrix.platform.runner }}
+    name: linux (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
-    env:
-      MATURIN_BUILD_ARGS: --release --out dist -i python3.12
     strategy:
       fail-fast: false
       matrix:
-        platform:
+        include:
+          # x86_64: manylinux cross image on Intel runner.
           - runner: ubuntu-22.04
             target: x86_64
-          - runner: ubuntu-22.04
+            maturin_args: --release --out dist -i python3.12
+            container: ''
+            sccache: true
+          # aarch64: native ARM runner — QEMU cross-compile breaks ring (__ARM_ARCH).
+          - runner: ubuntu-24.04-arm
             target: aarch64
+            maturin_args: --release --out dist -i python3.12 --compatibility manylinux_2_28
+            container: 'off'
+            sccache: true
     steps:
       - uses: actions/checkout@v4
-      # Required for non-x86_64 manylinux cross builds (aarch64).
-      - uses: docker/setup-qemu-action@v3
-        if: matrix.platform.target != 'x86_64'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Build wheels
+      - name: Build wheels (manylinux docker)
+        if: matrix.container != 'off'
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.platform.target }}
-          args: ${{ env.MATURIN_BUILD_ARGS }}
+          target: ${{ matrix.target }}
+          args: ${{ matrix.maturin_args }}
           rust-toolchain: stable
-          # sccache breaks ring's aarch64 assembly under QEMU cross-compile (cc-rs + .S files).
-          sccache: ${{ matrix.platform.target == 'x86_64' }}
+          sccache: ${{ matrix.sccache }}
           manylinux: auto
+      - name: Build wheels (native aarch64)
+        if: matrix.container == 'off'
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: ${{ matrix.maturin_args }}
+          rust-toolchain: stable
+          sccache: ${{ matrix.sccache }}
+          container: off
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-${{ matrix.platform.target }}
+          name: wheels-linux-${{ matrix.target }}
           path: dist
 
   musllinux:
     needs: test
-    runs-on: ${{ matrix.platform.runner }}
+    name: musllinux (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
-    env:
-      MATURIN_BUILD_ARGS: --release --out dist -i python3.12
     strategy:
       fail-fast: false
       matrix:
-        platform:
+        include:
           - runner: ubuntu-22.04
             target: x86_64
-          - runner: ubuntu-22.04
+          # aarch64 musllinux: native ARM runner + musllinux docker (no QEMU cross).
+          - runner: ubuntu-24.04-arm
             target: aarch64
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-        if: matrix.platform.target != 'x86_64'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.platform.target }}
-          args: ${{ env.MATURIN_BUILD_ARGS }}
+          target: ${{ matrix.target }}
+          args: --release --out dist -i python3.12
           rust-toolchain: stable
-          sccache: ${{ matrix.platform.target == 'x86_64' }}
+          sccache: true
           manylinux: musllinux_1_2
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-musllinux-${{ matrix.platform.target }}
+          name: wheels-musllinux-${{ matrix.target }}
           path: dist
 
   windows:
