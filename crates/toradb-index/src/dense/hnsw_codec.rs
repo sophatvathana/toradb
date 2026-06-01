@@ -1,7 +1,7 @@
 //! Compact on-disk HNSW graph snapshot (magic `THM1` + rkyv payload).
 
-use crate::index_blob;
 use super::hnsw_index::HnswIndex;
+use crate::index_blob;
 
 pub const HNSW_MAGIC: &[u8; 4] = b"THM1";
 

@@ -23,7 +23,10 @@ fn manifest_segment_workers_cap_parallel_scan() {
     persist::mark_table_segment_only(base, "docs").expect("segment_only");
     persist::rebuild_segment_sidecars(base, "docs", true, false).expect("sidecars");
     persist::set_table_segment_workers(base, "docs", 2).expect("set workers");
-    assert_eq!(persist::table_segment_workers(base, "docs").expect("read"), 2);
+    assert_eq!(
+        persist::table_segment_workers(base, "docs").expect("read"),
+        2
+    );
 
     let mut dag = DagRunner::open_with_reload(&dir, false).expect("reopen");
     let mut batch = toradb_core::Batch::new();
@@ -42,7 +45,10 @@ fn manifest_segment_workers_cap_parallel_scan() {
     };
     assert_eq!(*workers, 6);
     dag.set_segment_workers("docs", *workers).expect("apply");
-    assert_eq!(persist::table_segment_workers(base, "docs").expect("read"), 6);
+    assert_eq!(
+        persist::table_segment_workers(base, "docs").expect("read"),
+        6
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

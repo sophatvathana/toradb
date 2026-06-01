@@ -165,7 +165,11 @@ impl TableManifestFile {
         if !self.segments.contains(&meta.file) {
             self.segments.push(meta.file.clone());
         }
-        if let Some(r) = self.segment_id_ranges.iter_mut().find(|r| r.file == meta.file) {
+        if let Some(r) = self
+            .segment_id_ranges
+            .iter_mut()
+            .find(|r| r.file == meta.file)
+        {
             r.min_id = meta.min_id;
             r.max_id = meta.max_id;
         } else {
@@ -369,16 +373,32 @@ mod tests {
         let path = dir.path().join("manifest.json");
         let mut manifest = TableManifestFile::default();
         manifest.set_column_types(vec![
-            ("published".to_string(), toradb_core::ColumnTypeSpec::new(toradb_core::ColumnType::Date)),
-            ("rank".to_string(), toradb_core::ColumnTypeSpec::new(toradb_core::ColumnType::Int)),
+            (
+                "published".to_string(),
+                toradb_core::ColumnTypeSpec::new(toradb_core::ColumnType::Date),
+            ),
+            (
+                "rank".to_string(),
+                toradb_core::ColumnTypeSpec::new(toradb_core::ColumnType::Int),
+            ),
         ]);
         manifest.save(&path).unwrap();
         let raw: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(raw["schema_version"], 4);
         let parsed = TableManifestFile::load(&path).unwrap();
-        assert_eq!(parsed.column_type("PUBLISHED"), Some(toradb_core::ColumnTypeSpec::new(toradb_core::ColumnType::Date)));
-        assert_eq!(parsed.column_type("rank"), Some(toradb_core::ColumnTypeSpec::new(toradb_core::ColumnType::Int)));
+        assert_eq!(
+            parsed.column_type("PUBLISHED"),
+            Some(toradb_core::ColumnTypeSpec::new(
+                toradb_core::ColumnType::Date
+            ))
+        );
+        assert_eq!(
+            parsed.column_type("rank"),
+            Some(toradb_core::ColumnTypeSpec::new(
+                toradb_core::ColumnType::Int
+            ))
+        );
         assert_eq!(parsed.column_type("missing"), None);
     }
 

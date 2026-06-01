@@ -3,20 +3,20 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use rayon::prelude::*;
+use toradb_core::{CandidateSet, DocId};
 use toradb_index::dense::{diskann_codec, hnsw_codec, quant_codec, turboquant_codec, vector_codec};
+use toradb_index::sparse::bm25::tokenize;
 use toradb_index::sparse::bm25_lexicon::{self, Bm25LexiconView};
 use toradb_index::sparse::bm25_route::{self, Bm25RouteView};
 use toradb_index::sparse::bm25_tbm3;
-use toradb_index::sparse::bm25::tokenize;
-use toradb_core::{CandidateSet, DocId};
 use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
+use toradb_storage::cache::{get_or_mmap, read_segment_cached, CachedBm25Segment, StorageCaches};
 use toradb_storage::columnar::{
     bm25_snapshot_from_segment, parquet_row_count, read_segment, read_segment_id_bounds,
     read_segment_matching_ids, scan_segment_id_metadata, segment_uses_legacy_layout,
-    write_segment_with_compression,
-    ColumnarDoc, IndexMode, QueryMode, SegmentMeta, TableManifestFile, ROUTED_QUERY_MIN_SEGMENTS,
+    write_segment_with_compression, ColumnarDoc, IndexMode, QueryMode, SegmentMeta,
+    TableManifestFile, ROUTED_QUERY_MIN_SEGMENTS,
 };
-use toradb_storage::cache::{get_or_mmap, read_segment_cached, CachedBm25Segment, StorageCaches};
 use toradb_storage::compaction::{self, CompactMode, CompactPolicy, CompactReport};
 use toradb_storage::wal;
 
@@ -134,7 +134,6 @@ pub fn table_query_mode(base: &Path, table: &str) -> Result<QueryMode, String> {
     }
     Ok(TableManifestFile::load(&path)?.query_mode)
 }
-
 
 pub fn ensure_table_on_disk(base: &Path, table: &str) -> Result<(), String> {
     let manifest_path = TableManifestFile::path_for_table(base, table);
@@ -269,15 +268,14 @@ pub fn format_alter_column_type_message(
     needs_rewrite: bool,
     compact_note: Option<&str>,
 ) -> String {
-    let mut msg = format!(
-        "ok: set column {column} type {} on {table}",
-        ty.sql_name()
-    );
+    let mut msg = format!("ok: set column {column} type {} on {table}", ty.sql_name());
     if let Some(note) = compact_note {
         msg.push_str("; ");
         msg.push_str(note);
     } else if needs_rewrite {
-        msg.push_str(&format!(" (run COMPACT TABLE {table} FULL to rewrite segments)"));
+        msg.push_str(&format!(
+            " (run COMPACT TABLE {table} FULL to rewrite segments)"
+        ));
     }
     msg
 }
@@ -438,9 +436,9 @@ fn snapshot_for_columnar_turboquant(
         return None;
     }
 
-    let seed = pairs
-        .iter()
-        .fold(0u64, |acc, (id, _)| acc.wrapping_mul(0x9E37).wrapping_add(*id));
+    let seed = pairs.iter().fold(0u64, |acc, (id, _)| {
+        acc.wrapping_mul(0x9E37).wrapping_add(*id)
+    });
     turboquant_codec::TurboQuantSnapshot::from_pairs(
         &pairs,
         mode,
@@ -463,17 +461,26 @@ fn save_segment_turboquant_sidecar(
     )
 }
 
-fn load_bm25_snapshot_mmap(path: &Path, caches: Option<&mut StorageCaches>) -> Result<Bm25Snapshot, String> {
+fn load_bm25_snapshot_mmap(
+    path: &Path,
+    caches: Option<&mut StorageCaches>,
+) -> Result<Bm25Snapshot, String> {
     let mmap = get_or_mmap(path, caches)?;
     bm25_tbm3::snapshot_from_tbm3(mmap.as_ref())
 }
 
-fn load_vector_snapshot_mmap(path: &Path, caches: Option<&mut StorageCaches>) -> Result<VectorSnapshot, String> {
+fn load_vector_snapshot_mmap(
+    path: &Path,
+    caches: Option<&mut StorageCaches>,
+) -> Result<VectorSnapshot, String> {
     let mmap = get_or_mmap(path, caches)?;
     vector_codec::decode_snapshot(mmap.as_ref())
 }
 
-fn load_hnsw_index_mmap(path: &Path, caches: Option<&mut StorageCaches>) -> Result<toradb_index::dense::hnsw_index::HnswIndex, String> {
+fn load_hnsw_index_mmap(
+    path: &Path,
+    caches: Option<&mut StorageCaches>,
+) -> Result<toradb_index::dense::hnsw_index::HnswIndex, String> {
     let mmap = get_or_mmap(path, caches)?;
     hnsw_codec::decode_index(mmap.as_ref())
 }
@@ -498,7 +505,10 @@ pub fn load_table_hnsw_sidecar(
     Ok(None)
 }
 
-fn load_diskann_index_mmap(path: &Path, caches: Option<&mut StorageCaches>) -> Result<toradb_index::dense::hnsw_index::HnswIndex, String> {
+fn load_diskann_index_mmap(
+    path: &Path,
+    caches: Option<&mut StorageCaches>,
+) -> Result<toradb_index::dense::hnsw_index::HnswIndex, String> {
     let mmap = get_or_mmap(path, caches)?;
     diskann_codec::decode_index(mmap.as_ref())
 }
@@ -609,15 +619,9 @@ pub fn save_segment_bm25_sidecar(
     segment_parquet: &str,
     snap: &Bm25Snapshot,
 ) -> Result<(), String> {
-    bm25_tbm3::write_tbm3_file(
-        &segment_bm25_bin_path(base, table, segment_parquet),
-        snap,
-    )?;
+    bm25_tbm3::write_tbm3_file(&segment_bm25_bin_path(base, table, segment_parquet), snap)?;
     let terms = bm25_lexicon::terms_from_posting_keys(snap.postings.keys().map(|s| s.as_str()));
-    bm25_lexicon::write_lexicon_file(
-        &segment_bm25_lex_path(base, table, segment_parquet),
-        &terms,
-    )
+    bm25_lexicon::write_lexicon_file(&segment_bm25_lex_path(base, table, segment_parquet), &terms)
 }
 
 pub fn save_table_vector_sidecar(
@@ -1141,10 +1145,7 @@ fn save_segment_quant_sidecar(
     segment_parquet: &str,
     snap: &quant_codec::QuantVectorSnapshot,
 ) -> Result<(), String> {
-    quant_codec::write_snapshot_file(
-        &segment_quant_bin_path(base, table, segment_parquet),
-        snap,
-    )
+    quant_codec::write_snapshot_file(&segment_quant_bin_path(base, table, segment_parquet), snap)
 }
 
 fn snapshot_for_columnar_vectors(docs: &[ColumnarDoc]) -> Option<VectorSnapshot> {
@@ -1442,13 +1443,7 @@ pub fn load_all(
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
-        total += load_table(
-            base,
-            &name,
-            store,
-            segment_count,
-            caches.as_deref_mut(),
-        )?;
+        total += load_table(base, &name, store, segment_count, caches.as_deref_mut())?;
     }
     Ok(total)
 }
@@ -1824,10 +1819,7 @@ pub fn replay_compaction_wal(base: &Path, table: &str) -> Result<usize, String> 
     if fixed > 0 {
         manifest.save(&manifest_path)?;
     }
-    let all_present = manifest
-        .segments
-        .iter()
-        .all(|s| seg_dir.join(s).exists());
+    let all_present = manifest.segments.iter().all(|s| seg_dir.join(s).exists());
     if all_present {
         wal::truncate_compactions(base, table)?;
     }
@@ -1878,11 +1870,7 @@ pub fn compact_table(
             save_table_indexes(base, table, &mut tmp, num_segments)?;
         }
     }
-    let added_tiers: Vec<u8> = report
-        .tier_transitions
-        .iter()
-        .map(|(_, t)| *t)
-        .collect();
+    let added_tiers: Vec<u8> = report.tier_transitions.iter().map(|(_, t)| *t).collect();
     wal::append_compaction(base, table, &report.removed, &report.added, &added_tiers)?;
     let manifest = TableManifestFile::load(&TableManifestFile::path_for_table(base, table))?;
     wal::checkpoint_after_manifest(base, table, &manifest.segments, &seg_dir)?;
@@ -1907,14 +1895,7 @@ pub fn maybe_compact_after_flush(
     if !compaction::should_compact_tiered(&manifest, &seg_dir, &policy) {
         return Ok(None);
     }
-    let report = compact_table(
-        base,
-        table,
-        Some(store),
-        CompactMode::Auto,
-        &policy,
-        caches,
-    )?;
+    let report = compact_table(base, table, Some(store), CompactMode::Auto, &policy, caches)?;
     if report.merges > 0 {
         Ok(Some(report))
     } else {
@@ -1980,13 +1961,7 @@ pub fn rebuild_segment_sidecars_with_progress(
     let mut build_manifest = read_build_manifest(base, table);
 
     if report_progress {
-        mark_index_building(
-            base,
-            table,
-            IndexBuildPhase::SegmentBm25,
-            0,
-            segments_total,
-        )?;
+        mark_index_building(base, table, IndexBuildPhase::SegmentBm25, 0, segments_total)?;
     }
 
     let base_owned = base.to_path_buf();
@@ -2011,7 +1986,13 @@ pub fn rebuild_segment_sidecars_with_progress(
                 }
                 if skip_unchanged
                     && sparse
-                    && segment_sparse_up_to_date(&base_owned, &table_owned, seg, &path, &build_manifest)
+                    && segment_sparse_up_to_date(
+                        &base_owned,
+                        &table_owned,
+                        seg,
+                        &path,
+                        &build_manifest,
+                    )
                 {
                     let record = SegmentBuildRecord {
                         segment: seg.clone(),
@@ -2019,9 +2000,7 @@ pub fn rebuild_segment_sidecars_with_progress(
                         parquet_mtime_secs: index_build_status::parquet_mtime_secs(&path),
                     };
                     let done = segments_done_atomic.fetch_add(1, Ordering::Relaxed) + 1;
-                    if report_progress
-                        && (done % 1 == 0 || done == segments_total)
-                    {
+                    if report_progress {
                         let _ = mark_index_building(
                             &base_progress,
                             &table_progress,
@@ -2078,7 +2057,7 @@ pub fn rebuild_segment_sidecars_with_progress(
                     parquet_mtime_secs: index_build_status::parquet_mtime_secs(&path),
                 };
                 let done = segments_done_atomic.fetch_add(1, Ordering::Relaxed) + 1;
-                if report_progress && (done % 1 == 0 || done == segments_total) {
+                if report_progress {
                     let _ = mark_index_building(
                         &base_progress,
                         &table_progress,
@@ -2095,7 +2074,11 @@ pub fn rebuild_segment_sidecars_with_progress(
     for result in results {
         let (seg, record) = result?;
         if let Some(rec) = record {
-            if let Some(entry) = build_manifest.segments.iter_mut().find(|e| e.segment == seg) {
+            if let Some(entry) = build_manifest
+                .segments
+                .iter_mut()
+                .find(|e| e.segment == seg)
+            {
                 *entry = rec;
             } else {
                 build_manifest.segments.push(rec);
@@ -2338,7 +2321,11 @@ pub fn append_search_log(base: &Path, table: &str, record: &toradb_core::Provena
     let path = search_log_path(base, table);
     if let Ok(line) = serde_json::to_string(record) {
         use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
             let _ = writeln!(f, "{line}");
         }
     }

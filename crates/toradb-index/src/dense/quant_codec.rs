@@ -73,12 +73,7 @@ impl QuantVectorSnapshot {
         }
         let mut out = vec![0f32; dim];
         let block = &self.codes[start..end];
-        decompress::decompress_block(
-            block,
-            self.mins[index],
-            self.scales[index],
-            &mut out,
-        );
+        decompress::decompress_block(block, self.mins[index], self.scales[index], &mut out);
         Ok(out)
     }
 
@@ -101,7 +96,10 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<QuantVectorSnapshot, String> {
     index_blob::decode(QUANT_MAGIC, bytes)
 }
 
-pub fn write_snapshot_file(path: &std::path::Path, snap: &QuantVectorSnapshot) -> Result<(), String> {
+pub fn write_snapshot_file(
+    path: &std::path::Path,
+    snap: &QuantVectorSnapshot,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }

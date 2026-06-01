@@ -13,7 +13,7 @@ use toradb_core::{CandidateSet, DocId};
 const PARALLEL_BLOCK_THRESHOLD: usize = 2048;
 const MIN_BLOCKS_PER_WORKER: usize = 512;
 
-use super::bm25::{tokenize, B, Bm25Snapshot, K1};
+use super::bm25::{tokenize, Bm25Snapshot, B, K1};
 
 pub fn decode_snapshot(bytes: &[u8]) -> Result<Bm25Snapshot, String> {
     snapshot_from_tbm3(bytes)
@@ -88,7 +88,11 @@ fn bitpack(values: &[u32], bits: u8, out: &mut Vec<u8>) {
     let mut acc: u64 = 0;
     let mut filled: u32 = 0;
     let bits = bits as u32;
-    let mask: u64 = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
+    let mask: u64 = if bits >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << bits) - 1
+    };
     for &v in values {
         acc |= ((v as u64) & mask) << filled;
         filled += bits;
@@ -112,7 +116,11 @@ fn bitunpack_into(payload: &[u8], bits: u8, count: usize, out: &mut [u32; BLOCK_
         return;
     }
     let bits = bits as u32;
-    let mask: u64 = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
+    let mask: u64 = if bits >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << bits) - 1
+    };
     let mut acc: u64 = 0;
     let mut filled: u32 = 0;
     let mut byte_idx: usize = 0;
@@ -211,7 +219,10 @@ pub fn encode_tbm3(snap: &Bm25Snapshot) -> Vec<u8> {
         let offset = postings_blob.len() as u32;
         append_posting_blob(&mut postings_blob, posts, snap.avg_dl, &mut sort_scratch);
         let plen = postings_blob.len() as u32 - offset;
-        let df = *snap.doc_freq.get(term.as_str()).unwrap_or(&(posts.len() as u32));
+        let df = *snap
+            .doc_freq
+            .get(term.as_str())
+            .unwrap_or(&(posts.len() as u32));
         let tb = term.as_bytes();
         let tlen = tb.len().min(u16::MAX as usize) as u16;
         dict.extend_from_slice(&tlen.to_le_bytes());
@@ -303,8 +314,7 @@ impl TermPostings {
             return Err("truncated TBM3 postings".into());
         }
         let total = u32::from_le_bytes(bytes[base..base + 4].try_into().unwrap()) as usize;
-        let num_blocks =
-            u32::from_le_bytes(bytes[base + 4..base + 8].try_into().unwrap()) as usize;
+        let num_blocks = u32::from_le_bytes(bytes[base + 4..base + 8].try_into().unwrap()) as usize;
         let mut docs = Vec::with_capacity(total);
         let mut block_ends = Vec::with_capacity(num_blocks);
         let mut block_max_tf = Vec::with_capacity(num_blocks);
@@ -315,7 +325,9 @@ impl TermPostings {
             let h = read_block_header(bytes, pos)?;
             let count = h.count as usize;
             bitunpack_into(
-                &bytes[h.docid_payload_off..h.docid_payload_off + (h.next_block_off - h.docid_payload_off - h.tf_payload_len)],
+                &bytes[h.docid_payload_off
+                    ..h.docid_payload_off
+                        + (h.next_block_off - h.docid_payload_off - h.tf_payload_len)],
                 h.docid_bits,
                 count,
                 &mut deltas,
@@ -469,9 +481,7 @@ impl<'a> Bm25Tbm3View<'a> {
         // Safe: dict was constructed from the same bytes; UTF-8 was enforced on
         // write (terms come from `tokenize`, which produces valid UTF-8).
         unsafe {
-            std::str::from_utf8_unchecked(
-                &self.bytes[e.term_off..e.term_off + e.term_len as usize],
-            )
+            std::str::from_utf8_unchecked(&self.bytes[e.term_off..e.term_off + e.term_len as usize])
         }
     }
 
@@ -485,9 +495,7 @@ impl<'a> Bm25Tbm3View<'a> {
 
     pub(crate) fn find_term_entry(&self, term: &str) -> Option<(u32, u32, u32)> {
         let dict = self.dict();
-        let idx = dict
-            .binary_search_by(|e| self.term_str(e).cmp(term))
-            .ok()?;
+        let idx = dict.binary_search_by(|e| self.term_str(e).cmp(term)).ok()?;
         let e = dict[idx];
         Some((e.df, e.post_off, e.post_len))
     }
@@ -498,7 +506,13 @@ impl<'a> Bm25Tbm3View<'a> {
     }
 
     fn open_cursor(&self, df: u32, rel_off: u32) -> Result<TermCursor<'a>, String> {
-        TermCursor::open(self.bytes, self.postings_start + rel_off as usize, df, self.num_docs, self.avg_dl)
+        TermCursor::open(
+            self.bytes,
+            self.postings_start + rel_off as usize,
+            df,
+            self.num_docs,
+            self.avg_dl,
+        )
     }
 
     pub fn brute_search(&self, query: &str, k: usize) -> CandidateSet {
@@ -743,8 +757,7 @@ impl<'a> TermCursor<'a> {
             return Err("truncated TBM3 postings header".into());
         }
         let total = u32::from_le_bytes(bytes[base..base + 4].try_into().unwrap()) as usize;
-        let num_blocks =
-            u32::from_le_bytes(bytes[base + 4..base + 8].try_into().unwrap()) as usize;
+        let num_blocks = u32::from_le_bytes(bytes[base + 4..base + 8].try_into().unwrap()) as usize;
         let start = base + 8;
         let n = num_docs.max(1) as f32;
         let idf = ((n - df as f32 + 0.5) / (df as f32 + 0.5) + 1.0).ln();
@@ -769,7 +782,7 @@ impl<'a> TermCursor<'a> {
 
     fn block_starts(&self) -> Vec<BlockStart> {
         let mut starts = Vec::with_capacity(self.num_blocks);
-        let mut off = self.next_block_off;  
+        let mut off = self.next_block_off;
         let mut prev_doc: DocId = 0;
         for _ in 0..self.num_blocks {
             starts.push(BlockStart {
@@ -823,7 +836,8 @@ impl<'a> TermCursor<'a> {
         };
         let count = h.count as usize;
         bitunpack_into(
-            &self.bytes[h.docid_payload_off..h.docid_payload_off + (h.tf_payload_off - h.docid_payload_off)],
+            &self.bytes[h.docid_payload_off
+                ..h.docid_payload_off + (h.tf_payload_off - h.docid_payload_off)],
             h.docid_bits,
             count,
             deltas,
@@ -952,7 +966,8 @@ mod tests {
 
     #[test]
     fn tbm3_roundtrip_search() {
-        let snap = Bm25Snapshot::from_documents([(1u64, "Nikola Tesla motor"), (2, "wireless power")]);
+        let snap =
+            Bm25Snapshot::from_documents([(1u64, "Nikola Tesla motor"), (2, "wireless power")]);
         let bytes = encode_tbm3(&snap);
         let view = Bm25Tbm3View::open(&bytes).unwrap();
         let hits = view.search("Nikola motor", 5);
@@ -971,16 +986,8 @@ mod tests {
         let query = "term5 mixed document";
         let wand = view.search(query, 10);
         let brute = view.brute_search(query, 10);
-        let mut wand_pairs: Vec<_> = wand
-            .ids
-            .into_iter()
-            .zip(wand.scores)
-            .collect();
-        let mut brute_pairs: Vec<_> = brute
-            .ids
-            .into_iter()
-            .zip(brute.scores)
-            .collect();
+        let mut wand_pairs: Vec<_> = wand.ids.into_iter().zip(wand.scores).collect();
+        let mut brute_pairs: Vec<_> = brute.ids.into_iter().zip(brute.scores).collect();
         wand_pairs.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
@@ -997,10 +1004,7 @@ mod tests {
     #[test]
     fn tbm3_encode_unsorted_postings_roundtrip() {
         let mut postings = HashMap::new();
-        postings.insert(
-            "test".to_string(),
-            vec![(3, 2), (1, 1), (2, 1)],
-        );
+        postings.insert("test".to_string(), vec![(3, 2), (1, 1), (2, 1)]);
         let snap = Bm25Snapshot {
             postings,
             doc_len: HashMap::new(),
@@ -1023,7 +1027,11 @@ mod tests {
         let list = view.load_term(df, off).unwrap();
         let idf = list.idf;
         for (bi, &end) in list.block_ends.iter().enumerate() {
-            let start = if bi == 0 { 0 } else { list.block_ends[bi - 1] as usize };
+            let start = if bi == 0 {
+                0
+            } else {
+                list.block_ends[bi - 1] as usize
+            };
             let end = end as usize;
             let mut true_max = 0.0f32;
             for &(doc_id, tf) in &list.docs[start..end] {
@@ -1063,7 +1071,11 @@ mod tests {
         for chunk_start in (0..vals.len()).step_by(BLOCK_SIZE) {
             let count = (vals.len() - chunk_start).min(BLOCK_SIZE);
             let mut chunk_payload = Vec::new();
-            bitpack(&vals[chunk_start..chunk_start + count], bits, &mut chunk_payload);
+            bitpack(
+                &vals[chunk_start..chunk_start + count],
+                bits,
+                &mut chunk_payload,
+            );
             bitunpack_into(&chunk_payload, bits, count, &mut out);
             for i in 0..count {
                 assert_eq!(out[i], vals[chunk_start + i]);
@@ -1133,8 +1145,7 @@ mod tests {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.0.cmp(&b.0))
         };
-        let mut p: Vec<(DocId, f32)> =
-            parallel.ids.into_iter().zip(parallel.scores).collect();
+        let mut p: Vec<(DocId, f32)> = parallel.ids.into_iter().zip(parallel.scores).collect();
         let mut b: Vec<(DocId, f32)> = brute.ids.into_iter().zip(brute.scores).collect();
         p.sort_by(sort_key);
         b.sort_by(sort_key);

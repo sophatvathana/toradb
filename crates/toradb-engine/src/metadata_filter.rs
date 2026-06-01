@@ -90,13 +90,18 @@ pub fn metadata_matches(
             match op {
                 CompareOp::Eq => typed_eq(col_types, column, v, value),
                 CompareOp::Ne => !typed_eq(col_types, column, v, value),
-                CompareOp::Lt => matches!(ordered(col_types, column, v, value), Some(Ordering::Less)),
+                CompareOp::Lt => {
+                    matches!(ordered(col_types, column, v, value), Some(Ordering::Less))
+                }
                 CompareOp::Lte => matches!(
                     ordered(col_types, column, v, value),
                     Some(Ordering::Less | Ordering::Equal)
                 ),
                 CompareOp::Gt => {
-                    matches!(ordered(col_types, column, v, value), Some(Ordering::Greater))
+                    matches!(
+                        ordered(col_types, column, v, value),
+                        Some(Ordering::Greater)
+                    )
                 }
                 CompareOp::Gte => matches!(
                     ordered(col_types, column, v, value),
@@ -108,9 +113,7 @@ pub fn metadata_matches(
             let Some(v) = metadata.get(column) else {
                 return false;
             };
-            values
-                .iter()
-                .any(|x| typed_eq(col_types, column, v, x))
+            values.iter().any(|x| typed_eq(col_types, column, v, x))
         }
         WherePred::Between {
             column,
@@ -178,10 +181,7 @@ pub fn filter_candidates_by_where(
     let mut col_types = dag.column_types_for(table);
     col_types.insert("id".to_string(), ColumnType::Int);
     let ids = candidates.ids.clone();
-    let docs: HashMap<u64, _> = dag
-        .fetch_documents(table, &ids)?
-        .into_iter()
-        .collect();
+    let docs: HashMap<u64, _> = dag.fetch_documents(table, &ids)?.into_iter().collect();
     let mut kept_ids = Vec::with_capacity(candidates.len());
     let mut kept_scores = Vec::with_capacity(candidates.len());
     for (i, id) in candidates.ids.iter().enumerate() {

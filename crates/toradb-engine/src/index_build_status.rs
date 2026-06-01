@@ -1,4 +1,4 @@
-//! On-disk index build progress for ingest/finish 
+//! On-disk index build progress for ingest/finish
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -127,7 +127,11 @@ pub fn mark_index_ready(base: &Path, table: &str) -> Result<(), String> {
     )
 }
 
-pub fn mark_index_failed(base: &Path, table: &str, message: impl Into<String>) -> Result<(), String> {
+pub fn mark_index_failed(
+    base: &Path,
+    table: &str,
+    message: impl Into<String>,
+) -> Result<(), String> {
     write_index_build_status(
         base,
         table,

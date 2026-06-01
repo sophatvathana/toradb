@@ -80,11 +80,9 @@ mod tests {
 
     #[test]
     fn roundtrip_vector_snapshot() {
-        let snap = VectorSnapshot::from_pairs(
-            3,
-            &[(0, vec![1.0, 0.0, 0.0]), (2, vec![0.0, 1.0, 0.0])],
-        )
-        .unwrap();
+        let snap =
+            VectorSnapshot::from_pairs(3, &[(0, vec![1.0, 0.0, 0.0]), (2, vec![0.0, 1.0, 0.0])])
+                .unwrap();
         let bytes = encode_snapshot(&snap).unwrap();
         let decoded = decode_snapshot(&bytes).unwrap();
         assert_eq!(snap, decoded);

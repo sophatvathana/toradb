@@ -74,12 +74,7 @@ pub fn tq_adc_mse(query_rot: &[f32], codes: &[u8], bits: u8, codebook: &[f32]) -
 }
 
 /// Quantized Johnson–Lindenstrauss residual contribution.
-pub fn tq_adc_qjl(
-    query_rot: &[f32],
-    qjl_bits: &[u8],
-    qjl_g: &[f32],
-    qjl_scale: f32,
-) -> f32 {
+pub fn tq_adc_qjl(query_rot: &[f32], qjl_bits: &[u8], qjl_g: &[f32], qjl_scale: f32) -> f32 {
     let n = query_rot.len();
     let mut acc = 0.0f32;
     for i in 0..n {

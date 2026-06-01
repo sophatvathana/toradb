@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int64Array,
-    ListArray, StringArray, TimestampMillisecondArray, UInt64Array,
+    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int64Array, ListArray,
+    StringArray, TimestampMillisecondArray, UInt64Array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Schema, TimeUnit};
@@ -108,7 +108,11 @@ fn parse_timestamp_millis(s: &str) -> Option<i64> {
     Some(millis)
 }
 
-fn encode_typed_column(_name: &str, ty: ColumnType, values: &[Option<String>]) -> Result<ArrayRef, String> {
+fn encode_typed_column(
+    _name: &str,
+    ty: ColumnType,
+    values: &[Option<String>],
+) -> Result<ArrayRef, String> {
     match ty {
         ColumnType::Int => {
             let data: Vec<Option<i64>> = values
@@ -153,10 +157,7 @@ fn encode_typed_column(_name: &str, ty: ColumnType, values: &[Option<String>]) -
                     if let Ok(parsed) = serde_json::from_str::<Vec<f32>>(s) {
                         flat.extend(parsed);
                     } else {
-                        flat.extend(
-                            s.split(',')
-                                .filter_map(|p| p.trim().parse::<f32>().ok()),
-                        );
+                        flat.extend(s.split(',').filter_map(|p| p.trim().parse::<f32>().ok()));
                     }
                 }
                 offsets.push(flat.len() as i32);
@@ -327,7 +328,10 @@ pub fn row_metadata_from_batch(
     Ok(out)
 }
 
-fn legacy_json_metadata(batch: &RecordBatch, row: usize) -> Result<HashMap<String, String>, String> {
+fn legacy_json_metadata(
+    batch: &RecordBatch,
+    row: usize,
+) -> Result<HashMap<String, String>, String> {
     let meta = batch
         .column_by_name("metadata_json")
         .ok_or("missing metadata_json column")?
@@ -353,7 +357,10 @@ pub fn infer_column_types_from_batch(batch: &RecordBatch) -> Vec<(String, Column
             if matches!(name.as_str(), "id" | "text" | "metadata_json" | "embedding") {
                 return None;
             }
-            Some((name.clone(), ColumnTypeSpec::new(arrow_type_to_column_type(f.data_type()))))
+            Some((
+                name.clone(),
+                ColumnTypeSpec::new(arrow_type_to_column_type(f.data_type())),
+            ))
         })
         .collect()
 }
@@ -447,6 +454,9 @@ fn list_value(list: &ListArray, row: usize) -> Option<Vec<f32>> {
 }
 
 /// Build docs batch for legacy schema (all metadata in JSON).
-pub fn docs_to_legacy_batch(schema: &Arc<Schema>, docs: &[ColumnarDoc]) -> Result<RecordBatch, String> {
+pub fn docs_to_legacy_batch(
+    schema: &Arc<Schema>,
+    docs: &[ColumnarDoc],
+) -> Result<RecordBatch, String> {
     docs_to_batch(schema, &[], docs)
 }

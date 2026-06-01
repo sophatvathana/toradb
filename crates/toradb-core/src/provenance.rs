@@ -70,13 +70,19 @@ impl ProvenanceCollector {
 
     pub fn record_bm25(&mut self, id: DocId, score: f32) {
         if self.enabled {
-            self.record.tier1.bm25_candidates.push(ScoredDoc { id, score });
+            self.record
+                .tier1
+                .bm25_candidates
+                .push(ScoredDoc { id, score });
         }
     }
 
     pub fn record_hnsw(&mut self, id: DocId, score: f32) {
         if self.enabled {
-            self.record.tier1.hnsw_candidates.push(ScoredDoc { id, score });
+            self.record
+                .tier1
+                .hnsw_candidates
+                .push(ScoredDoc { id, score });
         }
     }
 

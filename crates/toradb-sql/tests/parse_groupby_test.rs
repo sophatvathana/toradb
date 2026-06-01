@@ -17,7 +17,10 @@ fn parse_group_by_select_list() {
 
 #[test]
 fn parse_multi_group_by_and_having() {
-    let stmts = parse("SELECT tag, source, COUNT(*), SUM(score) FROM docs GROUP BY tag, source HAVING count > 1").unwrap();
+    let stmts = parse(
+        "SELECT tag, source, COUNT(*), SUM(score) FROM docs GROUP BY tag, source HAVING count > 1",
+    )
+    .unwrap();
     let Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };

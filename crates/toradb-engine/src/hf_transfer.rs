@@ -14,11 +14,11 @@ use futures::StreamExt;
 use rand::{thread_rng, Rng};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_RANGE, RANGE};
 use reqwest::Url;
+use std::sync::Arc;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
-use std::sync::Arc;
 
 const BASE_WAIT_TIME: usize = 300;
 const MAX_WAIT_TIME: usize = 10_000;
@@ -84,9 +84,7 @@ pub async fn download(
         return Err("parallel_failures cannot be > max_files".to_string());
     }
     if (parallel_failures == 0) != (max_retries == 0) {
-        return Err(
-            "for retry mechanism set both parallel_failures and max_retries".to_string(),
-        );
+        return Err("for retry mechanism set both parallel_failures and max_retries".to_string());
     }
 
     let filename = filename.as_ref().to_path_buf();
@@ -187,9 +185,10 @@ async fn download_inner(
         let parallel_failures_semaphore = parallel_failures_semaphore.clone();
 
         handles.push(tokio::spawn(async move {
-            let permit = semaphore.acquire_owned().await.map_err(|e| {
-                DownloadError::Message(format!("semaphore acquire: {e}"))
-            })?;
+            let permit = semaphore
+                .acquire_owned()
+                .await
+                .map_err(|e| DownloadError::Message(format!("semaphore acquire: {e}")))?;
             let mut chunk =
                 download_chunk(&client, &url, &filename, start, stop, headers.clone()).await;
             let mut i = 0;
@@ -200,14 +199,18 @@ async fn download_inner(
                             "failed after {max_retries} retries: {dlerr}"
                         )));
                     }
-                    let _parallel_failure_permit = parallel_failures_semaphore.clone().try_acquire_owned().map_err(|err| {
-                        DownloadError::Message(format!(
-                            "too many parallel failures ({parallel_failures}): {dlerr} ({err})"
-                        ))
-                    })?;
+                    let _parallel_failure_permit = parallel_failures_semaphore
+                        .clone()
+                        .try_acquire_owned()
+                        .map_err(|err| {
+                            DownloadError::Message(format!(
+                                "too many parallel failures ({parallel_failures}): {dlerr} ({err})"
+                            ))
+                        })?;
                     let wait_time = exponential_backoff(BASE_WAIT_TIME, i, MAX_WAIT_TIME);
                     sleep(Duration::from_millis(wait_time as u64)).await;
-                    chunk = download_chunk(&client, &url, &filename, start, stop, headers.clone()).await;
+                    chunk = download_chunk(&client, &url, &filename, start, stop, headers.clone())
+                        .await;
                     i += 1;
                 }
             }

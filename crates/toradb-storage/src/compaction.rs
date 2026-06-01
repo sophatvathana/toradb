@@ -83,28 +83,44 @@ impl CompactPolicy {
     pub fn from_env() -> Self {
         let mut p = Self::default();
         if let Ok(v) = std::env::var("TORADB_COMPACT_MAX_SEGMENTS") {
-            if let Ok(n) = v.parse() { p.max_segments = n; }
+            if let Ok(n) = v.parse() {
+                p.max_segments = n;
+            }
         }
         if let Ok(v) = std::env::var("TORADB_COMPACT_MIN_MERGE") {
-            if let Ok(n) = v.parse() { p.min_segments_to_merge = n; }
+            if let Ok(n) = v.parse() {
+                p.min_segments_to_merge = n;
+            }
         }
         if let Ok(v) = std::env::var("TORADB_COMPACT_SMALL_BYTES") {
-            if let Ok(n) = v.parse() { p.small_segment_bytes = n; }
+            if let Ok(n) = v.parse() {
+                p.small_segment_bytes = n;
+            }
         }
         if let Ok(v) = std::env::var("TORADB_COMPACT_TIER_THRESHOLD") {
-            if let Ok(n) = v.parse() { p.tier.tier_merge_threshold = n; }
+            if let Ok(n) = v.parse() {
+                p.tier.tier_merge_threshold = n;
+            }
         }
         if let Ok(v) = std::env::var("TORADB_COMPACT_TIER0_BYTES") {
-            if let Ok(n) = v.parse() { p.tier.tier_bounds[0] = n; }
+            if let Ok(n) = v.parse() {
+                p.tier.tier_bounds[0] = n;
+            }
         }
         if let Ok(v) = std::env::var("TORADB_COMPACT_TIER1_BYTES") {
-            if let Ok(n) = v.parse() { p.tier.tier_bounds[1] = n; }
+            if let Ok(n) = v.parse() {
+                p.tier.tier_bounds[1] = n;
+            }
         }
         if let Ok(v) = std::env::var("TORADB_COMPACT_TIER2_BYTES") {
-            if let Ok(n) = v.parse() { p.tier.tier_bounds[2] = n; }
+            if let Ok(n) = v.parse() {
+                p.tier.tier_bounds[2] = n;
+            }
         }
         if let Ok(v) = std::env::var("TORADB_COMPACT_BATCH_SIZE") {
-            if let Ok(n) = v.parse() { p.merge_batch_size = n; }
+            if let Ok(n) = v.parse() {
+                p.merge_batch_size = n;
+            }
         }
         p
     }
@@ -137,7 +153,11 @@ const MAX_FINITE_TIER_BYTES: u64 = 512 * 1024 * 1024;
 
 fn size_score(meta: &SegmentMeta, policy: &TierPolicy) -> f64 {
     let tier = meta.tier as usize;
-    let lower = if tier == 0 { 0u64 } else { policy.tier_bounds[tier - 1] };
+    let lower = if tier == 0 {
+        0u64
+    } else {
+        policy.tier_bounds[tier - 1]
+    };
     let upper = policy.tier_bounds[tier].min(MAX_FINITE_TIER_BYTES);
     let ideal_mid = (lower as f64 + upper as f64) / 2.0;
     ideal_mid / (meta.byte_size as f64).max(1.0)
@@ -159,10 +179,9 @@ fn group_score(metas: &[&SegmentMeta], policy: &TierPolicy) -> f64 {
     if metas.is_empty() {
         return 0.0;
     }
-    let mean_size: f64 = metas.iter().map(|m| size_score(m, policy)).sum::<f64>()
-        / metas.len() as f64;
-    let mean_delete: f64 = metas.iter().map(|m| delete_score(m)).sum::<f64>()
-        / metas.len() as f64;
+    let mean_size: f64 =
+        metas.iter().map(|m| size_score(m, policy)).sum::<f64>() / metas.len() as f64;
+    let mean_delete: f64 = metas.iter().map(|m| delete_score(m)).sum::<f64>() / metas.len() as f64;
     let tw = tier_weight(metas[0].tier);
     mean_size + mean_delete + tw
 }
@@ -198,7 +217,11 @@ pub fn should_compact_tiered(
         return false;
     }
     for tier in 0u8..=3u8 {
-        let count = manifest.segment_meta.iter().filter(|m| m.tier == tier).count();
+        let count = manifest
+            .segment_meta
+            .iter()
+            .filter(|m| m.tier == tier)
+            .count();
         if count >= policy.tier.tier_merge_threshold {
             return true;
         }
@@ -279,7 +302,11 @@ pub fn pick_merge_candidates(
                     }
                 }
 
-                candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                candidates.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
 
                 if mode == CompactMode::Auto
                     && candidates.is_empty()
@@ -402,7 +429,12 @@ impl MergeSource {
             .as_ref()
             .and_then(|b| batch_min_id(b))
             .unwrap_or(u64::MAX);
-        Ok(Self { path, peeked, reader, min_id })
+        Ok(Self {
+            path,
+            peeked,
+            reader,
+            min_id,
+        })
     }
 
     /// Take the peeked batch and advance. When the source is fully consumed (peeked becomes
@@ -468,14 +500,17 @@ fn cast_batch_to_canonical(
 }
 
 fn split_batch_at(batch: &RecordBatch, cutoff: u64) -> (Option<RecordBatch>, Option<RecordBatch>) {
-    let ids = match batch.column_by_name("id")
+    let ids = match batch
+        .column_by_name("id")
         .and_then(|c| c.as_any().downcast_ref::<UInt64Array>())
     {
         Some(a) => a,
         None => return (None, Some(batch.clone())),
     };
 
-    let split_pos = (0..ids.len()).find(|&i| ids.value(i) >= cutoff).unwrap_or(ids.len());
+    let split_pos = (0..ids.len())
+        .find(|&i| ids.value(i) >= cutoff)
+        .unwrap_or(ids.len());
     if split_pos == 0 {
         return (None, Some(batch.clone()));
     }
@@ -498,7 +533,9 @@ fn filter_batch_by_deleted(
         .column_by_name("id")?
         .as_any()
         .downcast_ref::<arrow::array::UInt64Array>()?;
-    let keep: Vec<bool> = (0..ids.len()).map(|i| !deleted.contains(&ids.value(i))).collect();
+    let keep: Vec<bool> = (0..ids.len())
+        .map(|i| !deleted.contains(&ids.value(i)))
+        .collect();
     if keep.iter().all(|&k| k) {
         return None; // nothing deleted in this batch
     }
@@ -537,8 +574,7 @@ fn merge_segments_streaming(
     let mut props_builder = WriterProperties::builder();
     if let Some(cfg) = compression {
         if cfg.enabled {
-            props_builder =
-                props_builder.set_compression(Compression::ZSTD(Default::default()));
+            props_builder = props_builder.set_compression(Compression::ZSTD(Default::default()));
         }
     }
     let props = props_builder.build();
@@ -592,27 +628,34 @@ fn merge_segments_streaming(
                         continue;
                     }
                     if let Some(bmin) = batch_min_id(&batch) {
-                        if bmin < global_min { global_min = bmin; }
+                        if bmin < global_min {
+                            global_min = bmin;
+                        }
                     }
                     if let Some(bmax) = batch_max_id(&batch) {
-                        if bmax > global_max { global_max = bmax; }
+                        if bmax > global_max {
+                            global_max = bmax;
+                        }
                     }
                     row_count += batch.num_rows() as u64;
                     let batch = cast_batch_to_canonical(&batch, &schema)?;
                     writer.write(&batch).map_err(|e| e.to_string())?;
                 }
             } else {
-
                 let batch = sources[idx].peeked.take().unwrap();
                 let (left, right) = split_batch_at(&batch, next_min);
                 if let Some(left) = left {
                     let left = filter_batch_by_deleted(&left, deleted).unwrap_or(left);
                     if left.num_rows() > 0 {
                         if let Some(bmin) = batch_min_id(&left) {
-                            if bmin < global_min { global_min = bmin; }
+                            if bmin < global_min {
+                                global_min = bmin;
+                            }
                         }
                         if let Some(bmax) = batch_max_id(&left) {
-                            if bmax > global_max { global_max = bmax; }
+                            if bmax > global_max {
+                                global_max = bmax;
+                            }
                         }
                         row_count += left.num_rows() as u64;
                         let left = cast_batch_to_canonical(&left, &schema)?;
@@ -625,14 +668,18 @@ fn merge_segments_streaming(
                     .as_ref()
                     .and_then(|b| batch_min_id(b))
                     .unwrap_or(u64::MAX);
-                break;  
+                break;
             }
         }
     }
 
     writer.close().map_err(|e| e.to_string())?;
 
-    let min_id = if global_min == u64::MAX { 0 } else { global_min };
+    let min_id = if global_min == u64::MAX {
+        0
+    } else {
+        global_min
+    };
     Ok((min_id, global_max, row_count))
 }
 
@@ -743,10 +790,7 @@ pub fn compact_table_segments(
         let byte_size = new_path.metadata().map(|m| m.len()).unwrap_or(0);
         let generation = manifest.next_generation();
 
-        let actual_tier = policy
-            .tier
-            .tier_for_bytes(byte_size)
-            .max(group.output_tier);
+        let actual_tier = policy.tier.tier_for_bytes(byte_size).max(group.output_tier);
 
         for old in &group.segments {
             manifest.remove_segment(old);
@@ -769,7 +813,9 @@ pub fn compact_table_segments(
             deleted_count: 0,
         });
 
-        report.tier_transitions.push((new_name.clone(), actual_tier));
+        report
+            .tier_transitions
+            .push((new_name.clone(), actual_tier));
         report.added.push(new_name);
         report.merges += 1;
     }
@@ -821,7 +867,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let seg_dir = dir.path().join("segments");
         std::fs::create_dir_all(&seg_dir).unwrap();
-        let names = ["seg_00001.parquet", "seg_00002.parquet", "seg_00003.parquet"];
+        let names = [
+            "seg_00001.parquet",
+            "seg_00002.parquet",
+            "seg_00003.parquet",
+        ];
         for n in names {
             write_segment_with_compression(
                 &seg_dir.join(n),
@@ -868,16 +918,23 @@ mod tests {
         let mut manifest = TableManifestFile::default();
         for i in 1u32..=5 {
             let name = format!("seg_{:05}.parquet", i);
-            manifest.segment_meta.push(make_segment_meta(&name, 0, i as u64, 1024));
+            manifest
+                .segment_meta
+                .push(make_segment_meta(&name, 0, i as u64, 1024));
             manifest.segments.push(name);
         }
         for i in 6u32..=7 {
             let name = format!("seg_{:05}.parquet", i);
-            manifest.segment_meta.push(make_segment_meta(&name, 1, i as u64, 5 * 1024 * 1024));
+            manifest
+                .segment_meta
+                .push(make_segment_meta(&name, 1, i as u64, 5 * 1024 * 1024));
             manifest.segments.push(name);
         }
         let policy = CompactPolicy {
-            tier: TierPolicy { tier_merge_threshold: 4, ..Default::default() },
+            tier: TierPolicy {
+                tier_merge_threshold: 4,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let groups =
@@ -894,11 +951,16 @@ mod tests {
         let times = [10u64, 5, 20, 1, 15, 8];
         for (i, &t) in times.iter().enumerate() {
             let name = format!("seg_{:05}.parquet", i + 1);
-            manifest.segment_meta.push(make_segment_meta(&name, 0, t, 1024));
+            manifest
+                .segment_meta
+                .push(make_segment_meta(&name, 0, t, 1024));
             manifest.segments.push(name);
         }
         let policy = CompactPolicy {
-            tier: TierPolicy { tier_merge_threshold: 4, ..Default::default() },
+            tier: TierPolicy {
+                tier_merge_threshold: 4,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let groups =
@@ -915,7 +977,9 @@ mod tests {
         let mut manifest = TableManifestFile::default();
         for i in 1u32..=3 {
             let name = format!("seg_{:05}.parquet", i);
-            manifest.segment_meta.push(make_segment_meta(&name, 0, i as u64, 1024));
+            manifest
+                .segment_meta
+                .push(make_segment_meta(&name, 0, i as u64, 1024));
             manifest.segments.push(name);
         }
         let policy = CompactPolicy::default();
@@ -931,16 +995,23 @@ mod tests {
         let mut manifest = TableManifestFile::default();
         for i in 1u32..=3 {
             let name = format!("seg_{:05}.parquet", i);
-            manifest.segment_meta.push(make_segment_meta(&name, 0, i as u64, 1024));
+            manifest
+                .segment_meta
+                .push(make_segment_meta(&name, 0, i as u64, 1024));
             manifest.segments.push(name);
         }
         for i in 4u32..=6 {
             let name = format!("seg_{:05}.parquet", i);
-            manifest.segment_meta.push(make_segment_meta(&name, 1, i as u64, 5 * 1024 * 1024));
+            manifest
+                .segment_meta
+                .push(make_segment_meta(&name, 1, i as u64, 5 * 1024 * 1024));
             manifest.segments.push(name);
         }
         let policy = CompactPolicy {
-            tier: TierPolicy { tier_merge_threshold: 4, ..Default::default() },
+            tier: TierPolicy {
+                tier_merge_threshold: 4,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let groups =
@@ -955,17 +1026,24 @@ mod tests {
         // 4 T3 segments (large) — low size_score
         for i in 1u32..=4 {
             let name = format!("seg_{:05}.parquet", i);
-            manifest.segment_meta.push(make_segment_meta(&name, 3, i as u64, 200 * 1024 * 1024));
+            manifest
+                .segment_meta
+                .push(make_segment_meta(&name, 3, i as u64, 200 * 1024 * 1024));
             manifest.segments.push(name);
         }
         // 4 T0 segments (tiny) — high size_score
         for i in 5u32..=8 {
             let name = format!("seg_{:05}.parquet", i);
-            manifest.segment_meta.push(make_segment_meta(&name, 0, i as u64, 512));
+            manifest
+                .segment_meta
+                .push(make_segment_meta(&name, 0, i as u64, 512));
             manifest.segments.push(name);
         }
         let policy = CompactPolicy {
-            tier: TierPolicy { tier_merge_threshold: 4, ..Default::default() },
+            tier: TierPolicy {
+                tier_merge_threshold: 4,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let cands =
@@ -983,27 +1061,40 @@ mod tests {
         std::fs::create_dir_all(&seg_dir).unwrap();
 
         // Write 3 small segments with sequential IDs.
-        let names = ["seg_00001.parquet", "seg_00002.parquet", "seg_00003.parquet"];
+        let names = [
+            "seg_00001.parquet",
+            "seg_00002.parquet",
+            "seg_00003.parquet",
+        ];
         let mut id = 0u64;
         for name in &names {
-            let docs: Vec<ColumnarDoc> = (0..5).map(|_| {
-                let d = ColumnarDoc {
-                    id,
-                    text: format!("doc {id}"),
-                    metadata: Default::default(),
-                    embedding: None,
-                };
-                id += 1;
-                d
-            }).collect();
+            let docs: Vec<ColumnarDoc> = (0..5)
+                .map(|_| {
+                    let d = ColumnarDoc {
+                        id,
+                        text: format!("doc {id}"),
+                        metadata: Default::default(),
+                        embedding: None,
+                    };
+                    id += 1;
+                    d
+                })
+                .collect();
             write_segment_with_compression(&seg_dir.join(name), &docs, None, &[]).unwrap();
         }
 
         let paths: Vec<PathBuf> = names.iter().map(|n| seg_dir.join(n)).collect();
         let out = seg_dir.join("merged.parquet");
         let schema = crate::columnar::table_doc_schema(&[]);
-        let (min_id, max_id, row_count) =
-            merge_segments_streaming(&paths, &out, None, 4096, &schema, &std::collections::HashSet::new()).unwrap();
+        let (min_id, max_id, row_count) = merge_segments_streaming(
+            &paths,
+            &out,
+            None,
+            4096,
+            &schema,
+            &std::collections::HashSet::new(),
+        )
+        .unwrap();
 
         assert_eq!(min_id, 0);
         assert_eq!(max_id, 14);

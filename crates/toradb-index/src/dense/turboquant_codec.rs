@@ -145,7 +145,8 @@ impl TurboQuantSnapshot {
                 // Unbiased estimator scale for the half-normal random variable
                 // E[|X|] for X = r · g with ||r|| known: per-coord contribution
                 // ≈ (||r||/sqrt(d)) * sigma * sqrt(pi/2).
-                let scale = sigma * (residual_norm2 / padded_dim as f32).sqrt()
+                let scale = sigma
+                    * (residual_norm2 / padded_dim as f32).sqrt()
                     * (std::f32::consts::PI / 2.0).sqrt();
                 qjl_scales.push(scale);
             } else {
@@ -217,8 +218,7 @@ impl TurboQuantSnapshot {
             let qjl_bits = &self.qjl_bits[qoff..qoff + qstride];
             let mut g = vec![0f32; self.padded_dim as usize];
             fht::rademacher_signs(self.qjl_seed, &mut g);
-            let qjl_dot =
-                tq_adc::tq_adc_qjl(query_rot, qjl_bits, &g, self.qjl_scales[index]);
+            let qjl_dot = tq_adc::tq_adc_qjl(query_rot, qjl_bits, &g, self.qjl_scales[index]);
             mse_dot + qjl_dot
         } else {
             mse_dot
@@ -316,10 +316,8 @@ mod tests {
     #[test]
     fn adc_mse_correlates_with_true_dot() {
         let pairs = make_corpus(64, 256);
-        let snap =
-            TurboQuantSnapshot::from_pairs(&pairs, TqMode::Mse, 4, 0xABCD, 0).unwrap();
-        let query: Vec<f32> =
-            (0..256).map(|j| ((j as f32) * 0.021).cos()).collect();
+        let snap = TurboQuantSnapshot::from_pairs(&pairs, TqMode::Mse, 4, 0xABCD, 0).unwrap();
+        let query: Vec<f32> = (0..256).map(|j| ((j as f32) * 0.021).cos()).collect();
         let qrot = snap.rotate_query(&query);
 
         let mut estimates = Vec::new();
@@ -354,10 +352,8 @@ mod tests {
     #[test]
     fn adc_ip_estimator_correlates() {
         let pairs = make_corpus(64, 256);
-        let snap =
-            TurboQuantSnapshot::from_pairs(&pairs, TqMode::Ip, 3, 0xABCD, 0xF00D).unwrap();
-        let query: Vec<f32> =
-            (0..256).map(|j| ((j as f32) * 0.021).cos()).collect();
+        let snap = TurboQuantSnapshot::from_pairs(&pairs, TqMode::Ip, 3, 0xABCD, 0xF00D).unwrap();
+        let query: Vec<f32> = (0..256).map(|j| ((j as f32) * 0.021).cos()).collect();
         let qrot = snap.rotate_query(&query);
         let est: Vec<f32> = (0..pairs.len()).map(|i| snap.adc_dot(&qrot, i)).collect();
         let truth: Vec<f32> = pairs
@@ -366,8 +362,12 @@ mod tests {
             .collect();
         // Top-1 of estimate should match top-1 of truth in most cases; weaker
         // check: argmax agrees within top-5.
-        let argmax_est =
-            est.iter().enumerate().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).unwrap().0;
+        let argmax_est = est
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap()
+            .0;
         let mut indexed: Vec<(usize, f32)> = truth.iter().copied().enumerate().collect();
         indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         let top5: Vec<usize> = indexed.iter().take(5).map(|(i, _)| *i).collect();

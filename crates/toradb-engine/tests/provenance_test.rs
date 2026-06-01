@@ -46,12 +46,20 @@ fn search_with_explain_populates_provenance() {
     )
     .unwrap();
 
-    let prov = result.provenance.expect("provenance should be populated when explain=true");
+    let prov = result
+        .provenance
+        .expect("provenance should be populated when explain=true");
     assert_eq!(prov.query, "Tesla motor");
     // BM25 candidates should include at least one document.
-    assert!(!prov.tier1.bm25_candidates.is_empty(), "expected BM25 candidates");
+    assert!(
+        !prov.tier1.bm25_candidates.is_empty(),
+        "expected BM25 candidates"
+    );
     // RRF merged tier should be populated.
-    assert!(!prov.tier2.rrf_merged.is_empty(), "expected RRF merged candidates");
+    assert!(
+        !prov.tier2.rrf_merged.is_empty(),
+        "expected RRF merged candidates"
+    );
     // Final ids should match the search results.
     assert_eq!(prov.final_ids, result.ids);
     assert!(prov.total_latency_ms >= 0.0);
@@ -108,10 +116,18 @@ fn hybrid_provenance_records_distinct_sparse_and_dense_tiers() {
     )
     .unwrap();
 
-    let prov = result.provenance.expect("provenance populated for hybrid explain");
+    let prov = result
+        .provenance
+        .expect("provenance populated for hybrid explain");
 
-    assert!(!prov.tier1.bm25_candidates.is_empty(), "expected BM25 candidates");
-    assert!(!prov.tier1.hnsw_candidates.is_empty(), "expected HNSW candidates");
+    assert!(
+        !prov.tier1.bm25_candidates.is_empty(),
+        "expected BM25 candidates"
+    );
+    assert!(
+        !prov.tier1.hnsw_candidates.is_empty(),
+        "expected HNSW candidates"
+    );
 
     let bm25: Vec<_> = prov.tier1.bm25_candidates.iter().map(|d| d.id).collect();
     let hnsw: Vec<_> = prov.tier1.hnsw_candidates.iter().map(|d| d.id).collect();
@@ -127,7 +143,10 @@ fn hybrid_provenance_records_distinct_sparse_and_dense_tiers() {
             .iter()
             .zip(prov.tier1.hnsw_candidates.iter())
             .all(|(a, b)| a.id == b.id && (a.score - b.score).abs() < f32::EPSILON);
-    assert!(!same_scores, "sparse and dense scores should not be identical");
+    assert!(
+        !same_scores,
+        "sparse and dense scores should not be identical"
+    );
 }
 
 #[test]
@@ -150,11 +169,16 @@ fn provenance_records_per_tier_latency() {
     .unwrap();
 
     let prov = result.provenance.unwrap();
-    let any_tier_timed = prov.tier1.latency_us > 0
-        || prov.tier2.latency_us > 0
-        || prov.tier3.latency_us > 0;
-    assert!(any_tier_timed, "expected at least one tier to record non-zero latency");
-    assert!(prov.total_latency_ms > 0.0, "total latency should be positive");
+    let any_tier_timed =
+        prov.tier1.latency_us > 0 || prov.tier2.latency_us > 0 || prov.tier3.latency_us > 0;
+    assert!(
+        any_tier_timed,
+        "expected at least one tier to record non-zero latency"
+    );
+    assert!(
+        prov.total_latency_ms > 0.0,
+        "total latency should be positive"
+    );
 }
 
 #[test]
@@ -176,7 +200,10 @@ fn search_without_explain_returns_no_provenance() {
     )
     .unwrap();
 
-    assert!(result.provenance.is_none(), "provenance should be None when explain=false");
+    assert!(
+        result.provenance.is_none(),
+        "provenance should be None when explain=false"
+    );
 }
 
 #[test]
@@ -242,7 +269,10 @@ fn provenance_written_to_search_log_on_disk() {
     let log_path = dir.path().join("docs").join("_search_log.ndjson");
     assert!(log_path.exists(), "search log file should be created");
     let content = std::fs::read_to_string(&log_path).unwrap();
-    assert!(!content.is_empty(), "search log should contain at least one entry");
+    assert!(
+        !content.is_empty(),
+        "search log should contain at least one entry"
+    );
     // Each line should be valid JSON.
     for line in content.lines() {
         let v: serde_json::Value = serde_json::from_str(line)

@@ -114,7 +114,11 @@ fn parquet_files(path: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
-fn flush_text_batch(dag: &mut DagRunner, table: &str, texts: &mut Vec<String>) -> Result<(), String> {
+fn flush_text_batch(
+    dag: &mut DagRunner,
+    table: &str,
+    texts: &mut Vec<String>,
+) -> Result<(), String> {
     if texts.is_empty() {
         return Ok(());
     }

@@ -90,7 +90,9 @@ impl HnswIndex {
             }
         }
         let q = &self.vectors[idx];
-        if dot_f32(q, &self.vectors[self.entry]) > dot_f32(&self.vectors[self.entry], &self.vectors[self.entry]) {
+        if dot_f32(q, &self.vectors[self.entry])
+            > dot_f32(&self.vectors[self.entry], &self.vectors[self.entry])
+        {
             self.entry = idx;
         }
     }

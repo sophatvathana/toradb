@@ -69,7 +69,12 @@ impl Worker {
             .caches
             .lock()
             .map_err(|_| "cache lock poisoned".to_string())?;
-        if let Some(entry) = caches.segment_bm25.read().ok().and_then(|g| g.get(&bin_path)) {
+        if let Some(entry) = caches
+            .segment_bm25
+            .read()
+            .ok()
+            .and_then(|g| g.get(&bin_path))
+        {
             return entry.search(query, k);
         }
         let path = bin_path.clone();

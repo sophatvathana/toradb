@@ -18,17 +18,11 @@ pub fn read_file_io_uring(path: &Path) -> Result<Vec<u8>, String> {
     }
     let mut buf = vec![0u8; len];
     let ring = IoUring::new(8).map_err(|e| e.to_string())?;
-    let read_e = opcode::Read::new(
-        types::Fd(file.as_raw_fd()),
-        buf.as_mut_ptr(),
-        len as u32,
-    )
-    .build()
-    .user_data(0x42);
+    let read_e = opcode::Read::new(types::Fd(file.as_raw_fd()), buf.as_mut_ptr(), len as u32)
+        .build()
+        .user_data(0x42);
     unsafe {
-        ring.submission()
-            .push(&read_e)
-            .map_err(|e| e.to_string())?;
+        ring.submission().push(&read_e).map_err(|e| e.to_string())?;
     }
     ring.submit_and_wait(1).map_err(|e| e.to_string())?;
     let cqe = ring

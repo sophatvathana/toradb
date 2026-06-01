@@ -14,9 +14,7 @@ fn fetch_documents_by_ids_from_segment_only_table() {
             vec![
                 toradb_index::IngestDoc {
                     text: "alpha bravo document".into(),
-                    metadata: [("tag".into(), "a".into())]
-                        .into_iter()
-                        .collect(),
+                    metadata: [("tag".into(), "a".into())].into_iter().collect(),
                     vector: None,
                 },
                 toradb_index::IngestDoc {
@@ -30,8 +28,8 @@ fn fetch_documents_by_ids_from_segment_only_table() {
         dag.finish_bulk_ingest("docs", false).expect("finish");
     }
 
-    let manifest =
-        TableManifestFile::load(&TableManifestFile::path_for_table(&dir, "docs")).expect("manifest");
+    let manifest = TableManifestFile::load(&TableManifestFile::path_for_table(&dir, "docs"))
+        .expect("manifest");
     assert_eq!(manifest.index_mode, IndexMode::SegmentOnly);
 
     let mut dag = DagRunner::open_with_reload(&dir, false).expect("reopen");

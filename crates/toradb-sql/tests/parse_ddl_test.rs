@@ -31,9 +31,10 @@ fn parses_create_index() {
 
 #[test]
 fn parses_create_table_with_typed_columns() {
-    let stmts =
-        parse("CREATE TABLE events (id int, published date, score float, body varchar(255)) USING text")
-            .unwrap();
+    let stmts = parse(
+        "CREATE TABLE events (id int, published date, score float, body varchar(255)) USING text",
+    )
+    .unwrap();
     let Stmt::CreateTable(t) = &stmts[0] else {
         panic!("create table");
     };

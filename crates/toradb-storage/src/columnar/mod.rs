@@ -16,4 +16,6 @@ pub use reader::{
 };
 pub use schema::doc_schema;
 pub use typed_schema::table_doc_schema;
-pub use writer::{write_segment, write_segment_from_batches, write_segment_with_compression, ColumnarDoc};
+pub use writer::{
+    write_segment, write_segment_from_batches, write_segment_with_compression, ColumnarDoc,
+};

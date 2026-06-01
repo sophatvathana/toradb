@@ -170,7 +170,9 @@ pub fn read_checkpoint(base: &Path, table: &str) -> Result<Option<WalCheckpoint>
         return Ok(None);
     }
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    serde_json::from_slice(&bytes).map_err(|e| e.to_string()).map(Some)
+    serde_json::from_slice(&bytes)
+        .map_err(|e| e.to_string())
+        .map(Some)
 }
 
 fn write_checkpoint(base: &Path, table: &str, last_segment: &str) -> Result<(), String> {
@@ -211,16 +213,13 @@ pub fn checkpoint_after_manifest(
     if records.is_empty() {
         return Ok(false);
     }
-    let all_reconciled = records.iter().all(|r| {
-        manifest_segments.contains(&r.segment) && segment_dir.join(&r.segment).exists()
-    });
+    let all_reconciled = records
+        .iter()
+        .all(|r| manifest_segments.contains(&r.segment) && segment_dir.join(&r.segment).exists());
     if !all_reconciled {
         return Ok(false);
     }
-    let last_segment = records
-        .last()
-        .map(|r| r.segment.as_str())
-        .unwrap_or("");
+    let last_segment = records.last().map(|r| r.segment.as_str()).unwrap_or("");
     write_checkpoint(base, table, last_segment)?;
     truncate_flushes(base, table)?;
     Ok(true)

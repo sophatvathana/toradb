@@ -25,12 +25,10 @@ pub fn typed_cmp(ty: ColumnType, a: &str, b: &str) -> Option<Ordering> {
             let y = parse_date_days(b)?;
             Some(x.cmp(&y))
         }
-        ColumnType::Timestamp => {
-            match (parse_timestamp_millis(a), parse_timestamp_millis(b)) {
-                (Some(x), Some(y)) => Some(x.cmp(&y)),
-                _ => Some(a.cmp(b)),
-            }
-        }
+        ColumnType::Timestamp => match (parse_timestamp_millis(a), parse_timestamp_millis(b)) {
+            (Some(x), Some(y)) => Some(x.cmp(&y)),
+            _ => Some(a.cmp(b)),
+        },
         _ => Some(a.cmp(b)),
     }
 }
@@ -113,12 +111,18 @@ mod tests {
     #[test]
     fn int_orders_numerically_not_lexically() {
         assert_eq!(typed_cmp(ColumnType::Int, "9", "10"), Some(Ordering::Less));
-        assert_eq!(typed_cmp(ColumnType::Text, "9", "10"), Some(Ordering::Greater));
+        assert_eq!(
+            typed_cmp(ColumnType::Text, "9", "10"),
+            Some(Ordering::Greater)
+        );
     }
 
     #[test]
     fn float_orders_numerically() {
-        assert_eq!(typed_cmp(ColumnType::Float, "2.5", "10.1"), Some(Ordering::Less));
+        assert_eq!(
+            typed_cmp(ColumnType::Float, "2.5", "10.1"),
+            Some(Ordering::Less)
+        );
     }
 
     #[test]
@@ -155,14 +159,23 @@ mod tests {
 
     #[test]
     fn bool_orders_false_before_true() {
-        assert_eq!(typed_cmp(ColumnType::Bool, "false", "true"), Some(Ordering::Less));
-        assert_eq!(typed_cmp(ColumnType::Bool, "1", "0"), Some(Ordering::Greater));
+        assert_eq!(
+            typed_cmp(ColumnType::Bool, "false", "true"),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            typed_cmp(ColumnType::Bool, "1", "0"),
+            Some(Ordering::Greater)
+        );
     }
 
     #[test]
     fn unparseable_typed_value_returns_none() {
         assert_eq!(typed_cmp(ColumnType::Int, "abc", "10"), None);
-        assert_eq!(typed_cmp(ColumnType::Date, "not-a-date", "2024-01-01"), None);
+        assert_eq!(
+            typed_cmp(ColumnType::Date, "not-a-date", "2024-01-01"),
+            None
+        );
     }
 
     #[test]

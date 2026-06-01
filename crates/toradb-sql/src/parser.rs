@@ -39,23 +39,7 @@ fn parse_column_defs(tokens: &[Token], i: &mut usize) -> Result<Vec<(String, Str
         if ident_at(tokens, *i).is_some() {
             *i += 1;
         }
-        if matches!(tokens.get(*i), Some(Token::LParen)) {
-            ty.push('(');
-            *i += 1;
-            while !matches!(tokens.get(*i), Some(Token::RParen) | None) {
-                match tokens.get(*i) {
-                    Some(Token::Number(n)) => ty.push_str(&n.to_string()),
-                    Some(Token::Comma) => ty.push(','),
-                    Some(Token::Ident(s)) => ty.push_str(s),
-                    _ => {}
-                }
-                *i += 1;
-            }
-            if matches!(tokens.get(*i), Some(Token::RParen)) {
-                ty.push(')');
-                *i += 1;
-            }
-        }
+        consume_type_precision(tokens, i, &mut ty);
         columns.push((name, ty));
         match tokens.get(*i) {
             Some(Token::Comma) => {
@@ -72,26 +56,36 @@ fn parse_column_defs(tokens: &[Token], i: &mut usize) -> Result<Vec<(String, Str
     Ok(columns)
 }
 
+fn consume_type_precision(tokens: &[Token], i: &mut usize, ty: &mut String) {
+    let (open, close, close_tok): (char, char, fn(&Token) -> bool) = match tokens.get(*i) {
+        Some(Token::LParen) => ('(', ')', |t| matches!(t, Token::RParen)),
+        Some(Token::LBracket) => ('[', ']', |t| matches!(t, Token::RBracket)),
+        _ => return,
+    };
+    ty.push(open);
+    *i += 1;
+    while let Some(tok) = tokens.get(*i) {
+        if close_tok(tok) {
+            break;
+        }
+        match tok {
+            Token::Number(n) => ty.push_str(&n.to_string()),
+            Token::Comma => ty.push(','),
+            Token::Ident(s) => ty.push_str(s),
+            _ => {}
+        }
+        *i += 1;
+    }
+    if tokens.get(*i).map(close_tok).unwrap_or(false) {
+        ty.push(close);
+        *i += 1;
+    }
+}
+
 fn parse_type_at(tokens: &[Token], i: &mut usize) -> Result<String, String> {
     let mut ty = ident_at(tokens, *i).ok_or("expected column type")?;
     *i += 1;
-    if matches!(tokens.get(*i), Some(Token::LParen)) {
-        ty.push('(');
-        *i += 1;
-        while !matches!(tokens.get(*i), Some(Token::RParen) | None) {
-            match tokens.get(*i) {
-                Some(Token::Number(n)) => ty.push_str(&n.to_string()),
-                Some(Token::Comma) => ty.push(','),
-                Some(Token::Ident(s)) => ty.push_str(s),
-                _ => {}
-            }
-            *i += 1;
-        }
-        if matches!(tokens.get(*i), Some(Token::RParen)) {
-            ty.push(')');
-            *i += 1;
-        }
-    }
+    consume_type_precision(tokens, i, &mut ty);
     Ok(ty.to_ascii_lowercase())
 }
 
@@ -325,7 +319,11 @@ fn parse_or_predicate(tokens: &[Token], i: &mut usize) -> Result<WherePred, Stri
     Ok(left)
 }
 
-fn parse_predicate_clause(tokens: &[Token], i: &mut usize, clause_name: &str) -> Result<WherePred, String> {
+fn parse_predicate_clause(
+    tokens: &[Token],
+    i: &mut usize,
+    clause_name: &str,
+) -> Result<WherePred, String> {
     expect_ident(tokens, i, clause_name)?;
     parse_or_predicate(tokens, i)
 }
@@ -426,7 +424,10 @@ fn parse_vector_search(
     Ok((true, vector_query, vector_text))
 }
 
-fn parse_sparse_search(tokens: &[Token], i: &mut usize) -> Result<(Option<String>, Option<String>), String> {
+fn parse_sparse_search(
+    tokens: &[Token],
+    i: &mut usize,
+) -> Result<(Option<String>, Option<String>), String> {
     // SPARSE SEARCH <col> BM25 ( 'query' )
     expect_ident(tokens, i, "SPARSE")?;
     expect_ident(tokens, i, "SEARCH")?;
@@ -689,7 +690,10 @@ fn parse_ctes(tokens: &[Token], i: &mut usize) -> Result<Vec<Cte>, String> {
     Ok(out)
 }
 
-fn parse_qualified_table(tokens: &[Token], i: &mut usize) -> Result<(Option<String>, String), String> {
+fn parse_qualified_table(
+    tokens: &[Token],
+    i: &mut usize,
+) -> Result<(Option<String>, String), String> {
     let first = ident_at(tokens, *i)
         .ok_or("expected table name")?
         .to_lowercase();
@@ -883,7 +887,10 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             } else {
                 None
             };
-            out.push(Stmt::Delete { table, where_clause });
+            out.push(Stmt::Delete {
+                table,
+                where_clause,
+            });
             continue;
         }
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "DROP") {
@@ -961,16 +968,14 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
             out.push(Stmt::Describe { name });
             continue;
         }
-        let stream_prefix =
-            matches!(tokens.get(i), Some(Token::Ident(k)) if k == "STREAM") && {
-                i += 1;
-                true
-            };
-        let explain_prefix =
-            matches!(tokens.get(i), Some(Token::Ident(k)) if k == "EXPLAIN") && {
-                i += 1;
-                true
-            };
+        let stream_prefix = matches!(tokens.get(i), Some(Token::Ident(k)) if k == "STREAM") && {
+            i += 1;
+            true
+        };
+        let explain_prefix = matches!(tokens.get(i), Some(Token::Ident(k)) if k == "EXPLAIN") && {
+            i += 1;
+            true
+        };
         if matches!(tokens.get(i), Some(Token::Ident(k)) if k == "WITH") {
             let ctes = parse_ctes(&tokens, &mut i)?;
             if !matches!(tokens.get(i), Some(Token::Ident(k)) if k == "SELECT") {

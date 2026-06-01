@@ -1,8 +1,8 @@
 //! On-disk DiskANN graph snapshot (magic `TDA1` + rkyv HNSW-style graph payload).
 
-use crate::index_blob;
 use super::hnsw_index::{should_use_hnsw, HnswIndex};
 use super::vector_codec::VectorSnapshot;
+use crate::index_blob;
 
 pub const DISKANN_MAGIC: &[u8; 4] = b"TDA1";
 

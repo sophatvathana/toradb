@@ -28,7 +28,10 @@ fn col(r: &sql_exec::SqlSearchResult, name: &str) -> Vec<String> {
 fn doc(text: &str, kv: &[(&str, &str)]) -> IngestDoc {
     IngestDoc {
         text: text.into(),
-        metadata: kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        metadata: kv
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
         vector: None,
     }
 }
@@ -40,7 +43,11 @@ fn scan_select_by_id_eq() {
     let mut dag = DagRunner::open(&dir).expect("open");
     dag.add_documents(
         "docs",
-        vec![doc("alpha", &[("tag", "a")]), doc("beta", &[("tag", "b")]), doc("gamma", &[("tag", "c")])],
+        vec![
+            doc("alpha", &[("tag", "a")]),
+            doc("beta", &[("tag", "b")]),
+            doc("gamma", &[("tag", "c")]),
+        ],
     )
     .expect("add");
 
@@ -128,14 +135,24 @@ fn scan_select_excludes_deleted() {
     let dir = std::env::temp_dir().join("toradb_scan_deleted");
     let _ = std::fs::remove_dir_all(&dir);
     let mut dag = DagRunner::open(&dir).expect("open");
-    dag.add_documents("docs", vec![doc("a", &[]), doc("b", &[]), doc("c", &[])]).expect("add");
+    dag.add_documents("docs", vec![doc("a", &[]), doc("b", &[]), doc("c", &[])])
+        .expect("add");
 
     let stmts = parse("DELETE FROM docs WHERE id = 1").unwrap();
-    let toradb_sql::ast::Stmt::Delete { table, where_clause } = &stmts[0] else { panic!() };
+    let toradb_sql::ast::Stmt::Delete {
+        table,
+        where_clause,
+    } = &stmts[0]
+    else {
+        panic!()
+    };
     sql_exec::run_delete(&mut dag, table, where_clause.as_ref()).unwrap();
 
     let direct = run(&mut dag, "SELECT id FROM docs WHERE id = 1");
-    assert!(direct.ids.is_empty(), "deleted id not returned by direct lookup");
+    assert!(
+        direct.ids.is_empty(),
+        "deleted id not returned by direct lookup"
+    );
 
     let all = run(&mut dag, "SELECT id FROM docs WHERE id IN (0, 1, 2)");
     let mut ids = all.ids.clone();
@@ -150,7 +167,8 @@ fn scan_select_star_all_rows() {
     let dir = std::env::temp_dir().join("toradb_scan_star");
     let _ = std::fs::remove_dir_all(&dir);
     let mut dag = DagRunner::open(&dir).expect("open");
-    dag.add_documents("docs", vec![doc("a", &[]), doc("b", &[])]).expect("add");
+    dag.add_documents("docs", vec![doc("a", &[]), doc("b", &[])])
+        .expect("add");
 
     let r = run(&mut dag, "SELECT * FROM docs LIMIT 100");
     assert_eq!(r.ids.len(), 2);

@@ -126,7 +126,9 @@ mod tests {
     #[test]
     fn parses_quoted_sparse_query() {
         let t = tokenize("BM25('Nikola Tesla motor')");
-        assert!(t.iter().any(|tok| matches!(tok, Token::String(s) if s.contains("Nikola"))));
+        assert!(t
+            .iter()
+            .any(|tok| matches!(tok, Token::String(s) if s.contains("Nikola"))));
     }
 
     #[test]

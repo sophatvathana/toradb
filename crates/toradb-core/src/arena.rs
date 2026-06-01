@@ -5,6 +5,8 @@ pub struct Arena {
 
 impl Arena {
     pub fn new(capacity: usize) -> Self {
-        Self { _buf: Vec::with_capacity(capacity) }
+        Self {
+            _buf: Vec::with_capacity(capacity),
+        }
     }
 }

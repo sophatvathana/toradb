@@ -40,7 +40,10 @@ pub struct DagRunner {
 
 fn segment_bm25_per_segment_k(ctx: &ExecCtx) -> usize {
     let fetch = ctx.tier3_budget as usize;
-    fetch.saturating_mul(2).max(fetch).min(ctx.tier1_budget as usize)
+    fetch
+        .saturating_mul(2)
+        .max(fetch)
+        .min(ctx.tier1_budget as usize)
 }
 
 impl DagRunner {
@@ -344,13 +347,8 @@ impl DagRunner {
             .get(table)
             .map(|s| s.next_id)
             .unwrap_or_else(|| self.retrieval.store.next_id(table));
-        let added = persist::flush_arrow_batch_disk_only(
-            path.as_path(),
-            table,
-            since_id,
-            batch,
-            &opts,
-        )?;
+        let added =
+            persist::flush_arrow_batch_disk_only(path.as_path(), table, since_id, batch, &opts)?;
         if let Some(state) = self.bulk_disk_state.get_mut(table) {
             state.next_id = state.next_id.saturating_add(added as u64);
         }
@@ -461,7 +459,11 @@ impl DagRunner {
         persist::set_table_segment_workers(path.as_path(), table, workers)
     }
 
-    pub fn compact_table(&mut self, table: &str, full: bool) -> Result<toradb_storage::compaction::CompactReport, String> {
+    pub fn compact_table(
+        &mut self,
+        table: &str,
+        full: bool,
+    ) -> Result<toradb_storage::compaction::CompactReport, String> {
         let Some(ref path) = self.db_path else {
             return Err("COMPACT TABLE requires a local on-disk database".into());
         };
@@ -489,10 +491,7 @@ impl DagRunner {
         self.db_path.as_ref().map(|p| p.as_path())
     }
 
-    pub fn column_types_for(
-        &self,
-        table: &str,
-    ) -> HashMap<String, toradb_core::ColumnType> {
+    pub fn column_types_for(&self, table: &str) -> HashMap<String, toradb_core::ColumnType> {
         match self.db_path.as_ref() {
             Some(p) => persist::table_column_types(p.as_path(), table)
                 .into_iter()
@@ -538,7 +537,12 @@ impl DagRunner {
             }
             f(id, meta)
         };
-        crate::persist::scan_table_id_metadata(&self.retrieval.store, base.as_deref(), table, wrapped)
+        crate::persist::scan_table_id_metadata(
+            &self.retrieval.store,
+            base.as_deref(),
+            table,
+            wrapped,
+        )
     }
 
     fn tombstones_for(&mut self, table: &str) -> &HashSet<u64> {
@@ -609,7 +613,10 @@ impl DagRunner {
         if deleted.is_empty() {
             return Ok(docs);
         }
-        Ok(docs.into_iter().filter(|(id, _)| !deleted.contains(id)).collect())
+        Ok(docs
+            .into_iter()
+            .filter(|(id, _)| !deleted.contains(id))
+            .collect())
     }
 
     pub fn run(&mut self, batch: &mut Batch, ctx: &ExecCtx) -> QueryMetrics {
@@ -659,7 +666,10 @@ impl DagRunner {
             let kept: HashSet<_> = batch.candidates.ids.iter().copied().collect();
             for id in &tier1_survivors {
                 if !kept.contains(id) {
-                    p.record_tier1_drop(*id, "did not survive tier1→tier2 fusion budget".to_string());
+                    p.record_tier1_drop(
+                        *id,
+                        "did not survive tier1→tier2 fusion budget".to_string(),
+                    );
                 }
             }
             batch.provenance = Some(p);
@@ -704,8 +714,8 @@ impl DagRunner {
                 let query = batch.query.clone();
                 let num_segments = self.segment_parallelism(&table);
                 let workers = self.segment_worker_count(&table);
-                let parallel = batch.distributed_segments
-                    || (segment_only && num_segments > 1 && workers > 1);
+                let parallel =
+                    batch.distributed_segments || (segment_only && num_segments > 1 && workers > 1);
                 let _scheduler =
                     SegmentScheduler::new_with_numa(workers as usize, self.caches.numa);
                 metrics.segment_workers = if parallel && num_segments > 1 && workers > 1 {
@@ -717,9 +727,8 @@ impl DagRunner {
                 let seg_k = segment_bm25_per_segment_k(ctx);
                 let caches = &self.caches;
                 let db_path = self.db_path.as_ref().map(|p| p.0.clone());
-                let seg_bins: Arc<Vec<Option<PathBuf>>> =
-                    if use_disk_segments {
-                        db_path
+                let seg_bins: Arc<Vec<Option<PathBuf>>> = if use_disk_segments {
+                    db_path
                             .as_ref()
                             .map(|p| match persist::list_segment_bm25_bins(p.as_path(), &table) {
                                 Ok(v) => v,
@@ -732,9 +741,9 @@ impl DagRunner {
                             })
                             .map(Arc::new)
                             .unwrap_or_else(|| Arc::new(Vec::new()))
-                    } else {
-                        Arc::new(Vec::new())
-                    };
+                } else {
+                    Arc::new(Vec::new())
+                };
                 let active_segments: Vec<u32> = if use_disk_segments && num_segments > 1 {
                     self.db_path
                         .as_ref()
@@ -753,15 +762,16 @@ impl DagRunner {
                     (0..num_segments).collect()
                 };
                 metrics.segments_scanned = active_segments.len() as u32;
-                let use_cluster = batch.distributed_segments
-                    && self.cluster.is_some()
-                    && use_disk_segments;
+                let use_cluster =
+                    batch.distributed_segments && self.cluster.is_some() && use_disk_segments;
                 let seg_merged = if use_cluster {
                     let cluster = self.cluster.as_ref().expect("cluster");
                     match cluster.segment_bm25_search(&table, &query, seg_k, &active_segments) {
                         Ok(c) => c,
                         Err(e) => {
-                            eprintln!("toradb: distributed segment BM25 failed for table {table}: {e}");
+                            eprintln!(
+                                "toradb: distributed segment BM25 failed for table {table}: {e}"
+                            );
                             CandidateSet::default()
                         }
                     }
@@ -887,8 +897,7 @@ impl DagRunner {
                                 }
                             }
                         } else {
-                            self.retrieval
-                                .segment_candidates(&table, seg, &query, ctx)
+                            self.retrieval.segment_candidates(&table, seg, &query, ctx)
                         };
                         SegmentScheduler::merge_local(&mut merged, local);
                     }
@@ -900,11 +909,9 @@ impl DagRunner {
                 }
             } else if batch.tier1_enable_dense {
                 if let Some(ref path) = self.db_path {
-                    let run_dense_shards = persist::table_has_segment_hnsw_sidecars(
-                        path.as_path(),
-                        &table,
-                    )
-                    .unwrap_or(false);
+                    let run_dense_shards =
+                        persist::table_has_segment_hnsw_sidecars(path.as_path(), &table)
+                            .unwrap_or(false);
                     if run_dense_shards {
                         let query_vec = batch.query_vector.clone().unwrap_or_default();
                         if !query_vec.is_empty() {
@@ -912,22 +919,20 @@ impl DagRunner {
                             let workers = self.segment_worker_count(&table);
                             let parallel = batch.distributed_segments;
                             let scheduler =
-                    SegmentScheduler::new_with_numa(workers as usize, self.caches.numa);
+                                SegmentScheduler::new_with_numa(workers as usize, self.caches.numa);
                             let k = ctx.tier2_budget as usize;
                             metrics.segments_scanned = num_segments;
-                            metrics.segment_workers = if parallel && num_segments > 1 && workers > 1 {
+                            metrics.segment_workers = if parallel && num_segments > 1 && workers > 1
+                            {
                                 workers
                             } else {
                                 1
                             };
-                            let seg_merged = scheduler.run_for_segments(num_segments, parallel, |seg| {
-                                self.retrieval.segment_dense_candidates(
-                                    &table,
-                                    seg,
-                                    &query_vec,
-                                    k,
-                                )
-                            });
+                            let seg_merged =
+                                scheduler.run_for_segments(num_segments, parallel, |seg| {
+                                    self.retrieval
+                                        .segment_dense_candidates(&table, seg, &query_vec, k)
+                                });
                             if !seg_merged.is_empty() {
                                 batch.candidates = seg_merged;
                                 SegmentScheduler::local_top_k(
@@ -970,8 +975,7 @@ impl DagRunner {
         }
         if let Some(ref path) = self.db_path {
             if !batch.table.is_empty()
-                && persist::table_has_quant_sidecars(path.as_path(), &batch.table)
-                    .unwrap_or(false)
+                && persist::table_has_quant_sidecars(path.as_path(), &batch.table).unwrap_or(false)
             {
                 metrics.decompressions = metrics.tier3_candidates;
             }

@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use toradb_storage::columnar::{read_segment, write_segment, ColumnarDoc};
 use toradb_storage::cache::{read_segment_cached, StorageCaches};
+use toradb_storage::columnar::{read_segment, write_segment, ColumnarDoc};
 
 fn bench_segment_read(c: &mut Criterion) {
     let dir = tempfile::tempdir().unwrap();

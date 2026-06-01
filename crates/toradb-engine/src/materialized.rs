@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use toradb_core::{CandidateSet, QueryMetrics};
-use toradb_sql::{format_select, parse, ast::Stmt};
+use toradb_sql::{ast::Stmt, format_select, parse};
 
 use crate::dag::DagRunner;
 use crate::sql_exec::{project_retrieval_columns, run_search, SqlSearchResult};
@@ -128,7 +128,11 @@ pub fn create_materialized_view(
     Ok(rows)
 }
 
-pub fn refresh_materialized_view(dag: &mut DagRunner, base: &Path, name: &str) -> Result<usize, String> {
+pub fn refresh_materialized_view(
+    dag: &mut DagRunner,
+    base: &Path,
+    name: &str,
+) -> Result<usize, String> {
     let stored = load_view(base, name)?;
     let stmts = parse(&stored.query)?;
     let Stmt::Select(sel) = stmts
@@ -181,13 +185,7 @@ pub fn query_materialized_view(
     }
     let page = candidates.slice_range(sel.offset as usize, sel.limit.max(1) as usize);
     let source_table = source_table_from_view_query(base, view_name)?;
-    let projected = project_retrieval_columns(
-        dag,
-        &source_table,
-        sel,
-        &page.ids,
-        &page.scores,
-    )?;
+    let projected = project_retrieval_columns(dag, &source_table, sel, &page.ids, &page.scores)?;
     Ok(SqlSearchResult {
         ids: page.ids,
         scores: page.scores,

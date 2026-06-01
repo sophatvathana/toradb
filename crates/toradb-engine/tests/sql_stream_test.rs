@@ -17,10 +17,8 @@ fn stream_select_pages_with_offset() {
         .collect();
     dag.add_documents("docs", docs).expect("add");
 
-    let stmts = parse(
-        "SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 2",
-    )
-    .unwrap();
+    let stmts =
+        parse("SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 2").unwrap();
     let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };

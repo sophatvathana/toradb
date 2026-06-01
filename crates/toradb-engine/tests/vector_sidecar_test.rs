@@ -39,11 +39,12 @@ fn vector_sidecar_written_on_flush_and_used_on_reload() {
     assert!(persist::table_has_segment_vector_sidecars(&dir, "papers").expect("check"));
 
     let mut dag2 = DagRunner::open(&dir).expect("reopen");
-    let out = dag2
-        .table_documents("papers")
-        .expect("docs");
+    let out = dag2.table_documents("papers").expect("docs");
     assert_eq!(out.len(), 2);
-    assert_eq!(out[0].1.vector.as_deref(), Some([1.0, 0.0, 0.0, 0.0].as_slice()));
+    assert_eq!(
+        out[0].1.vector.as_deref(),
+        Some([1.0, 0.0, 0.0, 0.0].as_slice())
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

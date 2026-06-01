@@ -1,9 +1,7 @@
 use std::path::Path;
 
 use toradb_storage::columnar::{write_segment, ColumnarDoc, TableManifestFile};
-use toradb_storage::wal::{
-    append_flush, checkpoint_after_manifest, read_checkpoint, read_flushes,
-};
+use toradb_storage::wal::{append_flush, checkpoint_after_manifest, read_checkpoint, read_flushes};
 
 #[test]
 fn checkpoint_trims_flush_log_when_manifest_matches() {
@@ -37,7 +35,9 @@ fn checkpoint_trims_flush_log_when_manifest_matches() {
         checkpoint_after_manifest(base, table, &manifest.segments, &seg_dir).expect("checkpoint");
     assert!(trimmed);
     assert!(read_flushes(base, table).expect("read").is_empty());
-    let cp = read_checkpoint(base, table).expect("cp").expect("checkpoint file");
+    let cp = read_checkpoint(base, table)
+        .expect("cp")
+        .expect("checkpoint file");
     assert_eq!(cp.last_segment, seg_name);
 
     let _ = std::fs::remove_dir_all(&dir);

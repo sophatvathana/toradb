@@ -4,16 +4,55 @@ build-backend = "maturin"
 
 [project]
 name = "toradb"
+description = "Retrieval-focused database for local text, vector, and hybrid search — with a Python SDK, CLI, and retrieval SQL."
+readme = "README.md"
 requires-python = ">=3.8"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Sophat Vathana", email = "sovathana@slash.co" }]
+keywords = [
+    "search",
+    "retrieval",
+    "vector-database",
+    "bm25",
+    "hybrid-search",
+    "embeddings",
+    "rag",
+]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Scientific/Engineering :: Information Analysis",
     "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dynamic = ["version"]
 
+[project.urls]
+Homepage = "https://github.com/sophatvathana/toradb"
+Repository = "https://github.com/sophatvathana/toradb"
+Issues = "https://github.com/sophatvathana/toradb/issues"
+Changelog = "https://github.com/sophatvathana/toradb/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+embeddings = ["sentence-transformers"]
+openai = ["openai"]
+
 [project.scripts]
 toradb = "toradb.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Collect both `test_*.py` and the `*_smoke.py` suites.
+python_files = ["test_*.py", "*_smoke.py"]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

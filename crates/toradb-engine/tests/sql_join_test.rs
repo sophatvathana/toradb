@@ -52,10 +52,9 @@ fn sql_search_join_filters_by_metadata_match() {
         panic!("search");
     };
 
-    let stmts_all = parse(
-        "SELECT id FROM papers SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 5",
-    )
-    .unwrap();
+    let stmts_all =
+        parse("SELECT id FROM papers SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 5")
+            .unwrap();
     let toradb_sql::ast::Stmt::Select(sel_all) = &stmts_all[0] else {
         panic!("select");
     };

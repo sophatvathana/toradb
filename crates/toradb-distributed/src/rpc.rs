@@ -38,7 +38,9 @@ pub fn call(addr: &str, req: &Request) -> Result<Response, String> {
         return Err("RPC response too large".into());
     }
     let mut resp_body = vec![0u8; rlen];
-    stream.read_exact(&mut resp_body).map_err(|e| e.to_string())?;
+    stream
+        .read_exact(&mut resp_body)
+        .map_err(|e| e.to_string())?;
     serde_json::from_slice(&resp_body).map_err(|e| e.to_string())
 }
 
@@ -47,9 +49,7 @@ where
     F: FnOnce(Request) -> Response,
 {
     let listener = TcpListener::bind(addr).map_err(|e| format!("bind {addr}: {e}"))?;
-    let (mut stream, _) = listener
-        .accept()
-        .map_err(|e| format!("accept: {e}"))?;
+    let (mut stream, _) = listener.accept().map_err(|e| format!("accept: {e}"))?;
     let req = recv_request(&mut stream)?;
     let resp = handler(req);
     send_response(&mut stream, &resp)

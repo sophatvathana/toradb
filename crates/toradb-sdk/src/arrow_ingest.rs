@@ -44,8 +44,8 @@ fn ingest_record_batch(batch: &RecordBatch) -> Result<Vec<IngestDoc>, String> {
 
     let mut docs = Vec::with_capacity(n);
     for row in 0..n {
-        let text = utf8_value(batch, text_idx, row)
-            .ok_or_else(|| format!("missing text at row {row}"))?;
+        let text =
+            utf8_value(batch, text_idx, row).ok_or_else(|| format!("missing text at row {row}"))?;
         if text.is_empty() {
             continue;
         }
@@ -83,14 +83,23 @@ fn find_text_column(schema: &arrow::datatypes::Schema) -> Result<usize, String> 
 fn utf8_value(batch: &RecordBatch, col: usize, row: usize) -> Option<String> {
     let array = batch.column(col);
     match array.data_type() {
-        DataType::Utf8 => array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row).to_string()) }),
+        DataType::Utf8 => array.as_any().downcast_ref::<StringArray>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        }),
         DataType::LargeUtf8 => array
             .as_any()
             .downcast_ref::<LargeStringArray>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row).to_string()) }),
+            .and_then(|a| {
+                if a.is_null(row) {
+                    None
+                } else {
+                    Some(a.value(row).to_string())
+                }
+            }),
         _ => None,
     }
 }
@@ -101,30 +110,48 @@ fn cell_as_metadata_string(batch: &RecordBatch, col: usize, row: usize) -> Optio
     }
     let array = batch.column(col);
     match array.data_type() {
-        DataType::Int64 => array
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row).to_string()) }),
-        DataType::Int32 => array
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row).to_string()) }),
-        DataType::UInt64 => array
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row).to_string()) }),
-        DataType::UInt32 => array
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row).to_string()) }),
-        DataType::Float64 => array
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row).to_string()) }),
-        DataType::Float32 => array
-            .as_any()
-            .downcast_ref::<Float32Array>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row).to_string()) }),
+        DataType::Int64 => array.as_any().downcast_ref::<Int64Array>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        }),
+        DataType::Int32 => array.as_any().downcast_ref::<Int32Array>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        }),
+        DataType::UInt64 => array.as_any().downcast_ref::<UInt64Array>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        }),
+        DataType::UInt32 => array.as_any().downcast_ref::<UInt32Array>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        }),
+        DataType::Float64 => array.as_any().downcast_ref::<Float64Array>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        }),
+        DataType::Float32 => array.as_any().downcast_ref::<Float32Array>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        }),
         _ => None,
     }
 }
@@ -137,24 +164,35 @@ fn extract_vector(batch: &RecordBatch, col: usize, row: usize) -> Option<Vec<f32
             if list.is_null(row) {
                 return None;
             }
-            let values = list.value(row);
-            let floats = values.as_any().downcast_ref::<Float32Array>()?;
-            let start = list.value_offsets()[row] as usize;
-            let end = list.value_offsets()[row + 1] as usize;
-            Some((start..end).map(|i| floats.value(i)).collect())
+            // `list.value(row)` already returns this row's sub-array; index it from 0.
+            floats_from_array(&list.value(row))
         }
-        DataType::FixedSizeList(_, dim) => {
+        DataType::FixedSizeList(_, _) => {
             let list = array
                 .as_any()
                 .downcast_ref::<arrow::array::FixedSizeListArray>()?;
             if list.is_null(row) {
                 return None;
             }
-            let values = list.value(row);
-            let floats = values.as_any().downcast_ref::<Float32Array>()?;
-            Some((0..*dim as usize).map(|i| floats.value(i)).collect())
+            floats_from_array(&list.value(row))
         }
         _ => None,
+    }
+}
+
+fn floats_from_array(values: &dyn Array) -> Option<Vec<f32>> {
+    use arrow::array::Float64Array;
+    let n = values.len();
+    if let Some(a) = values.as_any().downcast_ref::<Float32Array>() {
+        Some((0..n).map(|i| a.value(i)).collect())
+    } else if let Some(a) = values.as_any().downcast_ref::<Float64Array>() {
+        Some((0..n).map(|i| a.value(i) as f32).collect())
+    } else if let Some(a) = values.as_any().downcast_ref::<Int64Array>() {
+        Some((0..n).map(|i| a.value(i) as f32).collect())
+    } else if let Some(a) = values.as_any().downcast_ref::<Int32Array>() {
+        Some((0..n).map(|i| a.value(i) as f32).collect())
+    } else {
+        None
     }
 }
 

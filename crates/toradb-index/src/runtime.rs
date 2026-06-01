@@ -74,7 +74,10 @@ impl RetrievalRuntime {
             push_cap(&mut merged, metadata::filter(&self.store, table, q, cap));
         }
         if let Some(tag) = q.split_whitespace().find(|w| w.starts_with('#')) {
-            push_cap(&mut merged, bitmap::filter(&self.store, table, &tag[1..], cap));
+            push_cap(
+                &mut merged,
+                bitmap::filter(&self.store, table, &tag[1..], cap),
+            );
         }
 
         batch.candidates = merged;

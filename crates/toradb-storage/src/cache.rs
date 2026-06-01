@@ -7,7 +7,7 @@ use toradb_core::CandidateSet;
 use toradb_index::sparse::bm25_tbm3::{Bm25Tbm3Meta, Bm25Tbm3View, TBM3_MAGIC};
 
 use crate::columnar::ColumnarDoc;
-use crate::numa::{NumaConfig, prefetch_mmap_sequential};
+use crate::numa::{prefetch_mmap_sequential, NumaConfig};
 
 #[derive(Debug, Clone)]
 pub struct CacheConfig {
@@ -25,9 +25,7 @@ impl Default for CacheConfig {
 }
 
 fn env_usize(name: &str) -> Option<usize> {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.parse().ok())
+    std::env::var(name).ok().and_then(|v| v.parse().ok())
 }
 
 fn system_memory_bytes() -> Option<usize> {
@@ -48,11 +46,7 @@ fn system_memory_bytes() -> Option<usize> {
         if let Ok(s) = std::fs::read_to_string("/proc/meminfo") {
             for line in s.lines() {
                 if line.starts_with("MemTotal:") {
-                    let kb: usize = line
-                        .split_whitespace()
-                        .nth(1)?
-                        .parse()
-                        .ok()?;
+                    let kb: usize = line.split_whitespace().nth(1)?.parse().ok()?;
                     return Some(kb.saturating_mul(1024));
                 }
             }
@@ -280,7 +274,11 @@ impl SegmentBm25Cache {
         self.map.get(&path.to_path_buf()).cloned()
     }
 
-    pub fn get_or_insert<F>(&mut self, path: &Path, load: F) -> Result<Arc<CachedBm25Segment>, String>
+    pub fn get_or_insert<F>(
+        &mut self,
+        path: &Path,
+        load: F,
+    ) -> Result<Arc<CachedBm25Segment>, String>
     where
         F: FnOnce() -> Result<CachedBm25Segment, String>,
     {
@@ -304,9 +302,9 @@ impl SegmentBm25Cache {
         while self.bytes_used + size > self.byte_budget && !self.order.is_empty() {
             if let Some(old_key) = self.order.pop_front() {
                 if let Some(old) = self.map.remove(&old_key) {
-                    self.bytes_used = self.bytes_used.saturating_sub(
-                        CachedBm25Segment::entry_bytes(&old_key, &old),
-                    );
+                    self.bytes_used = self
+                        .bytes_used
+                        .saturating_sub(CachedBm25Segment::entry_bytes(&old_key, &old));
                 }
             }
         }
@@ -409,7 +407,10 @@ pub fn read_segment_cached(
     crate::columnar::read_segment_io_uring(path)
 }
 
-pub fn get_or_mmap(path: &Path, mut caches: Option<&mut StorageCaches>) -> Result<Arc<Mmap>, String> {
+pub fn get_or_mmap(
+    path: &Path,
+    mut caches: Option<&mut StorageCaches>,
+) -> Result<Arc<Mmap>, String> {
     if let Some(caches) = &mut caches {
         if let Some(hit) = caches.index_blobs.get(path) {
             return Ok(hit);
@@ -425,9 +426,9 @@ pub fn get_or_mmap(path: &Path, mut caches: Option<&mut StorageCaches>) -> Resul
         return Ok(arc);
     }
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    Ok(Arc::new(
-        unsafe { Mmap::map(&file).map_err(|e| e.to_string())? },
-    ))
+    Ok(Arc::new(unsafe {
+        Mmap::map(&file).map_err(|e| e.to_string())?
+    }))
 }
 
 #[cfg(test)]

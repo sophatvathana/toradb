@@ -46,7 +46,9 @@ impl<'a> Coordinator<'a> {
                     }
                 }
                 Response::Error { message } => return Err(message),
-                Response::Ok { candidates: None, .. } => {}
+                Response::Ok {
+                    candidates: None, ..
+                } => {}
             }
         }
         merged.sort_by_score(true);
@@ -70,7 +72,11 @@ impl<'a> Coordinator<'a> {
 }
 
 /// Merge helper used by coordinator and tests.
-pub fn merge_candidate_sets(mut acc: CandidateSet, other: CandidateSet, cap: usize) -> CandidateSet {
+pub fn merge_candidate_sets(
+    mut acc: CandidateSet,
+    other: CandidateSet,
+    cap: usize,
+) -> CandidateSet {
     let mut scores: std::collections::HashMap<DocId, f32> = acc
         .ids
         .iter()
@@ -79,10 +85,7 @@ pub fn merge_candidate_sets(mut acc: CandidateSet, other: CandidateSet, cap: usi
         .collect();
     for (i, id) in other.ids.iter().enumerate() {
         let s = other.scores[i];
-        scores
-            .entry(*id)
-            .and_modify(|e| *e = e.max(s))
-            .or_insert(s);
+        scores.entry(*id).and_modify(|e| *e = e.max(s)).or_insert(s);
     }
     let mut ranked: Vec<(DocId, f32)> = scores.into_iter().collect();
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));

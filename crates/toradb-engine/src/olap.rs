@@ -54,7 +54,10 @@ fn having_matches(
                 false
             }
         }
-        WherePred::In { column, values: allow } => {
+        WherePred::In {
+            column,
+            values: allow,
+        } => {
             if !group_cols.is_empty() && group_cols[0] == *column {
                 allow.iter().any(|v| v == group_key)
             } else {
@@ -199,7 +202,11 @@ impl GroupAccum {
 
 pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggregateResult, String> {
     let agg_specs = aggregate_specs(sel)?;
-    if sel.group_by.is_empty() && agg_specs.iter().any(|(func, _)| !matches!(func, AggFunc::CountStar)) {
+    if sel.group_by.is_empty()
+        && agg_specs
+            .iter()
+            .any(|(func, _)| !matches!(func, AggFunc::CountStar))
+    {
         return Err("analytics SELECT without GROUP BY supports only COUNT(*)".into());
     }
     let group_cols = sel.group_by.clone();
@@ -264,14 +271,12 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
                 }
             }
             let key = group_key(&group_cols, id, metadata);
-            let entry = groups
-                .entry(key)
-                .or_insert_with(|| {
-                    agg_specs
-                        .iter()
-                        .map(|(func, _)| GroupAccum::new(func))
-                        .collect::<Vec<_>>()
-                });
+            let entry = groups.entry(key).or_insert_with(|| {
+                agg_specs
+                    .iter()
+                    .map(|(func, _)| GroupAccum::new(func))
+                    .collect::<Vec<_>>()
+            });
             for (idx, (func, col)) in agg_specs.iter().enumerate() {
                 if matches!(func, AggFunc::CountStar) {
                     entry[idx].update(func, None, None);

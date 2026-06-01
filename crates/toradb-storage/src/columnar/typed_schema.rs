@@ -43,7 +43,9 @@ pub fn column_type_to_arrow(ty: ColumnType) -> DataType {
 }
 
 /// Stable lowercase column order for schema and encode.
-pub fn sorted_column_types(column_types: &[(String, ColumnTypeSpec)]) -> Vec<(String, ColumnTypeSpec)> {
+pub fn sorted_column_types(
+    column_types: &[(String, ColumnTypeSpec)],
+) -> Vec<(String, ColumnTypeSpec)> {
     let mut out: Vec<_> = column_types
         .iter()
         .map(|(n, t)| (n.to_ascii_lowercase(), *t))
@@ -83,11 +85,7 @@ mod tests {
     #[test]
     fn table_schema_includes_typed_fields() {
         let schema = table_doc_schema(&[("rank".into(), ColumnTypeSpec::new(ColumnType::Int))]);
-        let names: Vec<_> = schema
-            .fields()
-            .iter()
-            .map(|f| f.name().as_str())
-            .collect();
+        let names: Vec<_> = schema.fields().iter().map(|f| f.name().as_str()).collect();
         assert_eq!(
             names,
             vec!["id", "text", "rank", "metadata_json", "embedding"]

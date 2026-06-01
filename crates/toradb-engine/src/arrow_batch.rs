@@ -1,12 +1,12 @@
 //! Arrow RecordBatch -> columnar segment rows without `IngestDoc` intermediate.
 
-use std::collections::HashMap;
 use arrow::array::{
     Array, Float32Array, Float64Array, Int32Array, Int64Array, LargeStringArray, ListArray,
     StringArray, UInt32Array, UInt64Array,
 };
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
+use std::collections::HashMap;
 use toradb_storage::columnar::ColumnarDoc;
 
 /// Convert an Arrow batch to columnar docs with sequential ids starting at `since_id`.
@@ -42,8 +42,8 @@ pub fn record_batch_to_columnar(
     let mut out = Vec::with_capacity(n);
     let mut row_id = since_id;
     for row in 0..n {
-        let text = utf8_value(batch, text_idx, row)
-            .ok_or_else(|| format!("missing text at row {row}"))?;
+        let text =
+            utf8_value(batch, text_idx, row).ok_or_else(|| format!("missing text at row {row}"))?;
         if text.is_empty() {
             continue;
         }
@@ -89,16 +89,13 @@ fn find_text_column(schema: &arrow::datatypes::Schema) -> Result<usize, String> 
 fn utf8_value(batch: &RecordBatch, col: usize, row: usize) -> Option<String> {
     let array = batch.column(col);
     match array.data_type() {
-        DataType::Utf8 => array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .and_then(|a| {
-                if a.is_null(row) {
-                    None
-                } else {
-                    Some(a.value(row).to_string())
-                }
-            }),
+        DataType::Utf8 => array.as_any().downcast_ref::<StringArray>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        }),
         DataType::LargeUtf8 => array
             .as_any()
             .downcast_ref::<LargeStringArray>()
@@ -116,14 +113,20 @@ fn utf8_value(batch: &RecordBatch, col: usize, row: usize) -> Option<String> {
 fn uint64_value(batch: &RecordBatch, col: usize, row: usize) -> Option<u64> {
     let array = batch.column(col);
     match array.data_type() {
-        DataType::UInt64 => array
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row)) }),
-        DataType::Int64 => array
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row) as u64) }),
+        DataType::UInt64 => array.as_any().downcast_ref::<UInt64Array>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row))
+            }
+        }),
+        DataType::Int64 => array.as_any().downcast_ref::<Int64Array>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row) as u64)
+            }
+        }),
         DataType::Utf8 => utf8_value(batch, col, row).and_then(|s| s.parse().ok()),
         _ => None,
     }
@@ -135,30 +138,48 @@ fn cell_as_metadata_string(batch: &RecordBatch, col: usize, row: usize) -> Optio
     }
     let array = batch.column(col);
     match array.data_type() {
-        DataType::Int64 => array
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row).to_string()) }),
-        DataType::Int32 => array
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row).to_string()) }),
-        DataType::UInt64 => array
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row).to_string()) }),
-        DataType::UInt32 => array
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row).to_string()) }),
-        DataType::Float64 => array
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row).to_string()) }),
-        DataType::Float32 => array
-            .as_any()
-            .downcast_ref::<Float32Array>()
-            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row).to_string()) }),
+        DataType::Int64 => array.as_any().downcast_ref::<Int64Array>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        }),
+        DataType::Int32 => array.as_any().downcast_ref::<Int32Array>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        }),
+        DataType::UInt64 => array.as_any().downcast_ref::<UInt64Array>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        }),
+        DataType::UInt32 => array.as_any().downcast_ref::<UInt32Array>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        }),
+        DataType::Float64 => array.as_any().downcast_ref::<Float64Array>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        }),
+        DataType::Float32 => array.as_any().downcast_ref::<Float32Array>().and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        }),
         _ => None,
     }
 }

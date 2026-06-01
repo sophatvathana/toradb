@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use toradb_core::{Batch, ExecCtx};
-use toradb_engine::DagRunner;
 use toradb_engine::persist;
+use toradb_engine::DagRunner;
 use toradb_storage::columnar::IndexMode;
 use toradb_storage::columnar::TableManifestFile;
 
@@ -27,8 +27,8 @@ fn msmarco_segment_only_search_warm_cache() {
     };
     let table = "passages";
     persist::rebuild_segment_id_ranges(&base, table).expect("rebuild id ranges");
-    let manifest =
-        TableManifestFile::load(&TableManifestFile::path_for_table(&base, table)).expect("manifest");
+    let manifest = TableManifestFile::load(&TableManifestFile::path_for_table(&base, table))
+        .expect("manifest");
     assert_eq!(manifest.index_mode, IndexMode::SegmentOnly);
     assert!(!manifest.segment_id_ranges.is_empty());
 
@@ -62,13 +62,7 @@ fn msmarco_segment_only_search_warm_cache() {
         );
     }
 
-    let hit_ids: Vec<u64> = batch
-        .candidates
-        .ids
-        .iter()
-        .copied()
-        .take(100)
-        .collect();
+    let hit_ids: Vec<u64> = batch.candidates.ids.iter().copied().take(100).collect();
     if !hit_ids.is_empty() {
         let t_fetch = std::time::Instant::now();
         let docs = dag.fetch_documents(table, &hit_ids).expect("fetch");
@@ -82,6 +76,10 @@ fn msmarco_segment_only_search_warm_cache() {
         assert_eq!(docs.len(), hit_ids.len());
         let t_fetch2 = std::time::Instant::now();
         let docs2 = dag.fetch_documents(table, &hit_ids).expect("fetch2");
-        eprintln!("msmarco fetch repeat {:?} ({} docs)", t_fetch2.elapsed(), docs2.len());
+        eprintln!(
+            "msmarco fetch repeat {:?} ({} docs)",
+            t_fetch2.elapsed(),
+            docs2.len()
+        );
     }
 }

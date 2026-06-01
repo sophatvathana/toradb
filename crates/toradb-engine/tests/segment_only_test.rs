@@ -28,16 +28,14 @@ fn bulk_finish_segment_only_skips_merged_bm25() {
         dag.finish_bulk_ingest("docs", false).expect("finish");
     }
 
-    let manifest =
-        TableManifestFile::load(&TableManifestFile::path_for_table(&dir, "docs")).expect("manifest");
+    let manifest = TableManifestFile::load(&TableManifestFile::path_for_table(&dir, "docs"))
+        .expect("manifest");
     assert_eq!(manifest.index_mode, IndexMode::SegmentOnly);
     assert!(
         !dir.join("docs/indexes/bm25.bin").exists(),
         "segment-only should not write merged bm25.bin"
     );
-    assert!(
-        toradb_engine::persist::table_has_segment_bm25_sidecars(&dir, "docs").expect("check")
-    );
+    assert!(toradb_engine::persist::table_has_segment_bm25_sidecars(&dir, "docs").expect("check"));
     assert!(
         dir.join("docs/indexes/seg_00001.bm25.bin").exists(),
         "TBM3 sidecar"
@@ -71,8 +69,8 @@ fn bulk_finish_segment_only_skips_merged_bm25() {
         second
     );
 
-    let manifest =
-        TableManifestFile::load(&TableManifestFile::path_for_table(&dir, "docs")).expect("manifest");
+    let manifest = TableManifestFile::load(&TableManifestFile::path_for_table(&dir, "docs"))
+        .expect("manifest");
     assert!(
         !manifest.segment_id_ranges.is_empty(),
         "finish should record segment id ranges"
