@@ -8,7 +8,7 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use toradb_core::ColumnType;
+use toradb_core::{ColumnType, ColumnTypeSpec};
 
 use super::typed_schema::sorted_column_types;
 use super::writer::ColumnarDoc;
@@ -16,10 +16,11 @@ use super::writer::ColumnarDoc;
 /// Split ingest metadata into typed column values and overflow JSON.
 pub fn split_metadata_for_write(
     metadata: &HashMap<String, String>,
-    column_types: &[(String, ColumnType)],
+    column_types: &[(String, ColumnTypeSpec)],
 ) -> (HashMap<String, String>, HashMap<String, String>) {
     let typed_names: HashMap<String, ColumnType> = sorted_column_types(column_types)
         .into_iter()
+        .map(|(n, t)| (n, t.kind))
         .collect();
     let mut typed = HashMap::new();
     let mut overflow = HashMap::new();
@@ -225,7 +226,7 @@ fn decode_typed_value(ty: ColumnType, array: &dyn Array, row: usize) -> Option<S
 
 pub fn docs_to_batch(
     schema: &Arc<Schema>,
-    column_types: &[(String, ColumnType)],
+    column_types: &[(String, ColumnTypeSpec)],
     docs: &[ColumnarDoc],
 ) -> Result<RecordBatch, String> {
     let sorted = sorted_column_types(column_types);
@@ -244,7 +245,7 @@ pub fn docs_to_batch(
                 typed.get(name).cloned()
             })
             .collect();
-        columns.push(encode_typed_column(name, *ty, &values)?);
+        columns.push(encode_typed_column(name, ty.kind, &values)?);
     }
 
     let mut meta_json = Vec::with_capacity(docs.len());
@@ -294,7 +295,7 @@ fn build_embedding_array(docs: &[ColumnarDoc]) -> Result<ArrayRef, String> {
 
 pub fn row_metadata_from_batch(
     batch: &RecordBatch,
-    column_types: &[(String, ColumnType)],
+    column_types: &[(String, ColumnTypeSpec)],
     row: usize,
 ) -> Result<HashMap<String, String>, String> {
     let schema = batch.schema();
@@ -318,7 +319,7 @@ pub fn row_metadata_from_batch(
     }
     for (name, ty) in sorted_column_types(column_types) {
         if let Some(col) = batch.column_by_name(&name) {
-            if let Some(v) = decode_typed_value(ty, col.as_ref(), row) {
+            if let Some(v) = decode_typed_value(ty.kind, col.as_ref(), row) {
                 out.insert(name, v);
             }
         }
@@ -339,7 +340,7 @@ fn legacy_json_metadata(batch: &RecordBatch, row: usize) -> Result<HashMap<Strin
     serde_json::from_str(meta.value(row)).map_err(|e| e.to_string())
 }
 
-pub fn infer_column_types_from_batch(batch: &RecordBatch) -> Vec<(String, ColumnType)> {
+pub fn infer_column_types_from_batch(batch: &RecordBatch) -> Vec<(String, ColumnTypeSpec)> {
     let schema = batch.schema();
     if super::typed_schema::is_legacy_arrow_schema(schema.as_ref()) {
         return Vec::new();
@@ -352,7 +353,7 @@ pub fn infer_column_types_from_batch(batch: &RecordBatch) -> Vec<(String, Column
             if matches!(name.as_str(), "id" | "text" | "metadata_json" | "embedding") {
                 return None;
             }
-            Some((name.clone(), arrow_type_to_column_type(f.data_type())))
+            Some((name.clone(), ColumnTypeSpec::new(arrow_type_to_column_type(f.data_type()))))
         })
         .collect()
 }
@@ -371,8 +372,8 @@ fn arrow_type_to_column_type(dt: &DataType) -> ColumnType {
 
 fn effective_column_types<'a>(
     batch: &RecordBatch,
-    column_types: &'a [(String, ColumnType)],
-) -> Vec<(String, ColumnType)> {
+    column_types: &'a [(String, ColumnTypeSpec)],
+) -> Vec<(String, ColumnTypeSpec)> {
     if column_types.is_empty() {
         infer_column_types_from_batch(batch)
     } else {
@@ -382,7 +383,7 @@ fn effective_column_types<'a>(
 
 pub fn batch_to_docs(
     batch: &RecordBatch,
-    column_types: &[(String, ColumnType)],
+    column_types: &[(String, ColumnTypeSpec)],
 ) -> Result<Vec<ColumnarDoc>, String> {
     let ids = batch
         .column_by_name("id")
@@ -419,7 +420,7 @@ pub fn batch_to_docs(
 
 pub fn batch_to_id_metadata(
     batch: &RecordBatch,
-    column_types: &[(String, ColumnType)],
+    column_types: &[(String, ColumnTypeSpec)],
 ) -> Result<Vec<(u64, HashMap<String, String>)>, String> {
     let ids = batch
         .column_by_name("id")

@@ -103,10 +103,10 @@ impl Database {
                     self.ensure_table(&table);
                     persist::ensure_table_on_disk(Path::new(&self.path), &table)
                         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
-                    let column_types: Vec<(String, toradb_core::ColumnType)> = t
+                    let column_types: Vec<(String, toradb_core::ColumnTypeSpec)> = t
                         .columns
                         .iter()
-                        .map(|(name, ty)| (name.clone(), toradb_core::ColumnType::parse(ty)))
+                        .map(|(name, ty)| (name.clone(), toradb_core::ColumnTypeSpec::parse(ty)))
                         .collect();
                     if !column_types.is_empty() {
                         let _ = persist::set_table_column_types(
@@ -209,6 +209,7 @@ impl Database {
                     table,
                     column,
                     column_type,
+                    rewrite,
                 } => {
                     let table = table.to_lowercase();
                     let base = self.dag.db_path().ok_or_else(|| {
@@ -216,13 +217,31 @@ impl Database {
                             "ALTER COLUMN TYPE requires a local on-disk database",
                         )
                     })?;
-                    let ty = toradb_core::ColumnType::parse(column_type);
+                    let ty = toradb_core::ColumnTypeSpec::parse(column_type);
                     persist::alter_table_column_type(base, &table, column, ty)
                         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
-                    return Ok(SqlOutcome::Message(format!(
-                        "ok: set column {column} type {} on {table}",
-                        ty.as_str()
-                    )));
+                    let compact_note = if *rewrite {
+                        let report = self
+                            .dag
+                            .compact_table(&table, true)
+                            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                        Some(format!(
+                            "compacted {} -> {} segments",
+                            report.segments_before, report.segments_after
+                        ))
+                    } else {
+                        None
+                    };
+                    let needs = persist::table_needs_typed_segment_rewrite(base, &table)
+                        .unwrap_or(false);
+                    let msg = persist::format_alter_column_type_message(
+                        &table,
+                        column,
+                        ty,
+                        needs,
+                        compact_note.as_deref(),
+                    );
+                    return Ok(SqlOutcome::Message(msg));
                 }
                 Stmt::AlterTableSetSegmentWorkers { table, workers } => {
                     self.dag

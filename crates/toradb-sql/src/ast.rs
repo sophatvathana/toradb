@@ -10,6 +10,8 @@ pub enum Stmt {
         table: String,
         column: String,
         column_type: String,
+        /// When true, run `COMPACT TABLE … FULL` after updating the manifest.
+        rewrite: bool,
     },
     CompactTable { table: String, full: bool },
     DropTable { name: String },
@@ -91,6 +93,8 @@ pub enum WherePred {
         high: String,
         negated: bool,
     },
+    And(Vec<WherePred>),
+    Or(Vec<WherePred>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

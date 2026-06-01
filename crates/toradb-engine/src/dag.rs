@@ -492,7 +492,10 @@ impl DagRunner {
         table: &str,
     ) -> HashMap<String, toradb_core::ColumnType> {
         match self.db_path.as_ref() {
-            Some(p) => persist::table_column_types(p.as_path(), table),
+            Some(p) => persist::table_column_types(p.as_path(), table)
+                .into_iter()
+                .map(|(k, v)| (k, v.kind))
+                .collect(),
             None => HashMap::new(),
         }
     }

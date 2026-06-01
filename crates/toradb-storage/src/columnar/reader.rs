@@ -13,13 +13,21 @@ use parquet::arrow::arrow_reader::{
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::statistics::Statistics;
-use toradb_core::{ColumnType, CompressionConfig};
+use toradb_core::{ColumnTypeSpec, CompressionConfig};
 
 use super::metadata_codec::{batch_to_docs, batch_to_id_metadata};
+use super::typed_schema::is_legacy_arrow_schema;
 use super::writer::ColumnarDoc;
 
 pub fn read_segment(path: &Path) -> Result<Vec<ColumnarDoc>, String> {
     read_segment_with_compression(path, None)
+}
+
+/// True when the Parquet file uses the legacy four-column layout (no native typed fields).
+pub fn segment_uses_legacy_layout(path: &Path) -> Result<bool, String> {
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file).map_err(|e| e.to_string())?;
+    Ok(is_legacy_arrow_schema(builder.schema().as_ref()))
 }
 
 /// Read rows whose id is in `want`. When `id_bounds` is set and ids are sequential in the
@@ -258,7 +266,7 @@ pub fn read_segment_texts(path: &Path) -> Result<Vec<(u64, String)>, String> {
 
 pub fn scan_segment_id_metadata(
     path: &Path,
-    column_types: &[(String, ColumnType)],
+    column_types: &[(String, ColumnTypeSpec)],
     mut f: impl FnMut(u64, HashMap<String, String>) -> Result<(), String>,
 ) -> Result<(), String> {
     let file = File::open(path).map_err(|e| e.to_string())?;

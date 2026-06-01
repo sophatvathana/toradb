@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use toradb_core::ColumnType;
+use toradb_core::{ColumnType, ColumnTypeSpec};
 use toradb_storage::columnar::{
     read_segment, write_segment_with_compression, ColumnarDoc, TableManifestFile,
 };
@@ -12,8 +12,8 @@ fn native_int_column_roundtrip_and_overflow_json() {
     std::fs::create_dir_all(&table_dir).unwrap();
     let mut manifest = TableManifestFile::default();
     manifest.set_column_types(vec![
-        ("rank".to_string(), ColumnType::Int),
-        ("tag".to_string(), ColumnType::Text),
+        ("rank".to_string(), ColumnTypeSpec::new(ColumnType::Int)),
+        ("tag".to_string(), ColumnTypeSpec::new(ColumnType::Text)),
     ]);
     manifest.save(&table_dir.join("manifest.json")).unwrap();
 

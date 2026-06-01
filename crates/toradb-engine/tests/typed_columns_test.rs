@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use toradb_core::ColumnType;
+use toradb_core::{ColumnType, ColumnTypeSpec};
 use toradb_engine::{persist, sql_exec, DagRunner};
 use toradb_index::IngestDoc;
 use toradb_sql::ast::Stmt;
@@ -51,10 +51,10 @@ fn exec_create_table(dag: &mut DagRunner, ddl: &str) {
     dag.ensure_table(&table);
     let base = dag.db_path().expect("db path");
     persist::ensure_table_on_disk(base, &table).unwrap();
-    let column_types: Vec<(String, ColumnType)> = t
+    let column_types: Vec<(String, ColumnTypeSpec)> = t
         .columns
         .iter()
-        .map(|(name, ty)| (name.clone(), ColumnType::parse(ty)))
+        .map(|(name, ty)| (name.clone(), ColumnTypeSpec::parse(ty)))
         .collect();
     if !column_types.is_empty() {
         persist::set_table_column_types(base, &table, &column_types).unwrap();
@@ -67,12 +67,13 @@ fn exec_alter_column_type(dag: &mut DagRunner, ddl: &str) {
         table,
         column,
         column_type,
+        rewrite: _,
     } = &stmts[0]
     else {
         panic!("expected ALTER COLUMN TYPE");
     };
     let base = dag.db_path().expect("db path");
-    let ty = ColumnType::parse(column_type);
+    let ty = ColumnTypeSpec::parse(column_type);
     persist::alter_table_column_type(base, table, column, ty).unwrap();
 }
 
@@ -266,6 +267,35 @@ fn retrieval_where_filters_by_typed_rank() {
         "SELECT id FROM docs SPARSE SEARCH body BM25('rank') WHERE rank > 9 LIMIT 10",
     );
     assert_eq!(ids.len(), 2, "only rank 10 and 100 should match");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn compound_where_and_filters_analytics() {
+    let dir = std::env::temp_dir().join("toradb_compound_where");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut dag = DagRunner::open(&dir).expect("open");
+    exec_create_table(
+        &mut dag,
+        "CREATE TABLE docs (rank int, slot text) USING text",
+    );
+    dag.add_documents(
+        "docs",
+        vec![
+            doc("a", &[("rank", "10"), ("slot", "A")]),
+            doc("b", &[("rank", "10"), ("slot", "B")]),
+            doc("c", &[("rank", "5"), ("slot", "A")]),
+        ],
+    )
+    .expect("add");
+
+    let rows = run_counts(
+        &mut dag,
+        "SELECT slot, COUNT(*) FROM docs WHERE rank > 9 AND slot = 'A' GROUP BY slot",
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, "A");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

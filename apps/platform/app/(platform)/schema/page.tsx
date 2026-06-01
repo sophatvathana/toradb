@@ -29,7 +29,14 @@ const COLUMN_TYPES = [
   "vector",
 ] as const;
 
-type ColumnRow = { name: string; type: string };
+type ColumnRow = { name: string; type: string; vectorDim?: string };
+
+function formatColumnType(col: ColumnRow): string {
+  if (col.type === "vector" && col.vectorDim?.trim()) {
+    return `vector(${col.vectorDim.trim()})`;
+  }
+  return col.type;
+}
 
 export default function SchemaPage() {
   const [tableName, setTableName] = useState("passages");
@@ -73,7 +80,7 @@ export default function SchemaPage() {
       : tableName.trim();
     const cols = columns.filter((c) => c.name.trim());
     const colClause = cols.length
-      ? ` (${cols.map((c) => `${c.name.trim()} ${c.type}`).join(", ")})`
+      ? ` (${cols.map((c) => `${c.name.trim()} ${formatColumnType(c)}`).join(", ")})`
       : "";
     void runDdl(`CREATE TABLE ${qualified}${colClause} USING ${mode}`);
   }
@@ -148,7 +155,7 @@ export default function SchemaPage() {
                     <select
                       className="w-32 rounded-md border border-border bg-card px-2 py-1.5 text-sm"
                       value={col.type}
-                      onChange={(e) => updateColumn(idx, { type: e.target.value })}
+                      onChange={(e) => updateColumn(idx, { type: e.target.value, vectorDim: undefined })}
                     >
                       {COLUMN_TYPES.map((t) => (
                         <option key={t} value={t}>
@@ -156,6 +163,14 @@ export default function SchemaPage() {
                         </option>
                       ))}
                     </select>
+                    {col.type === "vector" && (
+                      <Input
+                        className="w-20"
+                        value={col.vectorDim ?? ""}
+                        placeholder="dim"
+                        onChange={(e) => updateColumn(idx, { vectorDim: e.target.value })}
+                      />
+                    )}
                     <Button
                       type="button"
                       variant="outline"

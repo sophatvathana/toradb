@@ -18,6 +18,67 @@ fn parse_numeric_metadata(value: &str) -> Option<f64> {
     value.trim().parse().ok()
 }
 
+fn having_matches(
+    pred: &WherePred,
+    group_key: &str,
+    values: &[f64],
+    value_col_lookup: &HashMap<String, usize>,
+    group_cols: &[String],
+) -> bool {
+    match pred {
+        WherePred::And(parts) => parts
+            .iter()
+            .all(|p| having_matches(p, group_key, values, value_col_lookup, group_cols)),
+        WherePred::Or(parts) => parts
+            .iter()
+            .any(|p| having_matches(p, group_key, values, value_col_lookup, group_cols)),
+        WherePred::Compare { column, op, value } => {
+            if let Some(idx) = value_col_lookup.get(column) {
+                let b = parse_numeric_metadata(value).unwrap_or(0.0);
+                let a = values.get(*idx).copied().unwrap_or(0.0);
+                match op {
+                    CompareOp::Eq => (a - b).abs() < f64::EPSILON,
+                    CompareOp::Ne => (a - b).abs() >= f64::EPSILON,
+                    CompareOp::Lt => a < b,
+                    CompareOp::Lte => a <= b,
+                    CompareOp::Gt => a > b,
+                    CompareOp::Gte => a >= b,
+                }
+            } else if !group_cols.is_empty() && group_cols[0] == *column {
+                match op {
+                    CompareOp::Eq => group_key == value,
+                    CompareOp::Ne => group_key != value,
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        }
+        WherePred::In { column, values: allow } => {
+            if !group_cols.is_empty() && group_cols[0] == *column {
+                allow.iter().any(|v| v == group_key)
+            } else {
+                false
+            }
+        }
+        WherePred::Between {
+            column,
+            low,
+            high,
+            negated,
+        } => {
+            if let Some(idx) = value_col_lookup.get(column) {
+                let a = values.get(*idx).copied().unwrap_or(0.0);
+                let lo = parse_numeric_metadata(low).unwrap_or(f64::NEG_INFINITY);
+                let hi = parse_numeric_metadata(high).unwrap_or(f64::INFINITY);
+                (a >= lo && a <= hi) ^ negated
+            } else {
+                false
+            }
+        }
+    }
+}
+
 fn value_column_name(func: &AggFunc, column: Option<&str>) -> String {
     match func {
         AggFunc::CountStar => "count".into(),
@@ -231,46 +292,8 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
             .enumerate()
             .map(|(idx, name)| (name.clone(), idx))
             .collect::<HashMap<_, _>>();
-        pairs.retain(|(group_key, values)| match pred {
-            WherePred::Compare { column, op, value } => {
-                if let Some(idx) = value_col_lookup.get(column) {
-                    let b = parse_numeric_metadata(value).unwrap_or(0.0);
-                    let a = values.get(*idx).copied().unwrap_or(0.0);
-                    match op {
-                        CompareOp::Eq => (a - b).abs() < f64::EPSILON,
-                        CompareOp::Ne => (a - b).abs() >= f64::EPSILON,
-                        CompareOp::Lt => a < b,
-                        CompareOp::Lte => a <= b,
-                        CompareOp::Gt => a > b,
-                        CompareOp::Gte => a >= b,
-                    }
-                } else if !group_cols.is_empty() && group_cols[0] == *column {
-                    match op {
-                        CompareOp::Eq => group_key == value,
-                        CompareOp::Ne => group_key != value,
-                        _ => false,
-                    }
-                } else {
-                    false
-                }
-            }
-            WherePred::In { column, values: allow } => {
-                if !group_cols.is_empty() && group_cols[0] == *column {
-                    allow.iter().any(|v| v == group_key)
-                } else {
-                    false
-                }
-            }
-            WherePred::Between { column, low, high, negated } => {
-                if let Some(idx) = value_col_lookup.get(column) {
-                    let a = values.get(*idx).copied().unwrap_or(0.0);
-                    let lo = parse_numeric_metadata(low).unwrap_or(f64::NEG_INFINITY);
-                    let hi = parse_numeric_metadata(high).unwrap_or(f64::INFINITY);
-                    (a >= lo && a <= hi) ^ negated
-                } else {
-                    false
-                }
-            }
+        pairs.retain(|(group_key, values)| {
+            having_matches(pred, group_key, values, &value_col_lookup, &group_cols)
         });
     }
     pairs.sort_by(|a, b| a.0.cmp(&b.0));

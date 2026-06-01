@@ -13,21 +13,26 @@ use crate::persist;
 use crate::table_search::{run_table_search, TableSearchOptions};
 
 fn expand_cte_select(sel: &SelectStmt) -> Result<SelectStmt, String> {
+    expand_cte_select_depth(sel, 2)
+}
+
+fn expand_cte_select_depth(sel: &SelectStmt, max_depth: u32) -> Result<SelectStmt, String> {
     if sel.ctes.is_empty() {
         return Ok(sel.clone());
+    }
+    if max_depth == 0 {
+        return Err("nested WITH depth exceeded".into());
     }
     let cte = sel
         .ctes
         .iter()
         .find(|cte| cte.name == sel.table)
         .ok_or("WITH currently supports selecting from a defined CTE table name only")?;
-    if sel.join.is_some() {
-        return Err("WITH + JOIN is not supported yet".into());
-    }
-    let mut expanded = (*cte.query).clone();
-    if !expanded.ctes.is_empty() {
-        return Err("nested WITH clauses are not supported yet".into());
-    }
+    let mut expanded = if cte.query.ctes.is_empty() {
+        (*cte.query).clone()
+    } else {
+        expand_cte_select_depth(&cte.query, max_depth - 1)?
+    };
     expanded.select_items = sel.select_items.clone();
     expanded.group_by = sel.group_by.clone();
     expanded.where_clause = sel.where_clause.clone();
@@ -40,6 +45,7 @@ fn expand_cte_select(sel: &SelectStmt) -> Result<SelectStmt, String> {
     expanded.distributed |= sel.distributed;
     expanded.hyde |= sel.hyde;
     expanded.crag |= sel.crag;
+    expanded.join = sel.join.clone();
     if sel.sparse_query.is_some() {
         expanded.sparse_query = sel.sparse_query.clone();
     }

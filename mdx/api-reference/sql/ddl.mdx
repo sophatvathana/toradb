@@ -55,9 +55,24 @@ Assign or change a metadata column type on an existing table:
 
 ```sql
 ALTER TABLE articles ALTER COLUMN year TYPE int
+ALTER TABLE papers ALTER COLUMN embedding TYPE vector(384)
+ALTER TABLE articles ALTER COLUMN year TYPE int REWRITE
 ```
 
-See [Typed metadata columns](/guides/typed-columns) for supported types and filter behavior.
+`REWRITE` chains `COMPACT TABLE … FULL` after updating the manifest. Without it, run compact manually when segments still use the legacy four-column layout.
+
+See [Typed metadata columns](/guides/typed-columns) for supported types, compound `WHERE`, and filter behavior.
+
+## WITH + JOIN
+
+CTEs can be combined with metadata joins:
+
+```sql
+WITH cited AS (SELECT id, paper_id FROM papers)
+SELECT id FROM cited
+JOIN citations ON cited.paper_id = citations.paper_id
+SPARSE SEARCH body BM25('query') LIMIT 10
+```
 
 ## SHOW TABLES
 

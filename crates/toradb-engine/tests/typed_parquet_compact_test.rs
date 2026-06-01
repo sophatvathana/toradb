@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use toradb_core::ColumnType;
+use toradb_core::{ColumnType, ColumnTypeSpec};
 use toradb_engine::DagRunner;
 use toradb_index::IngestDoc;
 use toradb_storage::columnar::{write_segment_with_compression, ColumnarDoc, TableManifestFile};
@@ -16,7 +16,7 @@ fn compact_full_migrates_legacy_segments_to_native_typed_layout() {
     std::fs::create_dir_all(&seg_dir).unwrap();
 
     let mut manifest = TableManifestFile::default();
-    manifest.set_column_types(vec![("rank".to_string(), ColumnType::Int)]);
+    manifest.set_column_types(vec![("rank".to_string(), ColumnTypeSpec::new(ColumnType::Int))]);
     manifest.segments.push("seg_00001.parquet".into());
     manifest.record_segment_id_range("seg_00001.parquet", 0, 1);
     manifest.save(&table_dir.join("manifest.json")).unwrap();

@@ -49,6 +49,12 @@ pub fn metadata_matches(
     col_types: &HashMap<String, ColumnType>,
 ) -> bool {
     match pred {
+        WherePred::And(parts) => parts
+            .iter()
+            .all(|p| metadata_matches(p, metadata, col_types)),
+        WherePred::Or(parts) => parts
+            .iter()
+            .any(|p| metadata_matches(p, metadata, col_types)),
         WherePred::Compare { column, op, value } => {
             let Some(v) = metadata.get(column) else {
                 return false;

@@ -12,7 +12,8 @@ use toradb_core::{CandidateSet, DocId};
 use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
 use toradb_storage::columnar::{
     bm25_snapshot_from_segment, parquet_row_count, read_segment, read_segment_id_bounds,
-    read_segment_matching_ids, scan_segment_id_metadata, write_segment_with_compression,
+    read_segment_matching_ids, scan_segment_id_metadata, segment_uses_legacy_layout,
+    write_segment_with_compression,
     ColumnarDoc, IndexMode, QueryMode, SegmentMeta, TableManifestFile, ROUTED_QUERY_MIN_SEGMENTS,
 };
 use toradb_storage::cache::{get_or_mmap, read_segment_cached, CachedBm25Segment, StorageCaches};
@@ -146,7 +147,7 @@ pub fn ensure_table_on_disk(base: &Path, table: &str) -> Result<(), String> {
 pub fn set_table_column_types(
     base: &Path,
     table: &str,
-    types: &[(String, toradb_core::ColumnType)],
+    types: &[(String, toradb_core::ColumnTypeSpec)],
 ) -> Result<(), String> {
     if types.is_empty() {
         return Ok(());
@@ -162,7 +163,7 @@ pub fn alter_table_column_type(
     base: &Path,
     table: &str,
     column: &str,
-    ty: toradb_core::ColumnType,
+    ty: toradb_core::ColumnTypeSpec,
 ) -> Result<(), String> {
     ensure_table_on_disk(base, table)?;
     let manifest_path = TableManifestFile::path_for_table(base, table);
@@ -178,9 +179,48 @@ pub fn alter_table_column_type(
     manifest.save(&manifest_path)
 }
 
+pub fn table_needs_typed_segment_rewrite(base: &Path, table: &str) -> Result<bool, String> {
+    let manifest_path = TableManifestFile::path_for_table(base, table);
+    if !manifest_path.exists() {
+        return Ok(false);
+    }
+    let manifest = TableManifestFile::load(&manifest_path)?;
+    if manifest.column_types.is_empty() {
+        return Ok(false);
+    }
+    let seg_dir = TableManifestFile::segments_dir(base, table);
+    for seg in &manifest.segments {
+        let path = seg_dir.join(seg);
+        if path.exists() && segment_uses_legacy_layout(&path)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub fn format_alter_column_type_message(
+    table: &str,
+    column: &str,
+    ty: toradb_core::ColumnTypeSpec,
+    needs_rewrite: bool,
+    compact_note: Option<&str>,
+) -> String {
+    let mut msg = format!(
+        "ok: set column {column} type {} on {table}",
+        ty.sql_name()
+    );
+    if let Some(note) = compact_note {
+        msg.push_str("; ");
+        msg.push_str(note);
+    } else if needs_rewrite {
+        msg.push_str(&format!(" (run COMPACT TABLE {table} FULL to rewrite segments)"));
+    }
+    msg
+}
+
 pub fn format_create_table_ddl(
     table: &str,
-    columns: &[(String, toradb_core::ColumnType)],
+    columns: &[(String, toradb_core::ColumnTypeSpec)],
     using: &str,
 ) -> String {
     if columns.is_empty() {
@@ -188,7 +228,7 @@ pub fn format_create_table_ddl(
     } else {
         let cols = columns
             .iter()
-            .map(|(n, t)| format!("{} {}", n, t.as_str()))
+            .map(|(n, t)| format!("{} {}", n, t.sql_name()))
             .collect::<Vec<_>>()
             .join(", ");
         format!("CREATE TABLE {table} ({cols}) USING {using}")
@@ -202,7 +242,7 @@ pub fn format_describe_table(
     segments: Option<u32>,
     segment_workers: Option<u32>,
     indexes: &[String],
-    column_types: &[(String, toradb_core::ColumnType)],
+    column_types: &[(String, toradb_core::ColumnTypeSpec)],
 ) -> String {
     let mut lines = vec![
         format!("table: {table}"),
@@ -229,7 +269,7 @@ pub fn format_describe_table(
     if !column_types.is_empty() {
         lines.push("column_types:".into());
         for (name, ty) in column_types {
-            lines.push(format!("  {name} {}", ty.as_str()));
+            lines.push(format!("  {name} {}", ty.sql_name()));
         }
     }
     lines.join("\n")
@@ -238,7 +278,7 @@ pub fn format_describe_table(
 pub fn table_column_types_ordered(
     base: &Path,
     table: &str,
-) -> Vec<(String, toradb_core::ColumnType)> {
+) -> Vec<(String, toradb_core::ColumnTypeSpec)> {
     let path = TableManifestFile::path_for_table(base, table);
     if !path.exists() {
         return Vec::new();
@@ -252,7 +292,7 @@ pub fn table_column_types_ordered(
 pub fn table_column_types(
     base: &Path,
     table: &str,
-) -> std::collections::HashMap<String, toradb_core::ColumnType> {
+) -> std::collections::HashMap<String, toradb_core::ColumnTypeSpec> {
     let path = TableManifestFile::path_for_table(base, table);
     if !path.exists() {
         return std::collections::HashMap::new();

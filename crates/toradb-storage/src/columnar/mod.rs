@@ -12,7 +12,7 @@ pub use manifest::{
 pub use reader::{
     bm25_snapshot_from_segment, decode_segment_bytes, iter_segment_batches, parquet_row_count,
     read_segment, read_segment_id_bounds, read_segment_io_uring, read_segment_matching_ids,
-    read_segment_texts, scan_segment_id_metadata,
+    read_segment_texts, scan_segment_id_metadata, segment_uses_legacy_layout,
 };
 pub use schema::doc_schema;
 pub use typed_schema::table_doc_schema;

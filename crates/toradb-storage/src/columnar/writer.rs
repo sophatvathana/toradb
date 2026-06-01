@@ -7,7 +7,7 @@ use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
-use toradb_core::{ColumnType, CompressionConfig};
+use toradb_core::{ColumnTypeSpec, CompressionConfig};
 
 use super::metadata_codec::{docs_to_batch, docs_to_legacy_batch};
 use super::typed_schema::table_doc_schema;
@@ -57,7 +57,7 @@ pub fn write_segment_with_compression(
     path: &Path,
     docs: &[ColumnarDoc],
     compression: Option<&CompressionConfig>,
-    column_types: &[(String, ColumnType)],
+    column_types: &[(String, ColumnTypeSpec)],
 ) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;

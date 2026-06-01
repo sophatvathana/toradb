@@ -119,6 +119,7 @@ struct TableDetailResponse {
     is_materialized_view: bool,
     bulk_ingest_active: bool,
     column_types: Vec<ColumnTypeEntry>,
+    needs_segment_rewrite: bool,
 }
 
 #[derive(Serialize)]
@@ -448,9 +449,11 @@ fn table_detail_for(
         .into_iter()
         .map(|(name, ty)| ColumnTypeEntry {
             name,
-            column_type: ty.as_str().to_string(),
+            column_type: ty.sql_name(),
         })
         .collect();
+    let needs_segment_rewrite =
+        persist::table_needs_typed_segment_rewrite(&state.db_path, name).unwrap_or(false);
     Ok(TableDetailResponse {
         name: name.to_string(),
         rows: dag.table_row_count(name).unwrap_or(0),
@@ -463,6 +466,7 @@ fn table_detail_for(
         is_materialized_view,
         bulk_ingest_active: dag.bulk_ingest_active(name),
         column_types,
+        needs_segment_rewrite,
     })
 }
 
@@ -602,7 +606,7 @@ async fn table_ddl(
         } else {
             let body = cols
                 .iter()
-                .map(|(n, ty)| format!("{n} {}", ty.as_str()))
+                .map(|(n, ty)| format!("{n} {}", ty.sql_name()))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(" ({body})")
@@ -1152,10 +1156,10 @@ fn execute_sql(
                 }
                 ApiError::bad_request(e)
             })?;
-            let column_types: Vec<(String, toradb_core::ColumnType)> = t
+            let column_types: Vec<(String, toradb_core::ColumnTypeSpec)> = t
                 .columns
                 .iter()
-                .map(|(name, ty)| (name.clone(), toradb_core::ColumnType::parse(ty)))
+                .map(|(name, ty)| (name.clone(), toradb_core::ColumnTypeSpec::parse(ty)))
                 .collect();
             if !column_types.is_empty() {
                 let _ = persist::set_table_column_types(
@@ -1166,6 +1170,31 @@ fn execute_sql(
             }
             let _ = catalog_store::save_catalog(&state.db_path, &binder.catalog);
             message_response("ddl", &format!("ok: created table {table}"), started)
+        }
+        Stmt::CreateIndex(idx) => {
+            let table = idx.table.to_lowercase();
+            dag.create_index(&table, &idx.using).map_err(|e| {
+                if record_history {
+                    record_error_history(state, query, started);
+                }
+                ApiError::bad_request(e)
+            })?;
+            let mut binder = load_binder(&state.db_path);
+            binder.bind(&stmts).map_err(|e| {
+                if record_history {
+                    record_error_history(state, query, started);
+                }
+                ApiError::bad_request(e)
+            })?;
+            let _ = catalog_store::save_catalog(&state.db_path, &binder.catalog);
+            message_response(
+                "ddl",
+                &format!(
+                    "ok: created index {} on {table} ({}) USING {}",
+                    idx.name, idx.column, idx.using
+                ),
+                started,
+            )
         }
         Stmt::ShowTables => {
             let names = dag.list_tables().map_err(|e| ApiError::bad_request(e))?;
@@ -1234,9 +1263,10 @@ fn execute_sql(
             table,
             column,
             column_type,
+            rewrite,
         } => {
             let table = table.to_lowercase();
-            let ty = toradb_core::ColumnType::parse(column_type);
+            let ty = toradb_core::ColumnTypeSpec::parse(column_type);
             persist::alter_table_column_type(&state.db_path, &table, column, ty)
                 .map_err(|e| {
                     if record_history {
@@ -1244,14 +1274,30 @@ fn execute_sql(
                     }
                     ApiError::bad_request(e)
                 })?;
-            message_response(
-                "ddl",
-                &format!(
-                    "ok: set column {column} type {} on {table}",
-                    ty.as_str()
-                ),
-                started,
-            )
+            let compact_note = if *rewrite {
+                let report = dag.compact_table(&table, true).map_err(|e| {
+                    if record_history {
+                        record_error_history(state, query, started);
+                    }
+                    ApiError::bad_request(e)
+                })?;
+                Some(format!(
+                    "compacted {} -> {} segments",
+                    report.segments_before, report.segments_after
+                ))
+            } else {
+                None
+            };
+            let needs = persist::table_needs_typed_segment_rewrite(&state.db_path, &table)
+                .unwrap_or(false);
+            let msg = persist::format_alter_column_type_message(
+                &table,
+                column,
+                ty,
+                needs,
+                compact_note.as_deref(),
+            );
+            message_response("ddl", &msg, started)
         }
         Stmt::AlterTableSetSegmentWorkers { table, workers } => {
             let table = table.to_lowercase();

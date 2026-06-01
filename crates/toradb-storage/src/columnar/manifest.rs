@@ -91,7 +91,7 @@ pub struct TableManifestFile {
     #[serde(default)]
     pub segment_meta: Vec<SegmentMeta>,
     #[serde(default)]
-    pub column_types: Vec<(String, toradb_core::ColumnType)>,
+    pub column_types: Vec<(String, toradb_core::ColumnTypeSpec)>,
 }
 
 impl Default for TableManifestFile {
@@ -295,11 +295,11 @@ impl TableManifestFile {
         }
     }
 
-    pub fn set_column_types(&mut self, types: Vec<(String, toradb_core::ColumnType)>) {
+    pub fn set_column_types(&mut self, types: Vec<(String, toradb_core::ColumnTypeSpec)>) {
         self.column_types = types;
     }
 
-    pub fn column_type(&self, name: &str) -> Option<toradb_core::ColumnType> {
+    pub fn column_type(&self, name: &str) -> Option<toradb_core::ColumnTypeSpec> {
         self.column_types
             .iter()
             .find(|(n, _)| n.eq_ignore_ascii_case(name))
@@ -369,17 +369,35 @@ mod tests {
         let path = dir.path().join("manifest.json");
         let mut manifest = TableManifestFile::default();
         manifest.set_column_types(vec![
-            ("published".to_string(), toradb_core::ColumnType::Date),
-            ("rank".to_string(), toradb_core::ColumnType::Int),
+            ("published".to_string(), toradb_core::ColumnTypeSpec::new(toradb_core::ColumnType::Date)),
+            ("rank".to_string(), toradb_core::ColumnTypeSpec::new(toradb_core::ColumnType::Int)),
         ]);
         manifest.save(&path).unwrap();
         let raw: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(raw["schema_version"], 3);
+        assert_eq!(raw["schema_version"], 4);
         let parsed = TableManifestFile::load(&path).unwrap();
-        assert_eq!(parsed.column_type("PUBLISHED"), Some(toradb_core::ColumnType::Date));
-        assert_eq!(parsed.column_type("rank"), Some(toradb_core::ColumnType::Int));
+        assert_eq!(parsed.column_type("PUBLISHED"), Some(toradb_core::ColumnTypeSpec::new(toradb_core::ColumnType::Date)));
+        assert_eq!(parsed.column_type("rank"), Some(toradb_core::ColumnTypeSpec::new(toradb_core::ColumnType::Int)));
         assert_eq!(parsed.column_type("missing"), None);
+    }
+
+    #[test]
+    fn vector_dim_column_types_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        let mut manifest = TableManifestFile::default();
+        manifest.set_column_types(vec![(
+            "embedding".to_string(),
+            toradb_core::ColumnTypeSpec::parse("vector(384)"),
+        )]);
+        manifest.save(&path).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw["column_types"][0][1], "vector:384");
+        let parsed = TableManifestFile::load(&path).unwrap();
+        let ty = parsed.column_type("embedding").unwrap();
+        assert_eq!(ty.vector_dim, Some(384));
     }
 
     #[test]

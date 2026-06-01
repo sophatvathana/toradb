@@ -51,7 +51,20 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
   const [sampleFilter, setSampleFilter] = useState("");
   const [editColName, setEditColName] = useState("");
   const [editColType, setEditColType] = useState<string>("int");
+  const [editVectorDim, setEditVectorDim] = useState("");
+  const [alterRewrite, setAlterRewrite] = useState(false);
   const [typeAlterLoading, setTypeAlterLoading] = useState(false);
+  const [indexName, setIndexName] = useState("");
+  const [indexColumn, setIndexColumn] = useState("text");
+  const [indexUsing, setIndexUsing] = useState("BM25");
+  const [indexCreateLoading, setIndexCreateLoading] = useState(false);
+
+  function formatAlterType(type: string, vectorDim: string): string {
+    if (type === "vector" && vectorDim.trim()) {
+      return `vector(${vectorDim.trim()})`;
+    }
+    return type;
+  }
 
   useEffect(() => {
     if (tableName) {
@@ -190,6 +203,13 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
                     No typed columns declared. Metadata filters use legacy string heuristics.
                   </p>
                 )}
+                {detail.needs_segment_rewrite && (
+                  <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-900 dark:text-amber-100">
+                    Segments use the legacy layout. Run{" "}
+                    <strong>Compact (full)</strong> below or enable{" "}
+                    <strong>Rewrite segments</strong> when altering a column type.
+                  </p>
+                )}
                 <div className="flex flex-wrap items-end gap-2 border-t pt-3">
                   <div className="space-y-1">
                     <label className="text-xs text-muted-foreground">Column</label>
@@ -205,7 +225,10 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
                     <select
                       className="h-8 rounded-md border bg-background px-2 text-xs"
                       value={editColType}
-                      onChange={(e) => setEditColType(e.target.value)}
+                      onChange={(e) => {
+                        setEditColType(e.target.value);
+                        if (e.target.value !== "vector") setEditVectorDim("");
+                      }}
                     >
                       {COLUMN_TYPES.map((t) => (
                         <option key={t} value={t}>
@@ -214,6 +237,25 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
                       ))}
                     </select>
                   </div>
+                  {editColType === "vector" && (
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">Vector dim</label>
+                      <Input
+                        className="h-8 text-xs"
+                        value={editVectorDim}
+                        placeholder="384"
+                        onChange={(e) => setEditVectorDim(e.target.value)}
+                      />
+                    </div>
+                  )}
+                  <label className="flex items-center gap-1 self-end pb-1 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={alterRewrite}
+                      onChange={(e) => setAlterRewrite(e.target.checked)}
+                    />
+                    Rewrite segments
+                  </label>
                   <Button
                     type="button"
                     size="sm"
@@ -221,13 +263,15 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
                     disabled={typeAlterLoading || !editColName.trim()}
                     onClick={() => {
                       const col = editColName.trim();
-                      const sql = `ALTER TABLE ${tableName} ALTER COLUMN ${col} TYPE ${editColType}`;
+                      const typeSql = formatAlterType(editColType, editVectorDim);
+                      const rewriteClause = alterRewrite ? " REWRITE" : "";
+                      const sql = `ALTER TABLE ${tableName} ALTER COLUMN ${col} TYPE ${typeSql}${rewriteClause}`;
                       setTypeAlterLoading(true);
                       void runSql(sql)
                         .then(async () => {
                           toast({
                             title: "Column type updated",
-                            description: `${col} → ${editColType}`,
+                            description: `${col} → ${typeSql}`,
                           });
                           await fetchTableDetailAction(tableName);
                         })
@@ -278,12 +322,73 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
             <CardHeader>
               <CardTitle>Indexes</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
               <DataTable
                 columns={indexColDefs}
                 data={(tableIndexes?.rows ?? []) as Record<string, unknown>[]}
                 emptyMessage="No indexes reported"
               />
+              <div className="flex flex-wrap items-end gap-2 border-t pt-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Index name</label>
+                  <Input
+                    className="h-8 w-32 font-mono text-xs"
+                    placeholder="idx_text"
+                    value={indexName}
+                    onChange={(e) => setIndexName(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Column</label>
+                  <Input
+                    className="h-8 w-28 font-mono text-xs"
+                    value={indexColumn}
+                    onChange={(e) => setIndexColumn(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">USING</label>
+                  <select
+                    className="h-8 rounded-md border bg-background px-2 text-xs"
+                    value={indexUsing}
+                    onChange={(e) => setIndexUsing(e.target.value)}
+                  >
+                    {["BM25", "HNSW", "DISKANN", "HYBRID"].map((u) => (
+                      <option key={u} value={u}>
+                        {u}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={indexCreateLoading || !indexName.trim()}
+                  onClick={() => {
+                    const name = indexName.trim();
+                    const col = indexColumn.trim() || "text";
+                    const sql = `CREATE INDEX ${name} ON ${tableName} (${col}) USING ${indexUsing}`;
+                    setIndexCreateLoading(true);
+                    void runSql(sql)
+                      .then(async () => {
+                        toast({ title: "Index created", description: name });
+                        await fetchTableIndexesAction(tableName);
+                        await fetchTableDetailAction(tableName);
+                      })
+                      .catch((err) => {
+                        toast({
+                          title: "CREATE INDEX failed",
+                          description: err instanceof Error ? err.message : String(err),
+                          variant: "destructive",
+                        });
+                      })
+                      .finally(() => setIndexCreateLoading(false));
+                  }}
+                >
+                  {indexCreateLoading ? "Creating…" : "Create index"}
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

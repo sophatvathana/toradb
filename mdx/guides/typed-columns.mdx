@@ -27,15 +27,38 @@ db.create_table(
 )
 ```
 
-Supported type names: `text`, `int`, `float`, `bool`, `date`, `timestamp`, `json`, `uuid`, `vector` (with optional dimension, e.g. `vector[384]`).
+Supported type names: `text`, `int`, `float`, `bool`, `date`, `timestamp`, `json`, `uuid`, `vector` (with optional dimension, e.g. `vector(384)` or `vector[384]`).
+
+Vector dimensions are stored in `manifest.json` as `vector:384` (bare `vector` when no dimension is given).
 
 ## Fix legacy tables
 
 ```sql
 ALTER TABLE articles ALTER COLUMN year TYPE int
+ALTER TABLE papers ALTER COLUMN embedding TYPE vector(384) REWRITE
+```
+
+`REWRITE` updates the manifest and runs `COMPACT TABLE … FULL` so existing segments are rewritten to the native hybrid layout. Without `REWRITE`, the manifest updates immediately but legacy segments stay on disk until you compact:
+
+```sql
+COMPACT TABLE articles FULL
 ```
 
 Types are persisted in the table `manifest.json` sidecar (`column_types`).
+
+## Compound filters
+
+Combine predicates with `AND` / `OR` and parentheses:
+
+```sql
+SELECT slot, COUNT(*) FROM docs
+WHERE rank > 9 AND slot = 'A'
+GROUP BY slot
+
+SELECT id FROM docs
+WHERE (rank > 9 OR rank < 2) AND slot = 'science'
+LIMIT 20
+```
 
 ## Filter behavior
 

@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use toradb_core::ColumnType;
+use toradb_core::{ColumnType, ColumnTypeSpec};
 
 use super::schema::doc_schema;
 
 /// Parquet/Arrow schema with native typed metadata columns.
-pub fn table_doc_schema(column_types: &[(String, ColumnType)]) -> Arc<Schema> {
+pub fn table_doc_schema(column_types: &[(String, ColumnTypeSpec)]) -> Arc<Schema> {
     if column_types.is_empty() {
         return doc_schema();
     }
@@ -17,7 +17,7 @@ pub fn table_doc_schema(column_types: &[(String, ColumnType)]) -> Arc<Schema> {
     for (name, ty) in sorted_column_types(column_types) {
         fields.push(Field::new(
             name.as_str(),
-            column_type_to_arrow(ty),
+            column_type_to_arrow(ty.kind),
             true,
         ));
     }
@@ -43,7 +43,7 @@ pub fn column_type_to_arrow(ty: ColumnType) -> DataType {
 }
 
 /// Stable lowercase column order for schema and encode.
-pub fn sorted_column_types(column_types: &[(String, ColumnType)]) -> Vec<(String, ColumnType)> {
+pub fn sorted_column_types(column_types: &[(String, ColumnTypeSpec)]) -> Vec<(String, ColumnTypeSpec)> {
     let mut out: Vec<_> = column_types
         .iter()
         .map(|(n, t)| (n.to_ascii_lowercase(), *t))
@@ -67,7 +67,7 @@ pub fn uses_native_metadata(schema: &Schema) -> bool {
 }
 
 /// Column names to read for metadata scans: `id` + typed fields + `metadata_json`.
-pub fn metadata_scan_column_names(column_types: &[(String, ColumnType)]) -> Vec<String> {
+pub fn metadata_scan_column_names(column_types: &[(String, ColumnTypeSpec)]) -> Vec<String> {
     let mut names = vec!["id".to_string()];
     for (n, _) in sorted_column_types(column_types) {
         names.push(n);
@@ -82,7 +82,7 @@ mod tests {
 
     #[test]
     fn table_schema_includes_typed_fields() {
-        let schema = table_doc_schema(&[("rank".into(), ColumnType::Int)]);
+        let schema = table_doc_schema(&[("rank".into(), ColumnTypeSpec::new(ColumnType::Int))]);
         let names: Vec<_> = schema
             .fields()
             .iter()

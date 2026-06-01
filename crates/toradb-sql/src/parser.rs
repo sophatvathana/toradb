@@ -197,10 +197,17 @@ fn parse_compare_op(token: &Token) -> Option<CompareOp> {
     }
 }
 
-fn parse_predicate_clause(tokens: &[Token], i: &mut usize, clause_name: &str) -> Result<WherePred, String> {
-    expect_ident(tokens, i, clause_name)?;
+fn where_clause_boundary(tokens: &[Token], i: usize) -> bool {
+    matches!(tokens.get(i), Some(Token::Ident(k)) if matches!(
+        k.as_str(),
+        "GROUP" | "HAVING" | "ORDER" | "LIMIT" | "OFFSET" | "SPARSE" | "VECTOR" | "JOIN"
+            | "HYDE" | "CRAG" | "GRAPH" | "FUSION" | "DISTRIBUTED" | "STREAM" | "EXPLAIN"
+    ))
+}
+
+fn parse_leaf_predicate(tokens: &[Token], i: &mut usize) -> Result<WherePred, String> {
     let column = ident_at(tokens, *i)
-        .ok_or(format!("{clause_name} requires column name"))?
+        .ok_or("predicate requires column name".to_string())?
         .to_lowercase();
     *i += 1;
 
@@ -256,10 +263,62 @@ fn parse_predicate_clause(tokens: &[Token], i: &mut usize, clause_name: &str) ->
     let op = tokens
         .get(*i)
         .and_then(parse_compare_op)
-        .ok_or(format!("{clause_name} requires comparison operator"))?;
+        .ok_or("predicate requires comparison operator".to_string())?;
     *i += 1;
     let value = parse_literal(tokens, i)?;
     Ok(WherePred::Compare { column, op, value })
+}
+
+fn parse_primary_predicate(tokens: &[Token], i: &mut usize) -> Result<WherePred, String> {
+    if matches!(tokens.get(*i), Some(Token::LParen)) {
+        *i += 1;
+        let pred = parse_or_predicate(tokens, i)?;
+        if !matches!(tokens.get(*i), Some(Token::RParen)) {
+            return Err("expected ) after grouped predicate".into());
+        }
+        *i += 1;
+        return Ok(pred);
+    }
+    parse_leaf_predicate(tokens, i)
+}
+
+fn parse_and_predicate(tokens: &[Token], i: &mut usize) -> Result<WherePred, String> {
+    let mut left = parse_primary_predicate(tokens, i)?;
+    while matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "AND")
+        && !where_clause_boundary(tokens, *i + 1)
+    {
+        *i += 1;
+        let right = parse_primary_predicate(tokens, i)?;
+        left = match left {
+            WherePred::And(mut parts) => {
+                parts.push(right);
+                WherePred::And(parts)
+            }
+            _ => WherePred::And(vec![left, right]),
+        };
+    }
+    Ok(left)
+}
+
+fn parse_or_predicate(tokens: &[Token], i: &mut usize) -> Result<WherePred, String> {
+    let mut left = parse_and_predicate(tokens, i)?;
+    while matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "OR") {
+        *i += 1;
+        let right = parse_and_predicate(tokens, i)?;
+        left = match left {
+            WherePred::Or(mut parts) => {
+                parts.push(right);
+                WherePred::Or(parts)
+            }
+            _ => WherePred::Or(vec![left, right]),
+        };
+    }
+    Ok(left)
+}
+
+fn parse_predicate_clause(tokens: &[Token], i: &mut usize, clause_name: &str) -> Result<WherePred, String> {
+    expect_ident(tokens, i, clause_name)?;
+    parse_or_predicate(tokens, i)
 }
 
 fn parse_where_clause(tokens: &[Token], i: &mut usize) -> Result<WherePred, String> {
@@ -766,10 +825,15 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {
                 i += 1;
                 expect_ident(&tokens, &mut i, "TYPE")?;
                 let column_type = parse_type_at(&tokens, &mut i)?;
+                let rewrite = matches!(tokens.get(i), Some(Token::Ident(k)) if k == "REWRITE");
+                if rewrite {
+                    i += 1;
+                }
                 out.push(Stmt::AlterTableAlterColumnType {
                     table,
                     column,
                     column_type,
+                    rewrite,
                 });
                 continue;
             }

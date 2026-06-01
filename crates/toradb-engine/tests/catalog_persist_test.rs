@@ -29,8 +29,8 @@ fn create_table_ensure_on_disk_lists_in_catalog() {
     assert!(tables.iter().any(|t| t == "passages"));
 
     let types = vec![
-        ("id".to_string(), toradb_core::ColumnType::Int),
-        ("body".to_string(), toradb_core::ColumnType::Text),
+        ("id".to_string(), toradb_core::ColumnTypeSpec::new(toradb_core::ColumnType::Int)),
+        ("body".to_string(), toradb_core::ColumnTypeSpec::new(toradb_core::ColumnType::Text)),
     ];
     toradb_engine::persist::set_table_column_types(&dir, "passages", &types).expect("types");
     let ordered = toradb_engine::persist::table_column_types_ordered(&dir, "passages");

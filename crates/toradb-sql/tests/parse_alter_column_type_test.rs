@@ -8,6 +8,7 @@ fn parse_alter_column_type() {
         table,
         column,
         column_type,
+        rewrite,
     } = &stmts[0]
     else {
         panic!("expected AlterTableAlterColumnType");
@@ -15,6 +16,7 @@ fn parse_alter_column_type() {
     assert_eq!(table, "docs");
     assert_eq!(column, "rank");
     assert_eq!(column_type, "int");
+    assert!(!rewrite);
 }
 
 #[test]
@@ -24,4 +26,13 @@ fn parse_alter_column_type_vector_dim() {
         panic!("expected alter column type");
     };
     assert_eq!(column_type, "vector(384)");
+}
+
+#[test]
+fn parse_alter_column_type_rewrite() {
+    let stmts = parse("ALTER TABLE docs ALTER COLUMN rank TYPE int REWRITE").unwrap();
+    let Stmt::AlterTableAlterColumnType { rewrite, .. } = &stmts[0] else {
+        panic!("expected alter column type");
+    };
+    assert!(*rewrite);
 }
