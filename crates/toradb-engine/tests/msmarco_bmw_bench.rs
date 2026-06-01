@@ -1,7 +1,6 @@
 //! Run with:
 //!   cargo test -p toradb-engine --release --test msmarco_bmw_bench -- --nocapture --ignored
 
-
 use std::path::PathBuf;
 use std::time::Instant;
 

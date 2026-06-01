@@ -629,7 +629,14 @@ impl<'a> Bm25Tbm3View<'a> {
         let mut merged: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
         for set in &partials {
             for (i, &doc_id) in set.ids.iter().enumerate() {
-                push_topk(&mut merged, ScoredDoc { score: set.scores[i], doc_id }, k);
+                push_topk(
+                    &mut merged,
+                    ScoredDoc {
+                        score: set.scores[i],
+                        doc_id,
+                    },
+                    k,
+                );
             }
         }
         heap_to_candidates(merged)
@@ -737,7 +744,11 @@ impl TermPlan {
                 });
             }
         }
-        TermPlan { blocks, idf, term_max }
+        TermPlan {
+            blocks,
+            idf,
+            term_max,
+        }
     }
 }
 
@@ -823,7 +834,11 @@ impl<'a> BmwTerm<'a> {
                 return;
             }
         }
-        let mut b = if self.cur_block == usize::MAX { 0 } else { self.cur_block };
+        let mut b = if self.cur_block == usize::MAX {
+            0
+        } else {
+            self.cur_block
+        };
         let nblocks = self.blocks().len();
         while b < nblocks && self.blocks()[b].last_docid < target {
             b += 1;
@@ -868,7 +883,11 @@ impl<'a> BmwTerm<'a> {
     }
 
     fn advance_block(&mut self) {
-        let next = if self.cur_block == usize::MAX { 0 } else { self.cur_block + 1 };
+        let next = if self.cur_block == usize::MAX {
+            0
+        } else {
+            self.cur_block + 1
+        };
         if next >= self.blocks().len() {
             self.exhausted = true;
             self.dec = None;
@@ -1002,7 +1021,14 @@ fn block_max_wand(
                     terms[ti].next();
                 }
             }
-            push_topk(&mut heap, ScoredDoc { score, doc_id: pivot_doc }, k);
+            push_topk(
+                &mut heap,
+                ScoredDoc {
+                    score,
+                    doc_id: pivot_doc,
+                },
+                k,
+            );
             if heap.len() >= k {
                 threshold = heap.peek().map(|m| m.0.score).unwrap_or(threshold);
             }
@@ -1307,7 +1333,9 @@ mod tests {
         let query = "common term3 rare40";
 
         let plans_for = |c: &[TermCursor]| -> Vec<std::sync::Arc<TermPlan>> {
-            c.iter().map(|x| std::sync::Arc::new(TermPlan::build(x))).collect()
+            c.iter()
+                .map(|x| std::sync::Arc::new(TermPlan::build(x)))
+                .collect()
         };
         let full = {
             let mut c = view.cursors_for(query);
@@ -1324,7 +1352,14 @@ mod tests {
             let plans = plans_for(&c);
             let set = block_max_wand(c, &plans, k, view.avg_dl, bounds[w], bounds[w + 1]);
             for (i, &doc_id) in set.ids.iter().enumerate() {
-                push_topk(&mut merged, ScoredDoc { score: set.scores[i], doc_id }, k);
+                push_topk(
+                    &mut merged,
+                    ScoredDoc {
+                        score: set.scores[i],
+                        doc_id,
+                    },
+                    k,
+                );
             }
         }
         let sharded = heap_to_candidates(merged);
@@ -1332,7 +1367,11 @@ mod tests {
 
         let key = |c: &CandidateSet| -> Vec<u64> { c.ids.clone() };
         assert_eq!(key(&full), key(&brute), "full BMW must equal brute force");
-        assert_eq!(key(&sharded), key(&brute), "sharded BMW must equal brute force");
+        assert_eq!(
+            key(&sharded),
+            key(&brute),
+            "sharded BMW must equal brute force"
+        );
     }
 
     #[test]
@@ -1572,7 +1611,10 @@ mod tests {
                 "id mismatch query={query:?} k={k}"
             );
             for (i, (_, ws)) in want.iter().enumerate() {
-                assert!((got[i].1 - ws).abs() < 1e-3, "score mismatch query={query:?}");
+                assert!(
+                    (got[i].1 - ws).abs() < 1e-3,
+                    "score mismatch query={query:?}"
+                );
             }
         }
     }

@@ -433,7 +433,10 @@ fn bm25_search(
                 }
             }
             if heap.len() < k {
-                heap.push(HeapItem { score, doc: pivot_doc });
+                heap.push(HeapItem {
+                    score,
+                    doc: pivot_doc,
+                });
                 if heap.len() == k {
                     threshold = heap.peek().map(|h| h.score).unwrap_or(threshold);
                 }
@@ -441,7 +444,10 @@ fn bm25_search(
                 || (score == threshold && heap.peek().is_some_and(|h| pivot_doc < h.doc))
             {
                 heap.pop();
-                heap.push(HeapItem { score, doc: pivot_doc });
+                heap.push(HeapItem {
+                    score,
+                    doc: pivot_doc,
+                });
                 threshold = heap.peek().map(|h| h.score).unwrap_or(threshold);
             }
         } else {
@@ -600,7 +606,7 @@ mod tests {
     }
 
     fn brute_force(index: &Bm25Index, query: &str, k: usize) -> Vec<(u64, f32)> {
-        use super::{tokenize, K1, B, MAX_QUERY_TERMS};
+        use super::{tokenize, B, K1, MAX_QUERY_TERMS};
         let snap = index.snapshot();
         let n = snap.num_docs.max(1) as f32;
         let mut qtf: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
@@ -617,9 +623,7 @@ mod tests {
             })
             .collect();
         if terms.len() > MAX_QUERY_TERMS {
-            terms.sort_by(|a, b| {
-                b.1.partial_cmp(&a.1).unwrap().then(a.0.cmp(&b.0))
-            });
+            terms.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then(a.0.cmp(&b.0)));
             terms.truncate(MAX_QUERY_TERMS);
         }
         let mut scores: std::collections::HashMap<u64, f32> = std::collections::HashMap::new();
@@ -676,11 +680,18 @@ mod tests {
             let k = 1 + (rng() % 30) as usize;
             let got = index.search(&query, k);
             let want = brute_force(&index, &query, k);
-            assert_eq!(got.ids, want.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
-                "ranking mismatch for query={query:?} k={k}");
+            assert_eq!(
+                got.ids,
+                want.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+                "ranking mismatch for query={query:?} k={k}"
+            );
             for (i, (_, ws)) in want.iter().enumerate() {
-                assert!((got.scores[i] - ws).abs() < 1e-4,
-                    "score mismatch at {i} for query={query:?}: got {} want {}", got.scores[i], ws);
+                assert!(
+                    (got.scores[i] - ws).abs() < 1e-4,
+                    "score mismatch at {i} for query={query:?}: got {} want {}",
+                    got.scores[i],
+                    ws
+                );
             }
         }
     }
@@ -709,9 +720,7 @@ mod tests {
             docs.push((id, filler.clone()));
         }
         docs.push((999u64, "rareword filler text".to_string()));
-        let snap = Bm25Snapshot::from_documents(
-            docs.iter().map(|(id, t)| (*id, t.as_str())),
-        );
+        let snap = Bm25Snapshot::from_documents(docs.iter().map(|(id, t)| (*id, t.as_str())));
         let index = Bm25Index::from_snapshot(snap);
         let query = format!("rareword {filler}");
         let res = index.search(&query, 5);

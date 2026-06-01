@@ -73,12 +73,17 @@ fn bench_tbm3_long_query() {
 
     let repetitive = format!(
         "{w0} {w1} {w1} {w0} {w1} {w0} {w0} {w1} {w2} {w1} {w0} {w1}",
-        w0 = words[0], w1 = words[1], w2 = words[2]
+        w0 = words[0],
+        w1 = words[1],
+        w2 = words[2]
     );
 
     let t_short = time(&short);
     let t_long = time(&long);
     let t_rep = time(&repetitive);
-    println!("short(3): {t_short:8.2} ms    long(40): {t_long:8.2} ms  ({:.1}x)", t_long / t_short);
+    println!(
+        "short(3): {t_short:8.2} ms    long(40): {t_long:8.2} ms  ({:.1}x)",
+        t_long / t_short
+    );
     println!("repetitive(12 toks, 3 uniq): {t_rep:8.2} ms\n");
 }

@@ -113,7 +113,13 @@ fn bench_long_vs_short() {
     println!("\n=== BM25 latency ({num_docs} docs, vocab {vocab}, doc_len 80) ===");
     println!("short   (3 terms):  {t_short:8.3} ms");
     println!("medium  (12 terms): {t_medium:8.3} ms");
-    println!("long    (60 terms): {t_long:8.3} ms  ({:.1}x short)", t_long / t_short);
-    println!("repeat  (60 dup):   {t_repeated:8.3} ms  ({:.1}x short)", t_repeated / t_short);
+    println!(
+        "long    (60 terms): {t_long:8.3} ms  ({:.1}x short)",
+        t_long / t_short
+    );
+    println!(
+        "repeat  (60 dup):   {t_repeated:8.3} ms  ({:.1}x short)",
+        t_repeated / t_short
+    );
     println!();
 }
