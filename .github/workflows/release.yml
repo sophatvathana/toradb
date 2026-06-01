@@ -27,36 +27,36 @@ jobs:
       - run: cargo clippy --workspace --exclude toradb-sdk --all-targets
       - run: cargo test --workspace --exclude toradb-sdk
 
-  # ---- Python wheels (matrix retained from the maturin-generated config) ----
+  # ---- Python wheels ----
   linux:
     needs: test
     runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 90
+    env:
+      MATURIN_BUILD_ARGS: --release --out dist -i python3.12
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - runner: ubuntu-22.04
             target: x86_64
           - runner: ubuntu-22.04
-            target: x86
-          - runner: ubuntu-22.04
             target: aarch64
-          - runner: ubuntu-22.04
-            target: armv7
-          - runner: ubuntu-22.04
-            target: s390x
-          - runner: ubuntu-22.04
-            target: ppc64le
     steps:
       - uses: actions/checkout@v4
+      # Required for non-x86_64 manylinux cross builds (aarch64).
+      - uses: docker/setup-qemu-action@v3
+        if: matrix.platform.target != 'x86_64'
       - uses: actions/setup-python@v5
         with:
-          python-version: 3.x
+          python-version: '3.12'
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          args: ${{ env.MATURIN_BUILD_ARGS }}
+          rust-toolchain: stable
+          sccache: true
           manylinux: auto
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -67,28 +67,31 @@ jobs:
   musllinux:
     needs: test
     runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 90
+    env:
+      MATURIN_BUILD_ARGS: --release --out dist -i python3.12
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - runner: ubuntu-22.04
             target: x86_64
           - runner: ubuntu-22.04
-            target: x86
-          - runner: ubuntu-22.04
             target: aarch64
-          - runner: ubuntu-22.04
-            target: armv7
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        if: matrix.platform.target != 'x86_64'
       - uses: actions/setup-python@v5
         with:
-          python-version: 3.x
+          python-version: '3.12'
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          args: ${{ env.MATURIN_BUILD_ARGS }}
+          rust-toolchain: stable
+          sccache: true
           manylinux: musllinux_1_2
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -99,25 +102,30 @@ jobs:
   windows:
     needs: test
     runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 90
+    env:
+      MATURIN_BUILD_ARGS: --release --out dist -i python
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - runner: windows-latest
             target: x64
-          - runner: windows-latest
-            target: x86
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: 3.x
-          architecture: ${{ matrix.platform.target }}
+          python-version: '3.12'
+          architecture: x64
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          args: ${{ env.MATURIN_BUILD_ARGS }}
+          rust-toolchain: stable
+          sccache: true
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -127,24 +135,27 @@ jobs:
   macos:
     needs: test
     runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 90
+    env:
+      MATURIN_BUILD_ARGS: --release --out dist -i python
     strategy:
+      fail-fast: false
       matrix:
         platform:
-          - runner: macos-13
-            target: x86_64
           - runner: macos-14
             target: aarch64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: 3.x
+          python-version: '3.12'
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          args: ${{ env.MATURIN_BUILD_ARGS }}
+          rust-toolchain: stable
+          sccache: true
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -161,6 +172,7 @@ jobs:
         with:
           command: sdist
           args: --out dist
+          rust-toolchain: stable
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
