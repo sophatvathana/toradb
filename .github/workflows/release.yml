@@ -239,6 +239,9 @@ jobs:
           find artifacts -type f \( -name '*.whl' -o -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
           ls -la release
       - name: Generate artifact attestation
+        if: >-
+          !github.event.repository.private ||
+          github.event.repository.owner.type == 'Organization'
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: 'release/*'
