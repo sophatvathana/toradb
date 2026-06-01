@@ -54,7 +54,10 @@ fn order_by_typed_date_is_chronological_not_lexical() {
     persist::set_table_column_types(
         dag.db_path().unwrap(),
         "docs",
-        &[("published".to_string(), ColumnTypeSpec::new(ColumnType::Date))],
+        &[(
+            "published".to_string(),
+            ColumnTypeSpec::new(ColumnType::Date),
+        )],
     )
     .unwrap();
 

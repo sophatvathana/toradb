@@ -2,10 +2,9 @@ use toradb_sql::{ast::Stmt, parse};
 
 #[test]
 fn parse_vector_search_with_bracket_literal() {
-    let stmts = parse(
-        "SELECT id FROM papers VECTOR SEARCH embedding ANN([0.9, 0.1, 0.0, 0.0]) LIMIT 5",
-    )
-    .expect("parse");
+    let stmts =
+        parse("SELECT id FROM papers VECTOR SEARCH embedding ANN([0.9, 0.1, 0.0, 0.0]) LIMIT 5")
+            .expect("parse");
     let Stmt::Select(sel) = &stmts[0] else {
         panic!("expected select");
     };

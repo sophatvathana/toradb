@@ -25,10 +25,9 @@ fn sql_vector_search_returns_nearest_embedding() {
     )
     .expect("add");
 
-    let stmts = parse(
-        "SELECT id FROM papers VECTOR SEARCH embedding ANN([0.95, 0.05, 0.0, 0.0]) LIMIT 1",
-    )
-    .unwrap();
+    let stmts =
+        parse("SELECT id FROM papers VECTOR SEARCH embedding ANN([0.95, 0.05, 0.0, 0.0]) LIMIT 1")
+            .unwrap();
     let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };

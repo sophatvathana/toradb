@@ -1,8 +1,8 @@
 use rayon::prelude::*;
 
 use toradb_core::{Batch, CandidateSet, DocId, ExecCtx};
-use toradb_storage::SegmentManager;
 use toradb_storage::NumaConfig;
+use toradb_storage::SegmentManager;
 
 /// Coordinator dispatches per-segment work to workers (sync thread pool, not Tokio hot path).
 #[derive(Debug)]
@@ -37,12 +37,10 @@ impl SegmentScheduler {
         let use_parallel = parallel && self.workers > 1 && n > 1;
         if use_parallel {
             let workers = self.workers;
-            let scan = || -> Vec<CandidateSet> { (0..n).into_par_iter().map(|seg| f(seg)).collect() };
+            let scan =
+                || -> Vec<CandidateSet> { (0..n).into_par_iter().map(|seg| f(seg)).collect() };
             let locals = if workers > 1 {
-                match rayon::ThreadPoolBuilder::new()
-                    .num_threads(workers)
-                    .build()
-                {
+                match rayon::ThreadPoolBuilder::new().num_threads(workers).build() {
                     Ok(pool) => pool.install(scan),
                     Err(_) => scan(),
                 }
@@ -83,6 +81,7 @@ impl SegmentScheduler {
             candidates.scores[b]
                 .partial_cmp(&candidates.scores[a])
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then(candidates.ids[a].cmp(&candidates.ids[b]))
         });
         idx.truncate(k);
         let mut new_ids = Vec::with_capacity(k);

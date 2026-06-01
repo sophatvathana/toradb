@@ -274,17 +274,29 @@ fn sum_aggregate_on_numeric_metadata() {
         vec![
             IngestDoc {
                 text: "doc a".into(),
-                metadata: [("tag".into(), "patent".into()), ("score".into(), "10".into())].into(),
+                metadata: [
+                    ("tag".into(), "patent".into()),
+                    ("score".into(), "10".into()),
+                ]
+                .into(),
                 vector: None,
             },
             IngestDoc {
                 text: "doc b".into(),
-                metadata: [("tag".into(), "patent".into()), ("score".into(), "20".into())].into(),
+                metadata: [
+                    ("tag".into(), "patent".into()),
+                    ("score".into(), "20".into()),
+                ]
+                .into(),
                 vector: None,
             },
             IngestDoc {
                 text: "doc c".into(),
-                metadata: [("tag".into(), "science".into()), ("score".into(), "5".into())].into(),
+                metadata: [
+                    ("tag".into(), "science".into()),
+                    ("score".into(), "5".into()),
+                ]
+                .into(),
                 vector: None,
             },
         ],
@@ -336,8 +348,7 @@ fn where_eq_filters_before_group_by() {
     )
     .expect("add");
 
-    let stmts =
-        parse("SELECT tag, COUNT(*) FROM docs WHERE tag = 'science' GROUP BY tag").unwrap();
+    let stmts = parse("SELECT tag, COUNT(*) FROM docs WHERE tag = 'science' GROUP BY tag").unwrap();
     let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };
@@ -380,10 +391,9 @@ fn where_in_filters_groups() {
     )
     .expect("add");
 
-    let stmts = parse(
-        "SELECT tag, COUNT(*) FROM docs WHERE tag IN ('patent', 'science') GROUP BY tag",
-    )
-    .unwrap();
+    let stmts =
+        parse("SELECT tag, COUNT(*) FROM docs WHERE tag IN ('patent', 'science') GROUP BY tag")
+            .unwrap();
     let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };
@@ -409,12 +419,20 @@ fn where_gt_numeric_metadata() {
         vec![
             IngestDoc {
                 text: "low".into(),
-                metadata: [("bucket".into(), "low".into()), ("score".into(), "5".into())].into(),
+                metadata: [
+                    ("bucket".into(), "low".into()),
+                    ("score".into(), "5".into()),
+                ]
+                .into(),
                 vector: None,
             },
             IngestDoc {
                 text: "high".into(),
-                metadata: [("bucket".into(), "high".into()), ("score".into(), "15".into())].into(),
+                metadata: [
+                    ("bucket".into(), "high".into()),
+                    ("score".into(), "15".into()),
+                ]
+                .into(),
                 vector: None,
             },
         ],
@@ -489,17 +507,32 @@ fn multi_group_and_multi_aggregate_with_having() {
         vec![
             IngestDoc {
                 text: "a".into(),
-                metadata: [("tag".into(), "science".into()), ("source".into(), "book".into()), ("score".into(), "3".into())].into(),
+                metadata: [
+                    ("tag".into(), "science".into()),
+                    ("source".into(), "book".into()),
+                    ("score".into(), "3".into()),
+                ]
+                .into(),
                 vector: None,
             },
             IngestDoc {
                 text: "b".into(),
-                metadata: [("tag".into(), "science".into()), ("source".into(), "book".into()), ("score".into(), "4".into())].into(),
+                metadata: [
+                    ("tag".into(), "science".into()),
+                    ("source".into(), "book".into()),
+                    ("score".into(), "4".into()),
+                ]
+                .into(),
                 vector: None,
             },
             IngestDoc {
                 text: "c".into(),
-                metadata: [("tag".into(), "science".into()), ("source".into(), "web".into()), ("score".into(), "1".into())].into(),
+                metadata: [
+                    ("tag".into(), "science".into()),
+                    ("source".into(), "web".into()),
+                    ("score".into(), "1".into()),
+                ]
+                .into(),
                 vector: None,
             },
         ],
@@ -516,8 +549,14 @@ fn multi_group_and_multi_aggregate_with_having() {
     else {
         panic!("aggregate");
     };
-    assert_eq!(out.group_by_columns, vec!["tag".to_string(), "source".to_string()]);
-    assert_eq!(out.value_columns, vec!["count".to_string(), "sum_score".to_string()]);
+    assert_eq!(
+        out.group_by_columns,
+        vec!["tag".to_string(), "source".to_string()]
+    );
+    assert_eq!(
+        out.value_columns,
+        vec!["count".to_string(), "sum_score".to_string()]
+    );
     assert_eq!(out.group_keys, vec!["science|book".to_string()]);
     assert_eq!(out.value_rows, vec![vec![2.0, 7.0]]);
     let _ = std::fs::remove_dir_all(&dir);
@@ -531,9 +570,21 @@ fn aggregate_offset_applies_after_sort() {
     dag.add_documents(
         "docs",
         vec![
-            IngestDoc { text: "a".into(), metadata: [("tag".into(), "a".into())].into(), vector: None },
-            IngestDoc { text: "b".into(), metadata: [("tag".into(), "b".into())].into(), vector: None },
-            IngestDoc { text: "c".into(), metadata: [("tag".into(), "c".into())].into(), vector: None },
+            IngestDoc {
+                text: "a".into(),
+                metadata: [("tag".into(), "a".into())].into(),
+                vector: None,
+            },
+            IngestDoc {
+                text: "b".into(),
+                metadata: [("tag".into(), "b".into())].into(),
+                vector: None,
+            },
+            IngestDoc {
+                text: "c".into(),
+                metadata: [("tag".into(), "c".into())].into(),
+                vector: None,
+            },
         ],
     )
     .expect("add");

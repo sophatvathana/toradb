@@ -1,7 +1,7 @@
+use crate::ast::*;
 use toradb_core::{
     Catalog, ColumnDef, ColumnKind, ColumnType, CompressionConfig, IndexMode, Schema, TableManifest,
 };
-use crate::ast::*;
 
 pub struct Binder {
     pub catalog: Catalog,
@@ -18,7 +18,9 @@ fn kind_for(ty: ColumnType) -> ColumnKind {
 
 impl Binder {
     pub fn new() -> Self {
-        Self { catalog: Catalog::new() }
+        Self {
+            catalog: Catalog::new(),
+        }
     }
 
     pub fn bind(&mut self, stmts: &[Stmt]) -> Result<(), String> {
@@ -56,7 +58,10 @@ impl Binder {
                         index_mode: mode,
                         vector_dim: None,
                         sparse_enabled: true,
-                        graph_enabled: t.columns.iter().any(|(_, ty)| ty.to_uppercase().contains("GRAPH")),
+                        graph_enabled: t
+                            .columns
+                            .iter()
+                            .any(|(_, ty)| ty.to_uppercase().contains("GRAPH")),
                         compression: CompressionConfig::default(),
                         segments: vec![],
                     });

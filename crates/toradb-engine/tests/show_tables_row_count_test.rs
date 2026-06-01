@@ -6,10 +6,7 @@ use toradb_storage::columnar::{write_segment_with_compression, ColumnarDoc, Tabl
 
 #[test]
 fn table_row_count_from_segment_id_ranges_without_parquet_scan() {
-    let dir = std::env::temp_dir().join(format!(
-        "toradb_row_count_{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("toradb_row_count_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let table = "docs";
@@ -43,10 +40,7 @@ fn table_row_count_from_segment_id_ranges_without_parquet_scan() {
 
 #[test]
 fn table_row_count_prefers_in_memory_corpus() {
-    let dir = std::env::temp_dir().join(format!(
-        "toradb_row_count_mem_{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("toradb_row_count_mem_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let table = "tiny";

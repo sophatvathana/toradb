@@ -3,8 +3,8 @@ use pyo3::types::{PyDict, PyList};
 use std::path::Path;
 use toradb_core::{Batch, ExecCtx, QueryMetrics};
 use toradb_engine::{
-    materialized, persist, run_table_search, sql_exec, DagRunner, IndexBuildPhase,
-    IndexBuildState, IndexBuildStatus, TableSearchOptions, TableSearchResult,
+    materialized, persist, run_table_search, sql_exec, DagRunner, IndexBuildPhase, IndexBuildState,
+    IndexBuildStatus, TableSearchOptions, TableSearchResult,
 };
 use toradb_sql::{ast::Stmt, binder::Binder, parse};
 
@@ -94,7 +94,9 @@ impl Database {
                     )));
                 }
                 Stmt::CreateTable(t) => {
-                    self.binder.bind(&stmts).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                    self.binder
+                        .bind(&stmts)
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
                     let table = if let Some(ns) = &t.namespace {
                         format!("{ns}.{}", t.name).to_lowercase()
                     } else {
@@ -123,10 +125,7 @@ impl Database {
                 }
                 Stmt::ShowIndexes { table } => {
                     let table = table.to_lowercase();
-                    let indexes = self
-                        .dag
-                        .table_index_sidecars(&table)
-                        .unwrap_or_default();
+                    let indexes = self.dag.table_index_sidecars(&table).unwrap_or_default();
                     return Ok(SqlOutcome::Message(format!(
                         "indexes on {table}: {}",
                         if indexes.is_empty() {
@@ -138,17 +137,10 @@ impl Database {
                 }
                 Stmt::ShowCreateTable { table } => {
                     let table = table.to_lowercase();
-                    let manifest = self
-                        .binder
-                        .catalog
-                        .get(&table)
-                        .cloned()
-                        .ok_or_else(|| {
-                            pyo3::exceptions::PyValueError::new_err(format!(
-                                "unknown table {table}"
-                            ))
-                        })?;
-        
+                    let manifest = self.binder.catalog.get(&table).cloned().ok_or_else(|| {
+                        pyo3::exceptions::PyValueError::new_err(format!("unknown table {table}"))
+                    })?;
+
                     let cols = self
                         .dag
                         .db_path()
@@ -236,8 +228,8 @@ impl Database {
                     } else {
                         None
                     };
-                    let needs = persist::table_needs_typed_segment_rewrite(&base, &table)
-                        .unwrap_or(false);
+                    let needs =
+                        persist::table_needs_typed_segment_rewrite(&base, &table).unwrap_or(false);
                     let msg = persist::format_alter_column_type_message(
                         &table,
                         column,
@@ -294,7 +286,10 @@ impl Database {
                         idx.name, idx.column, idx.using
                     )));
                 }
-                Stmt::Delete { table, where_clause } => {
+                Stmt::Delete {
+                    table,
+                    where_clause,
+                } => {
                     let n = sql_exec::run_delete(&mut self.dag, table, where_clause.as_ref())
                         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
                     return Ok(SqlOutcome::Message(format!(
@@ -323,14 +318,10 @@ impl Database {
                     let row_count = self.dag.table_row_count(&table).unwrap_or(0);
                     let vector_dim = self.dag.vector_dim(&table);
                     let base = self.dag.db_path();
-                    let segments = base
-                        .and_then(|p| persist::table_segment_count(p, &table).ok());
-                    let segment_workers = base
-                        .and_then(|p| persist::table_segment_workers(p, &table).ok());
-                    let indexes = self
-                        .dag
-                        .table_index_sidecars(&table)
-                        .unwrap_or_default();
+                    let segments = base.and_then(|p| persist::table_segment_count(p, &table).ok());
+                    let segment_workers =
+                        base.and_then(|p| persist::table_segment_workers(p, &table).ok());
+                    let indexes = self.dag.table_index_sidecars(&table).unwrap_or_default();
                     let column_types = base
                         .map(|p| persist::table_column_types_ordered(p, &table))
                         .unwrap_or_default();
@@ -354,23 +345,23 @@ impl Database {
                     let out = sql_exec::run_select(&mut self.dag, sel)
                         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
                     return match out {
-                        sql_exec::SqlSelectResult::Search(s) => Ok(SqlOutcome::Search(
-                            SearchResults::from_sql(
+                        sql_exec::SqlSelectResult::Search(s) => {
+                            Ok(SqlOutcome::Search(SearchResults::from_sql(
                                 s.ids,
                                 s.scores,
                                 s.projected,
                                 s.metrics,
                                 s.explain_text,
-                            ),
-                        )),
-                        sql_exec::SqlSelectResult::Aggregate(a) => Ok(SqlOutcome::Aggregate(
-                            AnalyticsResults::new(
+                            )))
+                        }
+                        sql_exec::SqlSelectResult::Aggregate(a) => {
+                            Ok(SqlOutcome::Aggregate(AnalyticsResults::new(
                                 a.group_by_columns,
                                 a.group_keys,
                                 a.value_columns,
                                 a.value_rows,
-                            ),
-                        )),
+                            )))
+                        }
                     };
                 }
             }
@@ -535,13 +526,7 @@ impl Database {
                 break;
             }
             let results =
-                SearchResults::from_sql(
-                    page.ids,
-                    page.scores,
-                    page.projected,
-                    page.metrics,
-                    None,
-                );
+                SearchResults::from_sql(page.ids, page.scores, page.projected, page.metrics, None);
             list.append(results.into_pyobject(py)?)?;
             offset += n as u32;
             if n < page_size as usize {
@@ -564,7 +549,11 @@ impl Database {
             let mut parts = vec![format!("CREATE TABLE {}", name.to_uppercase())];
             let mut cols = Vec::new();
             for (key, value) in s.iter() {
-                cols.push(format!("{} {}", key.extract::<String>()?, value.extract::<String>()?));
+                cols.push(format!(
+                    "{} {}",
+                    key.extract::<String>()?,
+                    value.extract::<String>()?
+                ));
             }
             if !cols.is_empty() {
                 parts.push(format!("({})", cols.join(", ")));
@@ -584,7 +573,11 @@ impl Database {
     }
 
     /// Open an existing table (loaded on `Database.open`); does not run CREATE TABLE DDL.
-    fn table(mut slf: PyRefMut<'_, Self>, py: Python<'_>, name: &str) -> PyResult<super::table::Table> {
+    fn table(
+        mut slf: PyRefMut<'_, Self>,
+        py: Python<'_>,
+        name: &str,
+    ) -> PyResult<super::table::Table> {
         slf.ensure_table(name);
         let db = slf.into_pyobject(py)?.unbind();
         Ok(super::table::Table::new(name.to_string(), db))
@@ -707,12 +700,15 @@ impl From<IndexBuildStatus> for IndexBuildStatusPy {
             IndexBuildState::Ready => "ready",
             IndexBuildState::Failed => "failed",
         };
-        let phase = s.phase.map(|p| match p {
-            IndexBuildPhase::SegmentBm25 => "segment_bm25",
-            IndexBuildPhase::MergeBm25 => "merge_bm25",
-            IndexBuildPhase::TableIndexes => "table_indexes",
-            IndexBuildPhase::ReloadTexts => "reload_texts",
-        }.to_string());
+        let phase = s.phase.map(|p| {
+            match p {
+                IndexBuildPhase::SegmentBm25 => "segment_bm25",
+                IndexBuildPhase::MergeBm25 => "merge_bm25",
+                IndexBuildPhase::TableIndexes => "table_indexes",
+                IndexBuildPhase::ReloadTexts => "reload_texts",
+            }
+            .to_string()
+        });
         Self {
             state: state.into(),
             phase,

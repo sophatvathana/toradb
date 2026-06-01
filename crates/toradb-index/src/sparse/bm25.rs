@@ -89,7 +89,9 @@ impl Bm25Builder {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub struct Bm25Snapshot {
     pub postings: HashMap<String, Vec<(DocId, u32)>>,
     pub doc_len: HashMap<DocId, u32>,
@@ -257,7 +259,11 @@ fn bm25_search(
         }
     }
     let mut ranked: Vec<(DocId, f32)> = scores.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    });
     ranked.truncate(k);
     let mut out = CandidateSet::with_capacity(ranked.len());
     for (id, score) in ranked {

@@ -3,10 +3,9 @@ use toradb_sql::parse;
 
 #[test]
 fn parse_where_and() {
-    let stmts = parse(
-        "SELECT slot, COUNT(*) FROM docs WHERE rank > 9 AND slot = 'A' GROUP BY slot",
-    )
-    .unwrap();
+    let stmts =
+        parse("SELECT slot, COUNT(*) FROM docs WHERE rank > 9 AND slot = 'A' GROUP BY slot")
+            .unwrap();
     let Stmt::Select(sel) = &stmts[0] else {
         panic!("expected select");
     };
@@ -31,10 +30,8 @@ fn parse_where_or() {
 
 #[test]
 fn parse_where_parentheses() {
-    let stmts = parse(
-        "SELECT id FROM docs WHERE (rank > 9 OR rank < 2) AND slot = 'A' LIMIT 5",
-    )
-    .unwrap();
+    let stmts =
+        parse("SELECT id FROM docs WHERE (rank > 9 OR rank < 2) AND slot = 'A' LIMIT 5").unwrap();
     let Stmt::Select(sel) = &stmts[0] else {
         panic!("expected select");
     };

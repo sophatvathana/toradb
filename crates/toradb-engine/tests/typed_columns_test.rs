@@ -127,7 +127,10 @@ fn typed_int_in_list_matches_numerically() {
     );
     let keys: Vec<&str> = rows.iter().map(|(k, _)| k.as_str()).collect();
     assert!(keys.contains(&"a"));
-    assert!(keys.contains(&"b"), "rank=10 must match IN (9, 10) with int type");
+    assert!(
+        keys.contains(&"b"),
+        "rank=10 must match IN (9, 10) with int type"
+    );
     assert!(!keys.contains(&"c"));
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -138,10 +141,7 @@ fn typed_date_where_orders_chronologically() {
     let dir = std::env::temp_dir().join("toradb_typed_date_where");
     let _ = std::fs::remove_dir_all(&dir);
     let mut dag = DagRunner::open(&dir).expect("open");
-    exec_create_table(
-        &mut dag,
-        "CREATE TABLE docs (published date) USING text",
-    );
+    exec_create_table(&mut dag, "CREATE TABLE docs (published date) USING text");
     dag.add_documents(
         "docs",
         vec![
@@ -188,7 +188,10 @@ fn typed_between_inclusive_range() {
     let keys: Vec<&str> = rows.iter().map(|(k, _)| k.as_str()).collect();
     assert!(keys.contains(&"b"), "10 is inclusive low bound");
     assert!(keys.contains(&"c"), "20 is inclusive high bound");
-    assert!(!keys.contains(&"a") && !keys.contains(&"d"), "5 and 25 out of range");
+    assert!(
+        !keys.contains(&"a") && !keys.contains(&"d"),
+        "5 and 25 out of range"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -208,10 +211,7 @@ fn alter_column_type_upgrades_legacy_table() {
         ],
     )
     .expect("add");
-    exec_alter_column_type(
-        &mut dag,
-        "ALTER TABLE docs ALTER COLUMN score TYPE int",
-    );
+    exec_alter_column_type(&mut dag, "ALTER TABLE docs ALTER COLUMN score TYPE int");
 
     let rows = run_counts(
         &mut dag,

@@ -25,7 +25,10 @@ fn bm25_sidecar_written_on_flush_and_used_on_reload() {
 
     let table_sidecar = dir.join("docs/indexes/bm25.bin");
     let segment_sidecar = dir.join("docs/indexes/seg_00001.bm25.bin");
-    assert!(table_sidecar.exists(), "table bm25 binary sidecar should exist after flush");
+    assert!(
+        table_sidecar.exists(),
+        "table bm25 binary sidecar should exist after flush"
+    );
     assert!(
         segment_sidecar.exists(),
         "per-segment bm25 binary sidecar should exist after flush"

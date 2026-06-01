@@ -25,10 +25,8 @@ fn sql_select_runs_sparse_search() {
     )
     .expect("add");
 
-    let stmts = parse(
-        "SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 5",
-    )
-    .unwrap();
+    let stmts =
+        parse("SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 5").unwrap();
     let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };
@@ -49,17 +47,12 @@ fn sql_select_runs_sparse_search() {
     };
     assert_eq!(ids[0], 0);
     assert!(
-        !out
-            .projected
-            .iter()
-            .any(|(n, _)| n == "score"),
+        !out.projected.iter().any(|(n, _)| n == "score"),
         "SELECT id should not include score"
     );
 
-    let stmts = parse(
-        "SELECT id, score, text FROM docs SPARSE SEARCH body BM25('Nikola') LIMIT 5",
-    )
-    .unwrap();
+    let stmts = parse("SELECT id, score, text FROM docs SPARSE SEARCH body BM25('Nikola') LIMIT 5")
+        .unwrap();
     let toradb_sql::ast::Stmt::Select(sel2) = &stmts[0] else {
         panic!("select");
     };
@@ -79,10 +72,7 @@ fn sql_select_runs_sparse_search() {
     };
     assert!(texts[0].contains("Nikola"));
 
-    let stmts = parse(
-        "SELECT * FROM docs SPARSE SEARCH body BM25('Nikola') LIMIT 5",
-    )
-    .unwrap();
+    let stmts = parse("SELECT * FROM docs SPARSE SEARCH body BM25('Nikola') LIMIT 5").unwrap();
     let toradb_sql::ast::Stmt::Select(sel3) = &stmts[0] else {
         panic!("select");
     };

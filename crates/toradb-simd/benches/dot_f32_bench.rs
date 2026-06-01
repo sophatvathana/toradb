@@ -1,4 +1,4 @@
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use toradb_simd::dot_f32;
 
 fn make_vec(n: usize, k: f32) -> Vec<f32> {

@@ -140,8 +140,7 @@ mod tests {
     #[test]
     fn adc_topk_recovers_self_query_in_top5() {
         let pairs = make_corpus(128, 128);
-        let snap =
-            TurboQuantSnapshot::from_pairs(&pairs, TqMode::Ip, 3, 0xABCD, 0xF00D).unwrap();
+        let snap = TurboQuantSnapshot::from_pairs(&pairs, TqMode::Ip, 3, 0xABCD, 0xF00D).unwrap();
         let query: Vec<f32> = pairs[42].1.clone();
         let got = adc_topk(&snap, &query, 5);
         assert!(got.ids.contains(&42), "got top5={:?}", got.ids);
@@ -150,14 +149,12 @@ mod tests {
     #[test]
     fn hnsw_adc_rerank_matches_full_precision() {
         let pairs = make_corpus(64, 128);
-        let snap =
-            TurboQuantSnapshot::from_pairs(&pairs, TqMode::Mse, 4, 1, 0).unwrap();
+        let snap = TurboQuantSnapshot::from_pairs(&pairs, TqMode::Mse, 4, 1, 0).unwrap();
         let full = VectorSnapshot::from_pairs(128, &pairs).unwrap();
         let ids: Vec<DocId> = pairs.iter().map(|(id, _)| *id).collect();
         let vecs: Vec<Vec<f32>> = pairs.iter().map(|(_, v)| v.clone()).collect();
         let graph = HnswIndex::build(ids.clone(), vecs.clone()).unwrap();
-        let query: Vec<f32> =
-            (0..128).map(|j| ((j as f32) * 0.041).cos()).collect();
+        let query: Vec<f32> = (0..128).map(|j| ((j as f32) * 0.041).cos()).collect();
 
         // Ground truth by exhaustive full-precision IP scan.
         let mut truth: Vec<(DocId, f32)> = pairs
@@ -176,6 +173,11 @@ mod tests {
         );
         // Top-3 should overlap by at least 2.
         let overlap = got.ids.iter().filter(|id| truth_top3.contains(id)).count();
-        assert!(overlap >= 2, "top3 overlap {overlap}: got {:?} truth {:?}", got.ids, truth_top3);
+        assert!(
+            overlap >= 2,
+            "top3 overlap {overlap}: got {:?} truth {:?}",
+            got.ids,
+            truth_top3
+        );
     }
 }

@@ -8,7 +8,10 @@ pub fn search(store: &CorpusStore, table: &str, query: &str, k: usize) -> Candid
     let Some(t) = store.table(table) else {
         return CandidateSet::default();
     };
-    let long: Vec<String> = tokenize(query).into_iter().filter(|t| t.len() >= 5).collect();
+    let long: Vec<String> = tokenize(query)
+        .into_iter()
+        .filter(|t| t.len() >= 5)
+        .collect();
     if long.is_empty() {
         return t.bm25_search(query, k);
     }

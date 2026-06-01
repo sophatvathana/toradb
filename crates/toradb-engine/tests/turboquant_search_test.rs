@@ -3,9 +3,7 @@ use toradb_index::IngestDoc;
 
 fn make_vec(seed: u64, dim: usize) -> Vec<f32> {
     (0..dim)
-        .map(|i| {
-            ((seed.wrapping_mul(31).wrapping_add(i as u64)) as f32 * 0.013).sin()
-        })
+        .map(|i| ((seed.wrapping_mul(31).wrapping_add(i as u64)) as f32 * 0.013).sin())
         .collect()
 }
 
@@ -50,11 +48,12 @@ fn search_uses_turboquant_segments_after_reopen() {
     );
 
     // Use a query that isn't in the corpus to avoid self-IP ambiguity.
-    let query: Vec<f32> = (0..64)
-        .map(|j| ((j as f32) * 0.041).cos())
-        .collect();
+    let query: Vec<f32> = (0..64).map(|j| ((j as f32) * 0.041).cos()).collect();
     let candidates = table.vector_search(&query, 5);
-    assert!(!candidates.ids.is_empty(), "expected non-empty search result");
+    assert!(
+        !candidates.ids.is_empty(),
+        "expected non-empty search result"
+    );
 
     // Brute-force ground truth from the same in-memory corpus.
     let mut truth: Vec<(u64, f32)> = (0..64u64)

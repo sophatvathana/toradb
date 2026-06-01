@@ -13,9 +13,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use toradb_api::ServeConfig;
 use toradb_distributed::{ClusterClient, ClusterConfig, Worker};
 use toradb_engine::persist;
-use toradb_engine::{
-    ingest_jsonl, ingest_parquet, DagRunner, IndexBuildPhase, IndexBuildState,
-};
+use toradb_engine::{ingest_jsonl, ingest_parquet, DagRunner, IndexBuildPhase, IndexBuildState};
 use toradb_index::dense::hnsw_index::HnswIndex;
 use toradb_index::dense::turboquant;
 use toradb_index::dense::turboquant_codec::{TqMode, TurboQuantSnapshot};
@@ -237,11 +235,9 @@ fn with_index_progress(
 fn index_progress_loop(db: &Path, table: &str, stop: Arc<AtomicBool>) {
     let pb = ProgressBar::new(1);
     pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}",
-        )
-        .unwrap()
-        .progress_chars("█▉▊▋▌▍▎▏  "),
+        ProgressStyle::with_template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+            .unwrap()
+            .progress_chars("█▉▊▋▌▍▎▏  "),
     );
     pb.enable_steady_tick(Duration::from_millis(120));
 
@@ -255,10 +251,7 @@ fn index_progress_loop(db: &Path, table: &str, stop: Arc<AtomicBool>) {
 }
 
 fn update_index_progress(pb: &ProgressBar, status: &toradb_engine::IndexBuildStatus) {
-    let phase_label = status
-        .phase
-        .map(index_phase_label)
-        .unwrap_or("index build");
+    let phase_label = status.phase.map(index_phase_label).unwrap_or("index build");
 
     match status.state {
         IndexBuildState::Ready => {
@@ -332,7 +325,9 @@ fn run_bulk(args: BulkArgs) -> Result<(), String> {
         eprintln!("finish: building segment BM25 + indexes…");
         let t1 = Instant::now();
         let table = args.table.clone();
-        with_index_progress(&args.db, &args.table, || dag.finish_bulk_ingest(&table, false))?;
+        with_index_progress(&args.db, &args.table, || {
+            dag.finish_bulk_ingest(&table, false)
+        })?;
         eprintln!("finish: {:.1}s", t1.elapsed().as_secs_f64());
     } else {
         eprintln!("skipped finish (--no-finish); run: toradb-ingest finish --db … --table …");
@@ -426,7 +421,10 @@ fn load_corpus_from_jsonl(path: &Path, limit: usize) -> Result<Vec<(u64, Vec<f32
         let Some(arr) = v_field.and_then(|v| v.as_array()) else {
             continue;
         };
-        let v: Vec<f32> = arr.iter().filter_map(|x| x.as_f64().map(|x| x as f32)).collect();
+        let v: Vec<f32> = arr
+            .iter()
+            .filter_map(|x| x.as_f64().map(|x| x as f32))
+            .collect();
         if v.is_empty() {
             continue;
         }
@@ -479,7 +477,10 @@ fn run_tq_bench(args: TqBenchArgs) -> Result<(), String> {
             load_corpus_from_db(db, &args.table, args.limit)?
         }
         "jsonl" => {
-            let p = args.path.as_ref().ok_or("--path required for --source jsonl")?;
+            let p = args
+                .path
+                .as_ref()
+                .ok_or("--path required for --source jsonl")?;
             let mut c = load_corpus_from_jsonl(p, args.limit)?;
             if c.len() > args.limit {
                 c.truncate(args.limit);
@@ -594,8 +595,7 @@ fn run_tq_bench(args: TqBenchArgs) -> Result<(), String> {
 
         for (name, snap, snap_bytes_len) in &snaps {
             let size_mib = *snap_bytes_len as f64 / (1024.0 * 1024.0);
-            let bits_per_dim =
-                (*snap_bytes_len * 8) as f64 / (corpus.len() as f64 * dim as f64);
+            let bits_per_dim = (*snap_bytes_len * 8) as f64 / (corpus.len() as f64 * dim as f64);
 
             let q_t = Instant::now();
             let mut brute_recall = 0.0f32;
@@ -603,8 +603,7 @@ fn run_tq_bench(args: TqBenchArgs) -> Result<(), String> {
                 let got = adc_topk(snap, q, args.k);
                 brute_recall += recall(&truth[i], &got);
             }
-            let brute_us =
-                q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
+            let brute_us = q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
             brute_recall /= queries.len() as f32;
 
             let q_t = Instant::now();
@@ -613,8 +612,7 @@ fn run_tq_bench(args: TqBenchArgs) -> Result<(), String> {
                 let got = turboquant::hnsw_adc_search(&graph, snap, None, q, args.k, 1);
                 hnsw_recall += recall(&truth[i], &got.ids);
             }
-            let hnsw_us =
-                q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
+            let hnsw_us = q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
             hnsw_recall /= queries.len() as f32;
 
             let q_t = Instant::now();
@@ -630,8 +628,7 @@ fn run_tq_bench(args: TqBenchArgs) -> Result<(), String> {
                 );
                 rerank_recall += recall(&truth[i], &got.ids);
             }
-            let rerank_us =
-                q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
+            let rerank_us = q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
             rerank_recall /= queries.len() as f32;
 
             println!(
@@ -655,8 +652,7 @@ fn run_tq_bench(args: TqBenchArgs) -> Result<(), String> {
             let got = graph.search(q, args.k);
             hnsw_hit_sum += recall(&truth[i], &got.ids);
         }
-        let hnsw_f32_us =
-            q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
+        let hnsw_f32_us = q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
         println!(
             "{:<10}                                                                  recall={:.3}  us/query={:.0}",
             "HNSW f32",
@@ -671,8 +667,7 @@ fn run_tq_bench(args: TqBenchArgs) -> Result<(), String> {
         let got = brute_truth_topk(&corpus, q, args.k);
         hit_sum += recall(&truth[i], &got);
     }
-    let brute_f32_us =
-        q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
+    let brute_f32_us = q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
     println!();
     println!(
         "ceiling brute f32:  recall={:.3}  us/query={:.0}  size={:.2} MiB (1.00x)",

@@ -18,7 +18,10 @@ mod tests {
             let b: Vec<f32> = (0..dim).map(|i| (i as f32 * -0.11) + 7.0).collect();
             let got = dot_f32(&a, &b);
             let expected = ref_dot(&a, &b);
-            assert!((got - expected).abs() <= 5e-2, "dim={dim} got={got} expected={expected}");
+            assert!(
+                (got - expected).abs() <= 5e-2,
+                "dim={dim} got={got} expected={expected}"
+            );
         }
     }
 }

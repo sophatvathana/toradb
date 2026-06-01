@@ -20,7 +20,10 @@ pub fn format_select(sel: &SelectStmt) -> String {
     if sel.vector {
         if let Some(ref v) = sel.vector_query {
             let nums: Vec<String> = v.iter().map(|x| x.to_string()).collect();
-            parts.push(format!("VECTOR SEARCH embedding ANN([{}])", nums.join(", ")));
+            parts.push(format!(
+                "VECTOR SEARCH embedding ANN([{}])",
+                nums.join(", ")
+            ));
         } else if let Some(ref t) = sel.vector_text {
             parts.push(format!("VECTOR SEARCH embedding ANN('{t}')"));
         } else {

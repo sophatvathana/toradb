@@ -13,19 +13,18 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use tower_http::services::{ServeDir, ServeFile};
 use toradb_core::QueryMetrics;
 use toradb_engine::{
-    download_hf_dataset_with_progress, ingest_hf_bundle, ingest_jsonl, ingest_parquet, materialized,
-    persist, run_table_search, sql_exec, DagRunner, HfIngestParams, MaterializedViewInfo,
-    TableSearchOptions,
+    download_hf_dataset_with_progress, ingest_hf_bundle, ingest_jsonl, ingest_parquet,
+    materialized, persist, run_table_search, sql_exec, DagRunner, HfIngestParams,
+    MaterializedViewInfo, TableSearchOptions,
 };
 use toradb_sql::{
     ast::{CreateTableStmt, Stmt},
     binder::Binder,
-    catalog_store,
-    parse,
+    catalog_store, parse,
 };
+use tower_http::services::{ServeDir, ServeFile};
 
 const MAX_UPLOAD_BYTES: usize = 512 * 1024 * 1024;
 
@@ -350,8 +349,8 @@ pub fn serve_blocking(config: ServeConfig) -> Result<(), String> {
         ingest_cancel: Arc::new(Mutex::new(HashSet::new())),
     };
 
-    let static_service =
-        ServeDir::new(&config.static_dir).fallback(ServeFile::new(config.static_dir.join("index.html")));
+    let static_service = ServeDir::new(&config.static_dir)
+        .fallback(ServeFile::new(config.static_dir.join("index.html")));
 
     let app = Router::new()
         .route("/api/health", get(health))
@@ -366,12 +365,12 @@ pub fn serve_blocking(config: ServeConfig) -> Result<(), String> {
         .route("/api/tables/{name}/ddl", get(table_ddl))
         .route("/api/tables/{name}/indexes", get(table_indexes))
         .route("/api/tables/{name}/search-log", get(table_search_log))
-        .route("/api/materialized-views", get(materialized_views).post(mv_create))
-        .route("/api/materialized-views/{name}", get(mv_detail))
         .route(
-            "/api/materialized-views/{name}/refresh",
-            post(mv_refresh),
+            "/api/materialized-views",
+            get(materialized_views).post(mv_create),
         )
+        .route("/api/materialized-views/{name}", get(mv_detail))
+        .route("/api/materialized-views/{name}/refresh", post(mv_refresh))
         .route("/api/materialized-views/{name}/drop", post(mv_drop))
         .route("/api/metrics", get(metrics))
         .route("/api/jobs", get(jobs))
@@ -442,9 +441,7 @@ fn table_detail_for(
     let query_mode = persist::table_query_mode(&state.db_path, name)
         .map(|m| format!("{m:?}"))
         .unwrap_or_else(|_| "default".to_string());
-    let index_sidecars = dag
-        .table_index_sidecars(name)
-        .unwrap_or_default();
+    let index_sidecars = dag.table_index_sidecars(name).unwrap_or_default();
     let is_materialized_view = materialized::is_materialized_view(&state.db_path, name);
     let column_types = persist::table_column_types_ordered(&state.db_path, name)
         .into_iter()
@@ -520,8 +517,8 @@ async fn table_search_log(
     Query(params): Query<SearchLogParams>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let limit = params.limit.unwrap_or(50).max(1).min(500) as usize;
-    let records = persist::read_search_log(&state.db_path, &name, limit)
-        .map_err(ApiError::internal)?;
+    let records =
+        persist::read_search_log(&state.db_path, &name, limit).map_err(ApiError::internal)?;
     let value = serde_json::to_value(&records).map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(serde_json::json!({ "table": name, "records": value })))
 }
@@ -529,8 +526,8 @@ async fn table_search_log(
 async fn materialized_views(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<MaterializedViewInfo>>, ApiError> {
-    let views = materialized::list_materialized_view_infos(&state.db_path)
-        .map_err(ApiError::internal)?;
+    let views =
+        materialized::list_materialized_view_infos(&state.db_path).map_err(ApiError::internal)?;
     Ok(Json(views))
 }
 
@@ -538,13 +535,15 @@ async fn mv_detail(
     State(state): State<AppState>,
     AxumPath(name): AxumPath<String>,
 ) -> Result<Json<MaterializedViewInfo>, ApiError> {
-    materialized::get_materialized_view_info(&state.db_path, &name).map_err(|e| {
-        if e.contains("does not exist") {
-            ApiError::not_found(e)
-        } else {
-            ApiError::internal(e)
-        }
-    }).map(Json)
+    materialized::get_materialized_view_info(&state.db_path, &name)
+        .map_err(|e| {
+            if e.contains("does not exist") {
+                ApiError::not_found(e)
+            } else {
+                ApiError::internal(e)
+            }
+        })
+        .map(Json)
 }
 
 async fn mv_create(
@@ -555,10 +554,14 @@ async fn mv_create(
         return Err(ApiError::bad_request("name is required"));
     }
     let stmts = parse(&body.query).map_err(ApiError::bad_request)?;
-    let Stmt::Select(sel) = stmts.into_iter().next().ok_or_else(|| {
-        ApiError::bad_request("materialized view query must be a single SELECT")
-    })? else {
-        return Err(ApiError::bad_request("materialized view query must be SELECT"));
+    let Stmt::Select(sel) = stmts
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::bad_request("materialized view query must be a single SELECT"))?
+    else {
+        return Err(ApiError::bad_request(
+            "materialized view query must be SELECT",
+        ));
     };
     let name = body.name.trim().to_lowercase();
     let rows = {
@@ -566,8 +569,8 @@ async fn mv_create(
         materialized::create_materialized_view(&mut dag, &state.db_path, &name, &sel)
             .map_err(ApiError::bad_request)?
     };
-    let mut info =
-        materialized::get_materialized_view_info(&state.db_path, &name).map_err(ApiError::internal)?;
+    let mut info = materialized::get_materialized_view_info(&state.db_path, &name)
+        .map_err(ApiError::internal)?;
     info.row_count = rows;
     Ok(Json(info))
 }
@@ -581,8 +584,8 @@ async fn mv_refresh(
         materialized::refresh_materialized_view(&mut dag, &state.db_path, &name)
             .map_err(ApiError::bad_request)?
     };
-    let mut info =
-        materialized::get_materialized_view_info(&state.db_path, &name).map_err(ApiError::internal)?;
+    let mut info = materialized::get_materialized_view_info(&state.db_path, &name)
+        .map_err(ApiError::internal)?;
     info.row_count = rows;
     Ok(Json(info))
 }
@@ -1063,83 +1066,83 @@ fn execute_sql(
 
     let resp = match &stmts[0] {
         Stmt::Select(sel) => match sql_exec::run_select(&mut dag, sel) {
-        Ok(result) => match result {
-            sql_exec::SqlSelectResult::Search(result) => {
-                if let Some(text) = result.explain_text {
-                    SqlResponse {
-                        kind: "explain".to_string(),
-                        columns: vec![],
-                        rows: vec![],
-                        latency_ms: started.elapsed().as_secs_f64() * 1000.0,
-                        explain_text: Some(text),
-                        metrics: Some(metrics_to_response(&result.metrics)),
+            Ok(result) => match result {
+                sql_exec::SqlSelectResult::Search(result) => {
+                    if let Some(text) = result.explain_text {
+                        SqlResponse {
+                            kind: "explain".to_string(),
+                            columns: vec![],
+                            rows: vec![],
+                            latency_ms: started.elapsed().as_secs_f64() * 1000.0,
+                            explain_text: Some(text),
+                            metrics: Some(metrics_to_response(&result.metrics)),
+                        }
+                    } else {
+                        let mut rows = Vec::with_capacity(result.ids.len());
+                        for row_idx in 0..result.ids.len() {
+                            let mut row = serde_json::Map::new();
+                            for (name, col) in &result.projected {
+                                let value = match col {
+                                    sql_exec::SqlProjectedColumn::U64(values) => {
+                                        serde_json::json!(values[row_idx])
+                                    }
+                                    sql_exec::SqlProjectedColumn::F32(values) => {
+                                        serde_json::json!(values[row_idx])
+                                    }
+                                    sql_exec::SqlProjectedColumn::Str(values) => {
+                                        serde_json::json!(values[row_idx])
+                                    }
+                                };
+                                row.insert(name.clone(), value);
+                            }
+                            rows.push(serde_json::Value::Object(row));
+                        }
+                        SqlResponse {
+                            kind: "search".to_string(),
+                            columns: result.projected.iter().map(|(n, _)| n.clone()).collect(),
+                            rows,
+                            latency_ms: started.elapsed().as_secs_f64() * 1000.0,
+                            explain_text: None,
+                            metrics: Some(metrics_to_response(&result.metrics)),
+                        }
                     }
-                } else {
-                    let mut rows = Vec::with_capacity(result.ids.len());
-                    for row_idx in 0..result.ids.len() {
+                }
+                sql_exec::SqlSelectResult::Aggregate(result) => {
+                    let mut rows = Vec::with_capacity(result.group_keys.len());
+                    for (row_idx, key) in result.group_keys.iter().enumerate() {
                         let mut row = serde_json::Map::new();
-                        for (name, col) in &result.projected {
-                            let value = match col {
-                                sql_exec::SqlProjectedColumn::U64(values) => {
-                                    serde_json::json!(values[row_idx])
-                                }
-                                sql_exec::SqlProjectedColumn::F32(values) => {
-                                    serde_json::json!(values[row_idx])
-                                }
-                                sql_exec::SqlProjectedColumn::Str(values) => {
-                                    serde_json::json!(values[row_idx])
-                                }
-                            };
-                            row.insert(name.clone(), value);
+                        if let Some(first) = result.group_by_columns.first() {
+                            row.insert(first.clone(), serde_json::json!(key));
+                        }
+                        for (value_idx, value_col) in result.value_columns.iter().enumerate() {
+                            let value = result
+                                .value_rows
+                                .get(row_idx)
+                                .and_then(|vals| vals.get(value_idx))
+                                .copied()
+                                .unwrap_or_default();
+                            row.insert(value_col.clone(), serde_json::json!(value));
                         }
                         rows.push(serde_json::Value::Object(row));
                     }
+                    let mut columns = result.group_by_columns.clone();
+                    columns.extend(result.value_columns.clone());
                     SqlResponse {
-                        kind: "search".to_string(),
-                        columns: result.projected.iter().map(|(n, _)| n.clone()).collect(),
+                        kind: "aggregate".to_string(),
+                        columns,
                         rows,
                         latency_ms: started.elapsed().as_secs_f64() * 1000.0,
                         explain_text: None,
-                        metrics: Some(metrics_to_response(&result.metrics)),
+                        metrics: None,
                     }
                 }
-            }
-            sql_exec::SqlSelectResult::Aggregate(result) => {
-                let mut rows = Vec::with_capacity(result.group_keys.len());
-                for (row_idx, key) in result.group_keys.iter().enumerate() {
-                    let mut row = serde_json::Map::new();
-                    if let Some(first) = result.group_by_columns.first() {
-                        row.insert(first.clone(), serde_json::json!(key));
-                    }
-                    for (value_idx, value_col) in result.value_columns.iter().enumerate() {
-                        let value = result
-                            .value_rows
-                            .get(row_idx)
-                            .and_then(|vals| vals.get(value_idx))
-                            .copied()
-                            .unwrap_or_default();
-                        row.insert(value_col.clone(), serde_json::json!(value));
-                    }
-                    rows.push(serde_json::Value::Object(row));
+            },
+            Err(e) => {
+                if record_history {
+                    record_error_history(state, query, started);
                 }
-                let mut columns = result.group_by_columns.clone();
-                columns.extend(result.value_columns.clone());
-                SqlResponse {
-                    kind: "aggregate".to_string(),
-                    columns,
-                    rows,
-                    latency_ms: started.elapsed().as_secs_f64() * 1000.0,
-                    explain_text: None,
-                    metrics: None,
-                }
+                return Err(ApiError::bad_request(e));
             }
-        },
-        Err(e) => {
-            if record_history {
-                record_error_history(state, query, started);
-            }
-            return Err(ApiError::bad_request(e));
-        }
         },
         Stmt::CreateTable(t) => {
             let mut binder = load_binder(&state.db_path);
@@ -1163,11 +1166,7 @@ fn execute_sql(
                 .map(|(name, ty)| (name.clone(), toradb_core::ColumnTypeSpec::parse(ty)))
                 .collect();
             if !column_types.is_empty() {
-                let _ = persist::set_table_column_types(
-                    &state.db_path,
-                    &table,
-                    &column_types,
-                );
+                let _ = persist::set_table_column_types(&state.db_path, &table, &column_types);
             }
             let _ = catalog_store::save_catalog(&state.db_path, &binder.catalog);
             message_response("ddl", &format!("ok: created table {table}"), started)
@@ -1232,12 +1231,7 @@ fn execute_sql(
                 .into_iter()
                 .map(|idx| serde_json::json!({ "index": idx }))
                 .collect();
-            tabular_response(
-                "show_indexes",
-                vec!["index".to_string()],
-                rows,
-                started,
-            )
+            tabular_response("show_indexes", vec!["index".to_string()], rows, started)
         }
         Stmt::ShowCreateTable { table } => {
             let table = table.to_lowercase();
@@ -1268,13 +1262,12 @@ fn execute_sql(
         } => {
             let table = table.to_lowercase();
             let ty = toradb_core::ColumnTypeSpec::parse(column_type);
-            persist::alter_table_column_type(&state.db_path, &table, column, ty)
-                .map_err(|e| {
-                    if record_history {
-                        record_error_history(state, query, started);
-                    }
-                    ApiError::bad_request(e)
-                })?;
+            persist::alter_table_column_type(&state.db_path, &table, column, ty).map_err(|e| {
+                if record_history {
+                    record_error_history(state, query, started);
+                }
+                ApiError::bad_request(e)
+            })?;
             let compact_note = if *rewrite {
                 let report = dag.compact_table(&table, true).map_err(|e| {
                     if record_history {
@@ -1289,8 +1282,8 @@ fn execute_sql(
             } else {
                 None
             };
-            let needs = persist::table_needs_typed_segment_rewrite(&state.db_path, &table)
-                .unwrap_or(false);
+            let needs =
+                persist::table_needs_typed_segment_rewrite(&state.db_path, &table).unwrap_or(false);
             let msg = persist::format_alter_column_type_message(
                 &table,
                 column,
@@ -1302,13 +1295,12 @@ fn execute_sql(
         }
         Stmt::AlterTableSetSegmentWorkers { table, workers } => {
             let table = table.to_lowercase();
-            dag.set_segment_workers(&table, *workers)
-                .map_err(|e| {
-                    if record_history {
-                        record_error_history(state, query, started);
-                    }
-                    ApiError::bad_request(e)
-                })?;
+            dag.set_segment_workers(&table, *workers).map_err(|e| {
+                if record_history {
+                    record_error_history(state, query, started);
+                }
+                ApiError::bad_request(e)
+            })?;
             message_response(
                 "ddl",
                 &format!("ok: set segment_workers={workers} on {table}"),
@@ -1346,7 +1338,11 @@ fn execute_sql(
         Stmt::DropMaterializedView { name } => {
             materialized::drop_materialized_view(&state.db_path, name)
                 .map_err(ApiError::bad_request)?;
-            message_response("ddl", &format!("ok: dropped materialized view {name}"), started)
+            message_response(
+                "ddl",
+                &format!("ok: dropped materialized view {name}"),
+                started,
+            )
         }
         Stmt::CompactTable { table, full } => {
             let report = dag
@@ -1373,10 +1369,17 @@ fn execute_sql(
             *dag = fresh;
             message_response("ddl", &format!("ok: dropped table {table}"), started)
         }
-        Stmt::Delete { table, where_clause } => {
+        Stmt::Delete {
+            table,
+            where_clause,
+        } => {
             let n = sql_exec::run_delete(&mut dag, table, where_clause.as_ref())
                 .map_err(ApiError::bad_request)?;
-            message_response("delete", &format!("ok: deleted {n} rows from {table}"), started)
+            message_response(
+                "delete",
+                &format!("ok: deleted {n} rows from {table}"),
+                started,
+            )
         }
         Stmt::Describe { name } => {
             let table = name.to_lowercase();
@@ -1388,11 +1391,9 @@ fn execute_sql(
                 let row_count = dag.table_row_count(&table).unwrap_or(0);
                 let vector_dim = dag.vector_dim(&table);
                 let segments = persist::table_segment_count(&state.db_path, &table).ok();
-                let segment_workers =
-                    persist::table_segment_workers(&state.db_path, &table).ok();
+                let segment_workers = persist::table_segment_workers(&state.db_path, &table).ok();
                 let indexes = dag.table_index_sidecars(&table).unwrap_or_default();
-                let column_types =
-                    persist::table_column_types_ordered(&state.db_path, &table);
+                let column_types = persist::table_column_types_ordered(&state.db_path, &table);
                 persist::format_describe_table(
                     &table,
                     row_count,
@@ -1482,7 +1483,10 @@ fn execute_native_search(
         .list_tables()
         .map_err(|e| ApiError::internal(format!("failed to list tables: {e}")))?;
     if !table_names.iter().any(|t| t == &body.table) {
-        return Err(ApiError::not_found(format!("table not found: {}", body.table)));
+        return Err(ApiError::not_found(format!(
+            "table not found: {}",
+            body.table
+        )));
     }
 
     let out = run_table_search(
@@ -1506,9 +1510,9 @@ fn execute_native_search(
     let fetch_started = Instant::now();
     let mut hits = Vec::with_capacity(out.ids.len());
     if fetch_text && !out.ids.is_empty() {
-        let docs = dag.fetch_documents(&body.table, &out.ids).map_err(|e| {
-            ApiError::internal(format!("failed to load document text: {e}"))
-        })?;
+        let docs = dag
+            .fetch_documents(&body.table, &out.ids)
+            .map_err(|e| ApiError::internal(format!("failed to load document text: {e}")))?;
         let doc_map: std::collections::HashMap<u64, _> =
             docs.into_iter().map(|(id, doc)| (id, doc)).collect();
         for (id, score) in out.ids.iter().zip(out.scores.iter()) {
@@ -1516,10 +1520,7 @@ fn execute_native_search(
             hits.push(SearchHitResponse {
                 id: *id,
                 score: *score,
-                text: Some(
-                    doc.map(|d| d.text.clone())
-                        .unwrap_or_default(),
-                ),
+                text: Some(doc.map(|d| d.text.clone()).unwrap_or_default()),
                 metadata: doc.map(|d| d.metadata.clone()).unwrap_or_default(),
             });
         }
@@ -1707,7 +1708,9 @@ async fn table_delete(
     let deleted = dag
         .delete_by_ids(&table, &body.ids)
         .map_err(ApiError::internal)?;
-    Ok(Json(serde_json::json!({ "table": table, "deleted": deleted })))
+    Ok(Json(
+        serde_json::json!({ "table": table, "deleted": deleted }),
+    ))
 }
 
 async fn ingest_begin(
@@ -1746,12 +1749,23 @@ async fn ingest_upload(
     {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
-            "table" => table = field.text().await.map_err(|e| ApiError::bad_request(e.to_string()))?,
+            "table" => {
+                table = field
+                    .text()
+                    .await
+                    .map_err(|e| ApiError::bad_request(e.to_string()))?
+            }
             "format" => {
-                format = field.text().await.map_err(|e| ApiError::bad_request(e.to_string()))?
+                format = field
+                    .text()
+                    .await
+                    .map_err(|e| ApiError::bad_request(e.to_string()))?
             }
             "limit" => {
-                let t = field.text().await.map_err(|e| ApiError::bad_request(e.to_string()))?;
+                let t = field
+                    .text()
+                    .await
+                    .map_err(|e| ApiError::bad_request(e.to_string()))?;
                 limit = t.parse().unwrap_or(0);
             }
             "file" => {
@@ -1840,9 +1854,7 @@ async fn ingest_hf_handler(
         dataset: body.dataset.trim().to_string(),
         config: body.config.filter(|s| !s.is_empty()),
         split: body.split.unwrap_or_else(|| "train".to_string()),
-        text_column: body
-            .text_column
-            .unwrap_or_else(|| "text".to_string()),
+        text_column: body.text_column.unwrap_or_else(|| "text".to_string()),
         limit: body.limit.unwrap_or(0),
     };
 
@@ -2155,7 +2167,9 @@ fn table_is_building(db_path: &Path, table: &str) -> bool {
         .unwrap_or(false)
 }
 
-async fn query_history(State(state): State<AppState>) -> Result<Json<Vec<QueryHistoryEntry>>, ApiError> {
+async fn query_history(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<QueryHistoryEntry>>, ApiError> {
     let history = state
         .query_history
         .lock()

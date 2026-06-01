@@ -44,10 +44,9 @@ fn sql_search_order_by_score_desc() {
         panic!("search");
     };
 
-    let stmts_raw = parse(
-        "SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 10",
-    )
-    .unwrap();
+    let stmts_raw =
+        parse("SELECT id FROM docs SPARSE SEARCH body BM25('Nikola Tesla motor') LIMIT 10")
+            .unwrap();
     let toradb_sql::ast::Stmt::Select(sel_raw) = &stmts_raw[0] else {
         panic!("select");
     };
@@ -56,18 +55,18 @@ fn sql_search_order_by_score_desc() {
     else {
         panic!("search");
     };
-    let mut ranked: Vec<_> = raw
-        .ids
-        .into_iter()
-        .zip(raw.scores)
-        .collect();
+    let mut ranked: Vec<_> = raw.ids.into_iter().zip(raw.scores).collect();
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     let expected_ids: Vec<_> = ranked.into_iter().map(|(id, _)| id).collect();
 
     let want = expected_ids.len().min(3);
     assert_eq!(result.ids.len(), want);
     for w in result.scores.windows(2) {
-        assert!(w[0] >= w[1], "scores must be non-increasing: {:?}", result.scores);
+        assert!(
+            w[0] >= w[1],
+            "scores must be non-increasing: {:?}",
+            result.scores
+        );
     }
     assert_eq!(result.ids, expected_ids[..want]);
 
@@ -113,7 +112,11 @@ fn sql_search_order_by_score_asc() {
 
     assert_eq!(result.ids.len(), 2);
     for w in result.scores.windows(2) {
-        assert!(w[0] <= w[1], "scores must be non-decreasing: {:?}", result.scores);
+        assert!(
+            w[0] <= w[1],
+            "scores must be non-decreasing: {:?}",
+            result.scores
+        );
     }
 
     let _ = std::fs::remove_dir_all(&dir);

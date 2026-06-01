@@ -10,7 +10,9 @@ fn tier1_respects_budget() {
         rt.store.add_documents(
             "t",
             vec![IngestDoc {
-                text: format!("Document {i} about Nikola Tesla wireless power and Wardenclyffe experiments"),
+                text: format!(
+                    "Document {i} about Nikola Tesla wireless power and Wardenclyffe experiments"
+                ),
                 metadata: Default::default(),
                 vector: None,
             }],

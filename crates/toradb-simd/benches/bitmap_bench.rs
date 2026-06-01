@@ -1,4 +1,4 @@
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use toradb_simd::bitmap::popcnt_slice_u64;
 
 fn bench_popcnt(c: &mut Criterion) {

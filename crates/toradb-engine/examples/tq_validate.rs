@@ -57,9 +57,7 @@ fn parse_args() -> Args {
             "--k" => k = it.next().unwrap().parse().unwrap(),
             "--limit" => limit = it.next().unwrap().parse().unwrap(),
             "--seed" => seed = it.next().unwrap().parse().unwrap(),
-            "--synthetic-dim" => {
-                synthetic_dim = Some(it.next().unwrap().parse().unwrap())
-            }
+            "--synthetic-dim" => synthetic_dim = Some(it.next().unwrap().parse().unwrap()),
             "--synthetic-n" => synthetic_n = it.next().unwrap().parse().unwrap(),
             "--ef-sweep" => {
                 ef_sweep = it
@@ -131,8 +129,7 @@ fn synth_corpus(d: usize, n: usize, seed: u64) -> Vec<(u64, Vec<f32>)> {
             let u1 = ((rng.next_u64() >> 11) as f64) / ((1u64 << 53) as f64);
             let u2 = ((rng.next_u64() >> 11) as f64) / ((1u64 << 53) as f64);
             let u1 = u1.max(1e-300);
-            v[i] = ((-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos())
-                as f32;
+            v[i] = ((-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()) as f32;
         }
         let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
         for x in &mut v {
@@ -146,8 +143,8 @@ fn synth_corpus(d: usize, n: usize, seed: u64) -> Vec<(u64, Vec<f32>)> {
 fn load_vectors(args: &Args) -> Vec<(u64, Vec<f32>)> {
     // Prefer the merged table-level f32 sidecar; fall back to scanning per-segment.
     let mut pairs: Vec<(u64, Vec<f32>)> = Vec::new();
-    if let Some(snap) = persist::load_table_vector_sidecar(&args.db, &args.table, None)
-        .expect("read table sidecar")
+    if let Some(snap) =
+        persist::load_table_vector_sidecar(&args.db, &args.table, None).expect("read table sidecar")
     {
         let dim = snap.dim as usize;
         for (i, &id) in snap.ids.iter().enumerate() {
@@ -272,8 +269,7 @@ fn main() {
                 let u1 = ((rng.next_u64() >> 11) as f64) / ((1u64 << 53) as f64);
                 let u2 = ((rng.next_u64() >> 11) as f64) / ((1u64 << 53) as f64);
                 let u1 = u1.max(1e-300);
-                let g = (-2.0 * u1.ln()).sqrt()
-                    * (2.0 * std::f64::consts::PI * u2).cos();
+                let g = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
                 *x += 0.1 * g as f32;
             }
             v
@@ -304,11 +300,31 @@ fn main() {
     let full_snap = VectorSnapshot::from_pairs(dim as u32, &corpus).expect("full snap");
 
     let configs = [
-        Config { name: "MSE 2b", mode: TqMode::Mse, bits: 2 },
-        Config { name: "MSE 3b", mode: TqMode::Mse, bits: 3 },
-        Config { name: "MSE 4b", mode: TqMode::Mse, bits: 4 },
-        Config { name: "IP  3b", mode: TqMode::Ip,  bits: 3 },
-        Config { name: "IP  4b", mode: TqMode::Ip,  bits: 4 },
+        Config {
+            name: "MSE 2b",
+            mode: TqMode::Mse,
+            bits: 2,
+        },
+        Config {
+            name: "MSE 3b",
+            mode: TqMode::Mse,
+            bits: 3,
+        },
+        Config {
+            name: "MSE 4b",
+            mode: TqMode::Mse,
+            bits: 4,
+        },
+        Config {
+            name: "IP  3b",
+            mode: TqMode::Ip,
+            bits: 3,
+        },
+        Config {
+            name: "IP  4b",
+            mode: TqMode::Ip,
+            bits: 4,
+        },
     ];
 
     let rerank_factor = 4usize;
@@ -359,8 +375,7 @@ fn main() {
 
         for (cfg, snap, snap_bytes_len) in &snaps {
             let size_mib = *snap_bytes_len as f64 / (1024.0 * 1024.0);
-            let bits_per_dim =
-                (*snap_bytes_len * 8) as f64 / (corpus.len() as f64 * dim as f64);
+            let bits_per_dim = (*snap_bytes_len * 8) as f64 / (corpus.len() as f64 * dim as f64);
 
             let q_t = Instant::now();
             let mut brute_recall = 0.0f32;
@@ -368,8 +383,7 @@ fn main() {
                 let got = adc_topk(snap, q, args.k);
                 brute_recall += recall(&truth[i], &got);
             }
-            let brute_us =
-                q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
+            let brute_us = q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
             brute_recall /= queries.len() as f32;
 
             let q_t = Instant::now();
@@ -378,8 +392,7 @@ fn main() {
                 let got = turboquant::hnsw_adc_search(&graph, snap, None, q, args.k, 1);
                 hnsw_recall += recall(&truth[i], &got.ids);
             }
-            let hnsw_us =
-                q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
+            let hnsw_us = q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
             hnsw_recall /= queries.len() as f32;
 
             let q_t = Instant::now();
@@ -395,8 +408,7 @@ fn main() {
                 );
                 rerank_recall += recall(&truth[i], &got.ids);
             }
-            let rerank_us =
-                q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
+            let rerank_us = q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
             rerank_recall /= queries.len() as f32;
 
             println!(
@@ -420,8 +432,7 @@ fn main() {
             let got = graph.search(q, args.k);
             hnsw_hit_sum += recall(&truth[i], &got.ids);
         }
-        let hnsw_f32_us =
-            q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
+        let hnsw_f32_us = q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
         println!(
             "{:<10}                                                                  recall={:.3}  us/query={:.0}",
             "HNSW f32",
@@ -436,8 +447,7 @@ fn main() {
         let got = brute_truth_topk(&corpus, q, args.k);
         hit_sum += recall(&truth[i], &got);
     }
-    let brute_f32_us =
-        q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
+    let brute_f32_us = q_t.elapsed().as_secs_f64() * 1_000_000.0 / queries.len() as f64;
     println!();
     println!(
         "ceiling brute f32:  recall={:.3}  us/query={:.0}  size={:.2} MiB (1.00x)",

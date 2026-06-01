@@ -110,10 +110,7 @@ impl<'a> Bm25RouteView<'a> {
     }
 
     /// Union of segment indices that may contain any query term.
-    pub fn segments_for_query<'b, I: Iterator<Item = &'b str>>(
-        &self,
-        query_terms: I,
-    ) -> Vec<u32> {
+    pub fn segments_for_query<'b, I: Iterator<Item = &'b str>>(&self, query_terms: I) -> Vec<u32> {
         let mut set: Vec<u32> = Vec::new();
         for term in query_terms {
             if let Some(segs) = self.find_term(term) {

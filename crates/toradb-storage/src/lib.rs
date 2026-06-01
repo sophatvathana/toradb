@@ -8,8 +8,8 @@ pub mod segment;
 pub mod snapshot;
 pub mod wal;
 
+pub use cache::{get_or_mmap, read_segment_cached, CacheConfig, CacheHierarchy, StorageCaches};
 pub use manifest::ManifestStore;
+pub use numa::{prefetch_mmap_sequential, NumaConfig};
 pub use segment::SegmentManager;
 pub use snapshot::SnapshotId;
-pub use cache::{CacheConfig, CacheHierarchy, StorageCaches, read_segment_cached, get_or_mmap};
-pub use numa::{NumaConfig, prefetch_mmap_sequential};

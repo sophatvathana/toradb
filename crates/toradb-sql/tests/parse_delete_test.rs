@@ -6,7 +6,11 @@ use toradb_sql::{
 #[test]
 fn parses_delete_by_id_eq() {
     let stmts = parse("DELETE FROM docs WHERE id = 5").unwrap();
-    let Stmt::Delete { table, where_clause } = &stmts[0] else {
+    let Stmt::Delete {
+        table,
+        where_clause,
+    } = &stmts[0]
+    else {
         panic!("expected delete");
     };
     assert_eq!(table, "docs");
@@ -21,7 +25,11 @@ fn parses_delete_by_id_eq() {
 #[test]
 fn parses_delete_by_id_in() {
     let stmts = parse("DELETE FROM docs WHERE id IN (1, 2, 3)").unwrap();
-    let Stmt::Delete { table, where_clause } = &stmts[0] else {
+    let Stmt::Delete {
+        table,
+        where_clause,
+    } = &stmts[0]
+    else {
         panic!("expected delete");
     };
     assert_eq!(table, "docs");
@@ -35,7 +43,11 @@ fn parses_delete_by_id_in() {
 #[test]
 fn parses_delete_without_where() {
     let stmts = parse("DELETE FROM docs").unwrap();
-    let Stmt::Delete { table, where_clause } = &stmts[0] else {
+    let Stmt::Delete {
+        table,
+        where_clause,
+    } = &stmts[0]
+    else {
         panic!("expected delete");
     };
     assert_eq!(table, "docs");

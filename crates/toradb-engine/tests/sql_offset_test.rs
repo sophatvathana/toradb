@@ -42,7 +42,8 @@ fn sql_search_offset_skips_top_hits() {
         panic!("search");
     };
 
-    let sql_exec::SqlSelectResult::Search(page) = sql_exec::run_select(&mut dag, sel).expect("page")
+    let sql_exec::SqlSelectResult::Search(page) =
+        sql_exec::run_select(&mut dag, sel).expect("page")
     else {
         panic!("search");
     };
@@ -50,7 +51,10 @@ fn sql_search_offset_skips_top_hits() {
     assert_eq!(page.ids.len(), 2);
     assert!(page.ids[0] != page.ids[1]);
     for id in &page.ids {
-        assert!(all.ids.contains(id), "offset page id {id} should appear in full result");
+        assert!(
+            all.ids.contains(id),
+            "offset page id {id} should appear in full result"
+        );
     }
 
     let _ = std::fs::remove_dir_all(&dir);

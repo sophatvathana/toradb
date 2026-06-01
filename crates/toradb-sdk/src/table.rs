@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use toradb_engine::TableSearchOptions;
 use pyo3_arrow::PyTable;
+use toradb_engine::TableSearchOptions;
 use toradb_index::IngestDoc;
 
 use crate::database::Database;
@@ -134,9 +134,10 @@ impl Table {
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
             })
         })?;
-        let provenance_json = out.provenance.as_ref().and_then(|p| {
-            serde_json::to_string_pretty(p).ok()
-        });
+        let provenance_json = out
+            .provenance
+            .as_ref()
+            .and_then(|p| serde_json::to_string_pretty(p).ok());
         Ok(SearchResults {
             ids: out.ids,
             scores: out.scores,
@@ -324,7 +325,8 @@ impl AnalyticsResults {
         } else if self.group_by_columns.len() == 1 {
             dict.set_item(&self.group_by_columns[0], self.group_keys.clone())?;
         } else {
-            let mut columns = vec![Vec::with_capacity(self.group_keys.len()); self.group_by_columns.len()];
+            let mut columns =
+                vec![Vec::with_capacity(self.group_keys.len()); self.group_by_columns.len()];
             for key in &self.group_keys {
                 let parts = key.split('|').collect::<Vec<_>>();
                 for (idx, col_values) in columns.iter_mut().enumerate() {

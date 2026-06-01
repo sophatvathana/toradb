@@ -30,8 +30,8 @@ where
 pub fn decode<T>(magic: &[u8; 4], bytes: &[u8]) -> Result<T, String>
 where
     T: Archive,
-    T::Archived: for<'a> CheckBytes<HighValidator<'a, Error>>
-        + Deserialize<T, Strategy<Pool, Error>>,
+    T::Archived:
+        for<'a> CheckBytes<HighValidator<'a, Error>> + Deserialize<T, Strategy<Pool, Error>>,
     Error: Source,
 {
     if bytes.len() < INDEX_BLOB_HEADER_LEN {

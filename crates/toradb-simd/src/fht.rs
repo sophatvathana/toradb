@@ -123,7 +123,10 @@ mod tests {
         apply_rotation(7, &mut a);
         apply_rotation(7, &mut b);
         let ip1: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-        assert!((ip0 - ip1).abs() / ip0.abs().max(1e-6) < 1e-3, "{ip0} vs {ip1}");
+        assert!(
+            (ip0 - ip1).abs() / ip0.abs().max(1e-6) < 1e-3,
+            "{ip0} vs {ip1}"
+        );
     }
 
     #[test]

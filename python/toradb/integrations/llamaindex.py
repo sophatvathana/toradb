@@ -27,11 +27,12 @@ class ToraDBLlamaIndexStore:
     def query(self, query_str, similarity_top_k=5, **kwargs):
         _ = kwargs
         query_vector = None
-        strategy = None
         if self.embedding is not None:
             emb = self.embedding.embed_query(query_str)
             query_vector = list(emb) if not isinstance(emb, list) else emb
             strategy = "dense"
+        else:
+            strategy = "sparse"
         return self.table.search(
             query_str,
             top_k=similarity_top_k,

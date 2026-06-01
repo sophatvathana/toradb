@@ -39,8 +39,14 @@ fn parquet_segment_roundtrip() {
     let docs = read_segment(&seg_path).expect("read");
     assert_eq!(docs.len(), 2);
     assert_eq!(docs[0].text, "Nikola Tesla alternating current motor");
-    assert_eq!(docs[0].metadata.get("tag").map(String::as_str), Some("patent"));
-    assert_eq!(docs[1].embedding.as_deref(), Some([0.1_f32, 0.2, 0.3].as_slice()));
+    assert_eq!(
+        docs[0].metadata.get("tag").map(String::as_str),
+        Some("patent")
+    );
+    assert_eq!(
+        docs[1].embedding.as_deref(),
+        Some([0.1_f32, 0.2, 0.3].as_slice())
+    );
 
     let manifest_path = TableManifestFile::path_for_table(&dir, "papers");
     let mut manifest = TableManifestFile::default();

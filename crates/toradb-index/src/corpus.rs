@@ -8,7 +8,7 @@ use crate::dense::turboquant;
 use crate::dense::turboquant_codec::TurboQuantSnapshot;
 use crate::dense::vector_codec::VectorSnapshot;
 use crate::graph::csr::CsrGraph;
-use crate::sparse::bm25::{Bm25Index, Bm25Snapshot, tokenize};
+use crate::sparse::bm25::{tokenize, Bm25Index, Bm25Snapshot};
 
 #[derive(Debug, Clone)]
 pub struct IngestDoc {
@@ -69,13 +69,7 @@ impl TableCorpus {
         id
     }
 
-    pub fn insert_at(
-        &mut self,
-        id: DocId,
-        doc: IngestDoc,
-        num_segments: u32,
-        opts: IngestOptions,
-    ) {
+    pub fn insert_at(&mut self, id: DocId, doc: IngestDoc, num_segments: u32, opts: IngestOptions) {
         if id >= self.next_id {
             self.next_id = id + 1;
         }
@@ -246,14 +240,8 @@ impl TableCorpus {
             .max(1);
         let mut merged: Vec<(DocId, f32)> = Vec::new();
         for snap in &self.tq_segments {
-            let c = turboquant::hnsw_adc_search(
-                graph,
-                snap,
-                full.as_ref(),
-                query,
-                k,
-                rerank_factor,
-            );
+            let c =
+                turboquant::hnsw_adc_search(graph, snap, full.as_ref(), query, k, rerank_factor);
             for (i, id) in c.ids.iter().enumerate() {
                 merged.push((*id, c.scores[i]));
             }
@@ -624,14 +612,11 @@ impl CorpusStore {
     }
 
     pub fn restore_segment_hnsw(&mut self, table: &str, segment: u32, index: HnswIndex) {
-        self.ensure_table(table).restore_segment_hnsw(segment, index);
+        self.ensure_table(table)
+            .restore_segment_hnsw(segment, index);
     }
 
-    pub fn restore_turboquant_segments(
-        &mut self,
-        table: &str,
-        snaps: Vec<TurboQuantSnapshot>,
-    ) {
+    pub fn restore_turboquant_segments(&mut self, table: &str, snaps: Vec<TurboQuantSnapshot>) {
         self.ensure_table(table).restore_turboquant_segments(snaps);
     }
 
@@ -646,7 +631,9 @@ impl CorpusStore {
     }
 
     pub fn has_segment_hnsw(&self, table: &str) -> bool {
-        self.table(table).map(|t| t.has_segment_hnsw()).unwrap_or(false)
+        self.table(table)
+            .map(|t| t.has_segment_hnsw())
+            .unwrap_or(false)
     }
 
     pub fn segment_vector_search(
@@ -713,7 +700,8 @@ impl CorpusStore {
     }
 
     pub fn insert_stored(&mut self, table: &str, id: DocId, doc: IngestDoc, num_segments: u32) {
-        self.ensure_table(table).insert_stored(id, doc, num_segments);
+        self.ensure_table(table)
+            .insert_stored(id, doc, num_segments);
     }
 
     /// Assign ids starting at `since_id` without scanning `docs_with_ids_since` on flush.

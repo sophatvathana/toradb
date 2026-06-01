@@ -39,7 +39,10 @@ fn native_int_column_roundtrip_and_overflow_json() {
     let docs = read_segment(&path).unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].metadata.get("rank").map(String::as_str), Some("10"));
-    assert_eq!(docs[0].metadata.get("tag").map(String::as_str), Some("news"));
+    assert_eq!(
+        docs[0].metadata.get("tag").map(String::as_str),
+        Some("news")
+    );
     assert_eq!(
         docs[0].metadata.get("extra").map(String::as_str),
         Some("overflow")

@@ -44,9 +44,9 @@ impl CandidateSet {
             .collect();
         let cmp = |a: f32, b: f32| a.partial_cmp(&b).unwrap_or(Ordering::Equal);
         if descending {
-            pairs.sort_by(|a, b| cmp(b.1, a.1));
+            pairs.sort_by(|a, b| cmp(b.1, a.1).then(a.0.cmp(&b.0)));
         } else {
-            pairs.sort_by(|a, b| cmp(a.1, b.1));
+            pairs.sort_by(|a, b| cmp(a.1, b.1).then(a.0.cmp(&b.0)));
         }
         self.ids = pairs.iter().map(|(id, _)| *id).collect();
         self.scores = pairs.iter().map(|(_, s)| *s).collect();

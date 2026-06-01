@@ -7,8 +7,7 @@ use std::sync::Arc;
 use arrow::array::{Array, BooleanArray, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::{
-    ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowFilter,
-    RowSelection,
+    ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
 };
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::PageIndexPolicy;
@@ -62,9 +61,8 @@ fn read_segment_by_row_selection(
 ) -> Result<Vec<ColumnarDoc>, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
-    let builder =
-        ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
-            .map_err(|e| e.to_string())?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+        .map_err(|e| e.to_string())?;
     let total_rows = builder.metadata().file_metadata().num_rows() as usize;
     let selection = row_selection_for_ids(ids, min_id, total_rows)?;
     let mut reader = builder
@@ -108,7 +106,10 @@ fn row_selection_for_ids(
         }
     }
     ranges.push(start..end);
-    Ok(RowSelection::from_consecutive_ranges(ranges.into_iter(), total_rows))
+    Ok(RowSelection::from_consecutive_ranges(
+        ranges.into_iter(),
+        total_rows,
+    ))
 }
 
 fn rg_id_min_max(stats: &Statistics) -> Option<(u64, u64)> {
@@ -157,9 +158,8 @@ fn row_selection_from_rg_stats(
 fn read_segment_by_id_filter(path: &Path, want: &HashSet<u64>) -> Result<Vec<ColumnarDoc>, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
-    let builder =
-        ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
-            .map_err(|e| e.to_string())?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+        .map_err(|e| e.to_string())?;
 
     let want_min = want.iter().copied().min().unwrap_or(0);
     let want_max = want.iter().copied().max().unwrap_or(u64::MAX);

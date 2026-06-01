@@ -3,9 +3,16 @@ pub enum Stmt {
     CreateTable(CreateTableStmt),
     CreateIndex(CreateIndexStmt),
     CreateMaterializedView(CreateMaterializedViewStmt),
-    RefreshMaterializedView { name: String },
-    DropMaterializedView { name: String },
-    AlterTableSetSegmentWorkers { table: String, workers: u32 },
+    RefreshMaterializedView {
+        name: String,
+    },
+    DropMaterializedView {
+        name: String,
+    },
+    AlterTableSetSegmentWorkers {
+        table: String,
+        workers: u32,
+    },
     AlterTableAlterColumnType {
         table: String,
         column: String,
@@ -13,14 +20,28 @@ pub enum Stmt {
         /// When true, run `COMPACT TABLE … FULL` after updating the manifest.
         rewrite: bool,
     },
-    CompactTable { table: String, full: bool },
-    DropTable { name: String },
-    Delete { table: String, where_clause: Option<WherePred> },
+    CompactTable {
+        table: String,
+        full: bool,
+    },
+    DropTable {
+        name: String,
+    },
+    Delete {
+        table: String,
+        where_clause: Option<WherePred>,
+    },
     ShowTables,
     ShowMaterializedViews,
-    ShowIndexes { table: String },
-    ShowCreateTable { table: String },
-    Describe { name: String },
+    ShowIndexes {
+        table: String,
+    },
+    ShowCreateTable {
+        table: String,
+    },
+    Describe {
+        name: String,
+    },
     Select(SelectStmt),
 }
 

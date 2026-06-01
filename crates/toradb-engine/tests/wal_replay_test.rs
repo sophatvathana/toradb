@@ -28,8 +28,8 @@ fn replay_commits_wal_segment_missing_from_manifest() {
     let recovered = replay_flush_wal(base, table).expect("replay");
     assert_eq!(recovered, 1);
 
-    let manifest = TableManifestFile::load(&TableManifestFile::path_for_table(base, table))
-        .expect("manifest");
+    let manifest =
+        TableManifestFile::load(&TableManifestFile::path_for_table(base, table)).expect("manifest");
     assert_eq!(manifest.segments, vec![seg_name.to_string()]);
     assert!(!flush_log_path(base, table).exists());
 

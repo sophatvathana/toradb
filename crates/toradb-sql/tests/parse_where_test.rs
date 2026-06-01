@@ -19,7 +19,8 @@ fn parse_where_eq_on_metadata() {
 
 #[test]
 fn parse_where_ne_and_in() {
-    let stmts = parse("SELECT tag, COUNT(*) FROM docs WHERE tag != 'science' GROUP BY tag").unwrap();
+    let stmts =
+        parse("SELECT tag, COUNT(*) FROM docs WHERE tag != 'science' GROUP BY tag").unwrap();
     let Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };
@@ -63,7 +64,12 @@ fn parse_where_between() {
     let Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };
-    let WherePred::Between { column, low, high, negated } = sel.where_clause.as_ref().unwrap()
+    let WherePred::Between {
+        column,
+        low,
+        high,
+        negated,
+    } = sel.where_clause.as_ref().unwrap()
     else {
         panic!("between");
     };
@@ -82,7 +88,10 @@ fn parse_where_not_between() {
     let Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };
-    let WherePred::Between { column, negated, .. } = sel.where_clause.as_ref().unwrap() else {
+    let WherePred::Between {
+        column, negated, ..
+    } = sel.where_clause.as_ref().unwrap()
+    else {
         panic!("between");
     };
     assert_eq!(column, "published");
@@ -91,14 +100,18 @@ fn parse_where_not_between() {
 
 #[test]
 fn parse_where_like() {
-    let stmts = parse(
-        "SELECT id, title FROM docs SPARSE SEARCH body BM25('x') WHERE title LIKE '%tesla%'",
-    )
-    .unwrap();
+    let stmts =
+        parse("SELECT id, title FROM docs SPARSE SEARCH body BM25('x') WHERE title LIKE '%tesla%'")
+            .unwrap();
     let Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };
-    let WherePred::Like { column, pattern, negated } = sel.where_clause.as_ref().unwrap() else {
+    let WherePred::Like {
+        column,
+        pattern,
+        negated,
+    } = sel.where_clause.as_ref().unwrap()
+    else {
         panic!("like");
     };
     assert_eq!(column, "title");
@@ -108,14 +121,15 @@ fn parse_where_like() {
 
 #[test]
 fn parse_where_not_like() {
-    let stmts = parse(
-        "SELECT id FROM docs SPARSE SEARCH body BM25('x') WHERE name NOT LIKE 'a_c'",
-    )
-    .unwrap();
+    let stmts = parse("SELECT id FROM docs SPARSE SEARCH body BM25('x') WHERE name NOT LIKE 'a_c'")
+        .unwrap();
     let Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };
-    let WherePred::Like { column, negated, .. } = sel.where_clause.as_ref().unwrap() else {
+    let WherePred::Like {
+        column, negated, ..
+    } = sel.where_clause.as_ref().unwrap()
+    else {
         panic!("like");
     };
     assert_eq!(column, "name");
@@ -124,10 +138,7 @@ fn parse_where_not_like() {
 
 #[test]
 fn parse_select_distinct() {
-    let stmts = parse(
-        "SELECT DISTINCT tag FROM docs SPARSE SEARCH body BM25('x')",
-    )
-    .unwrap();
+    let stmts = parse("SELECT DISTINCT tag FROM docs SPARSE SEARCH body BM25('x')").unwrap();
     let Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };

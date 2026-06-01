@@ -31,13 +31,19 @@ def test_local_text_search():
 
 
 def test_hybrid_schema_builder():
-    db = toradb.connect("./test_db_hybrid")
-    papers = db.create_table(
-        "papers",
-        mode="hybrid",
-        schema={"id": "uuid", "title": "text", "embedding": "vector[768]"},
-    )
-    assert papers is not None
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_hybrid_schema_"))
+    try:
+        db = toradb.connect(str(path))
+        papers = db.create_table(
+            "papers",
+            mode="hybrid",
+            schema={"id": "uuid", "title": "text", "embedding": "vector[768]"},
+        )
+        assert papers is not None
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def test_stream_search_pagination():
@@ -325,7 +331,10 @@ def test_add_arrow_ingest():
 
 
 def test_add_file_ingest():
-    db = toradb.local("./test_db_ingest")
+    import shutil
+
+    db_path = Path(tempfile.mkdtemp(prefix="toradb_ingest_"))
+    db = toradb.local(str(db_path))
     t = db.create_table("files", mode="text")
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
         f.write("alpha\n\nbeta\n\ngamma")
@@ -337,6 +346,7 @@ def test_add_file_ingest():
         assert n == 3
     finally:
         Path(path).unlink(missing_ok=True)
+        shutil.rmtree(db_path, ignore_errors=True)
 
 
 def test_sql_search_group_by_analytics():

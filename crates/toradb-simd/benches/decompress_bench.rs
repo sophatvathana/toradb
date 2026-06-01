@@ -1,4 +1,4 @@
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use toradb_simd::decompress::decompress_block;
 
 fn bench_decompress(c: &mut Criterion) {
@@ -11,7 +11,12 @@ fn bench_decompress(c: &mut Criterion) {
         group.throughput(Throughput::Elements(dim as u64));
         group.bench_with_input(BenchmarkId::from_parameter(dim), &dim, |bencher, _| {
             bencher.iter(|| {
-                decompress_block(black_box(&codes), black_box(-1.25), black_box(0.0125), black_box(&mut out))
+                decompress_block(
+                    black_box(&codes),
+                    black_box(-1.25),
+                    black_box(0.0125),
+                    black_box(&mut out),
+                )
             });
         });
     }

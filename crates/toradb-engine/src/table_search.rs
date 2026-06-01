@@ -49,10 +49,7 @@ fn is_segment_only_table(dag: &DagRunner, table: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn configure_batch(
-    dag: &DagRunner,
-    opts: &TableSearchOptions,
-) -> (Batch, ExecCtx, Option<String>) {
+fn configure_batch(dag: &DagRunner, opts: &TableSearchOptions) -> (Batch, ExecCtx, Option<String>) {
     // Match demo API: large segment-sharded tables default to BM25-only unless caller picks a strategy.
     let mut strategy = opts.strategy.clone();
     if strategy.is_none() && is_segment_only_table(dag, &opts.table) {
@@ -114,6 +111,7 @@ fn format_explain(
     strategy: Option<&str>,
     batch: &Batch,
     metrics: &QueryMetrics,
+    configured_workers: u32,
 ) -> String {
     let dense_backend = if batch.tier1_use_diskann {
         "diskann"
@@ -121,6 +119,11 @@ fn format_explain(
         "hnsw"
     } else {
         "none"
+    };
+    let segment_workers = if batch.distributed_segments && metrics.segment_workers == 0 {
+        configured_workers
+    } else {
+        metrics.segment_workers
     };
     format!(
         "table={table} strategy={strategy:?} dense_backend={dense_backend} sparse={} dense={} graph_expand={} depth={} hyde={} crag={} distributed={} segment_workers={} segments_scanned={} tier1={} tier2={} tier3={}",
@@ -131,7 +134,7 @@ fn format_explain(
         batch.enable_hyde,
         batch.enable_crag,
         batch.distributed_segments,
-        metrics.segment_workers,
+        segment_workers,
         metrics.segments_scanned,
         metrics.tier1_candidates,
         metrics.tier2_candidates,
@@ -158,7 +161,17 @@ pub fn run_table_search(
     let page = batch.candidates.slice_range(offset, top_k);
 
     let explain_text = if opts.explain {
-        Some(format_explain(&opts.table, strategy, &batch, &metrics))
+        let configured_workers = dag
+            .db_path()
+            .and_then(|p| persist::table_segment_workers(p, &opts.table).ok())
+            .unwrap_or(1);
+        Some(format_explain(
+            &opts.table,
+            strategy,
+            &batch,
+            &metrics,
+            configured_workers,
+        ))
     } else {
         None
     };

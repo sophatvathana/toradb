@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      # `toradb-sdk` is a PyO3 cdylib; it is built/tested via maturin in the `python`
+      # job. The workspace's default-members exclude it, so test the rest natively.
+      - name: Clippy
+        run: cargo clippy --workspace --exclude toradb-sdk --all-targets
+
+      - name: Test
+        run: cargo test --workspace --exclude toradb-sdk
+
+  python:
+    name: Python (maturin + pytest)
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install build/test deps
+        run: python -m pip install --upgrade pip maturin pytest
+
+      - name: Build extension (maturin develop)
+        run: maturin develop
+
+      - name: Run Python tests
+        run: pytest tests/ -q

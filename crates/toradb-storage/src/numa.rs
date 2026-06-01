@@ -6,7 +6,10 @@ pub struct NumaConfig {
 
 impl Default for NumaConfig {
     fn default() -> Self {
-        Self { node: 0, prefetch: true }
+        Self {
+            node: 0,
+            prefetch: true,
+        }
     }
 }
 
@@ -33,7 +36,11 @@ pub fn prefetch_mmap_sequential(data: &[u8]) {
     #[cfg(unix)]
     {
         extern "C" {
-            fn madvise(addr: *mut libc::c_void, len: libc::size_t, advice: libc::c_int) -> libc::c_int;
+            fn madvise(
+                addr: *mut libc::c_void,
+                len: libc::size_t,
+                advice: libc::c_int,
+            ) -> libc::c_int;
         }
         const MADV_WILLNEED: libc::c_int = 3;
         unsafe {

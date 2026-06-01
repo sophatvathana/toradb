@@ -38,8 +38,9 @@ fn materialized_view_create_select_and_refresh() {
 
     let mut dag = DagRunner::open(&dir).expect("reopen");
     let base = dag.db_path().expect("path").to_path_buf();
-    let rows = materialized::create_materialized_view(&mut dag, base.as_path(), &mv.name, &mv.select)
-        .expect("create mv");
+    let rows =
+        materialized::create_materialized_view(&mut dag, base.as_path(), &mv.name, &mv.select)
+            .expect("create mv");
     assert!(rows > 0);
     assert!(rows <= 5);
 
@@ -69,15 +70,17 @@ fn materialized_view_create_select_and_refresh() {
     assert!(refreshed >= rows);
 
     materialized::drop_materialized_view(base.as_path(), "top_docs").expect("drop");
-    assert!(!materialized::is_materialized_view(base.as_path(), "top_docs"));
+    assert!(!materialized::is_materialized_view(
+        base.as_path(),
+        "top_docs"
+    ));
 
     let drop_sql = parse("DROP MATERIALIZED VIEW top_docs").unwrap();
     let toradb_sql::ast::Stmt::DropMaterializedView { name } = &drop_sql[0] else {
         panic!("drop stmt");
     };
     assert_eq!(name, "top_docs");
-    materialized::drop_materialized_view(base.as_path(), name)
-        .expect_err("already dropped");
+    materialized::drop_materialized_view(base.as_path(), name).expect_err("already dropped");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

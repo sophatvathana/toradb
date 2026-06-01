@@ -56,7 +56,8 @@ enum HfRemoteFile {
 
 fn hf_auth_headers() -> HashMap<String, String> {
     let mut headers = HashMap::new();
-    if let Ok(token) = std::env::var("HF_TOKEN").or_else(|_| std::env::var("HUGGING_FACE_HUB_TOKEN"))
+    if let Ok(token) =
+        std::env::var("HF_TOKEN").or_else(|_| std::env::var("HUGGING_FACE_HUB_TOKEN"))
     {
         if !token.is_empty() {
             headers.insert("Authorization".to_string(), format!("Bearer {token}"));
@@ -122,9 +123,8 @@ async fn list_parquet_via_datasets_server(
 }
 
 async fn list_dataset_files(dataset: &str) -> Result<Vec<String>, String> {
-    let url = format!(
-        "https://huggingface.co/api/datasets/{dataset}/tree/{HF_REVISION}?recursive=1"
-    );
+    let url =
+        format!("https://huggingface.co/api/datasets/{dataset}/tree/{HF_REVISION}?recursive=1");
     let client = hf_client()?;
     let response = hub_get(&client, &url).await?;
     if !response.status().is_success() {
@@ -202,10 +202,13 @@ fn pick_ingest_files(
     ))
 }
 
-async fn resolve_remote_files(params: &HfIngestParams) -> Result<(Vec<HfRemoteFile>, &'static str), String> {
+async fn resolve_remote_files(
+    params: &HfIngestParams,
+) -> Result<(Vec<HfRemoteFile>, &'static str), String> {
     let config = params.config.as_deref();
 
-    if let Ok(files) = list_parquet_via_datasets_server(&params.dataset, config, &params.split).await
+    if let Ok(files) =
+        list_parquet_via_datasets_server(&params.dataset, config, &params.split).await
     {
         if !files.is_empty() {
             return Ok((files, "parquet"));
@@ -276,14 +279,8 @@ where
 
     for (idx, file) in files.iter().enumerate() {
         // Map download shards to 5–80% so ingest (85–99%) and done (100%) do not flash instantly.
-        let pct = Some(
-            (5 + (idx + 1) * 75 / total_files.max(1))
-                .min(80) as u8,
-        );
-        report(
-            &format!("downloading {}/{}", idx + 1, total_files),
-            pct,
-        );
+        let pct = Some((5 + (idx + 1) * 75 / total_files.max(1)).min(80) as u8);
+        report(&format!("downloading {}/{}", idx + 1, total_files), pct);
         let (url, local_name) = match file {
             HfRemoteFile::Url { url, filename } => (url.clone(), filename.clone()),
             HfRemoteFile::HubPath(path) => {
@@ -291,10 +288,7 @@ where
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("shard_{idx}"));
-                (
-                    resolve_hub_download_url(&params.dataset, path),
-                    name,
-                )
+                (resolve_hub_download_url(&params.dataset, path), name)
             }
         };
         remote_paths.push(remote_label(file));

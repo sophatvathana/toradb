@@ -29,8 +29,7 @@ pub fn write_segment_from_batches(
         }
     }
     let props = props_builder.build();
-    let mut writer =
-        ArrowWriter::try_new(file, schema, Some(props)).map_err(|e| e.to_string())?;
+    let mut writer = ArrowWriter::try_new(file, schema, Some(props)).map_err(|e| e.to_string())?;
     let mut row_count = 0u64;
     for batch in batches {
         let batch = batch?;

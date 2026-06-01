@@ -16,7 +16,10 @@ fn compact_full_migrates_legacy_segments_to_native_typed_layout() {
     std::fs::create_dir_all(&seg_dir).unwrap();
 
     let mut manifest = TableManifestFile::default();
-    manifest.set_column_types(vec![("rank".to_string(), ColumnTypeSpec::new(ColumnType::Int))]);
+    manifest.set_column_types(vec![(
+        "rank".to_string(),
+        ColumnTypeSpec::new(ColumnType::Int),
+    )]);
     manifest.segments.push("seg_00001.parquet".into());
     manifest.record_segment_id_range("seg_00001.parquet", 0, 1);
     manifest.save(&table_dir.join("manifest.json")).unwrap();
@@ -53,7 +56,10 @@ fn compact_full_migrates_legacy_segments_to_native_typed_layout() {
     .ok();
     let rows = run_counts(&mut dag, table, "SELECT COUNT(*) FROM docs WHERE rank > 9");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].1, 1.0, "rank=10 should count after compact + native read");
+    assert_eq!(
+        rows[0].1, 1.0,
+        "rank=10 should count after compact + native read"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

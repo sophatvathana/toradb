@@ -10,7 +10,6 @@ use crate::materialized;
 use crate::metadata_filter::filter_candidates_by_where;
 use crate::olap::{run_aggregate, SqlAggregateResult};
 use crate::persist;
-use crate::table_search::{run_table_search, TableSearchOptions};
 
 fn ids_from_delete_pred(pred: &WherePred) -> Result<Vec<u64>, String> {
     fn parse_id(s: &str) -> Result<u64, String> {
@@ -35,9 +34,7 @@ fn ids_from_delete_pred(pred: &WherePred) -> Result<Vec<u64>, String> {
             }
             Ok(ids)
         }
-        _ => Err(
-            "DELETE WHERE supports only `id = N` or `id IN (...)` in this version".into(),
-        ),
+        _ => Err("DELETE WHERE supports only `id = N` or `id IN (...)` in this version".into()),
     }
 }
 
@@ -162,9 +159,7 @@ pub fn project_retrieval_columns(
 ) -> Result<Vec<(String, SqlProjectedColumn)>, String> {
     let columns = resolve_retrieval_columns(sel)?;
     let docs_by_id: HashMap<u64, toradb_index::IngestDoc> = if needs_document_fetch(&columns) {
-        dag.fetch_documents(table, ids)?
-            .into_iter()
-            .collect()
+        dag.fetch_documents(table, ids)?.into_iter().collect()
     } else {
         HashMap::new()
     };
@@ -212,46 +207,6 @@ pub fn run_select(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSelectResu
         if sel.stream {
             return Err("EXPLAIN does not support STREAM".into());
         }
-        if has_sparse(&sel) || has_vector(&sel) {
-            let query = sel
-                .sparse_query
-                .clone()
-                .or_else(|| sel.vector_text.clone())
-                .unwrap_or_default();
-            let strategy = sel.sparse.clone().or_else(|| {
-                if sel.vector && !has_sparse(&sel) {
-                    Some("dense".into())
-                } else if has_sparse(&sel) && sel.vector {
-                    Some("hybrid".into())
-                } else {
-                    None
-                }
-            });
-            let opts = TableSearchOptions {
-                table: sel.table.clone(),
-                query,
-                top_k: Some(sel.limit.max(1)),
-                offset: Some(sel.offset),
-                strategy,
-                explain: true,
-                graph_expand: Some(sel.graph_expand),
-                depth: Some(sel.graph_depth),
-                query_vector: sel.vector_query.clone(),
-            };
-            let result = run_table_search(dag, opts)?;
-            let provenance_text = result
-                .provenance
-                .as_ref()
-                .and_then(|p| serde_json::to_string_pretty(p).ok())
-                .or(result.explain_text);
-            return Ok(SqlSelectResult::Search(SqlSearchResult {
-                ids: result.ids,
-                scores: result.scores,
-                projected: Vec::new(),
-                metrics: result.metrics,
-                explain_text: provenance_text,
-            }));
-        }
         let text = explain_plan(dag, &sel)?;
         return Ok(SqlSelectResult::Search(SqlSearchResult {
             ids: Vec::new(),
@@ -263,9 +218,9 @@ pub fn run_select(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSelectResu
     }
     if let Some(base) = dag.db_path().map(|p| p.to_path_buf()) {
         if materialized::is_materialized_view(&base, &sel.table) {
-            return Ok(SqlSelectResult::Search(materialized::query_materialized_view(
-                dag, &base, &sel.table, &sel,
-            )?));
+            return Ok(SqlSelectResult::Search(
+                materialized::query_materialized_view(dag, &base, &sel.table, &sel)?,
+            ));
         }
     }
     if is_analytics_select(&sel) {
@@ -309,7 +264,11 @@ pub(crate) fn run_scan(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSearc
     let order_by_metadata = sel.order_by.as_ref().filter(|ob| ob.column != "score");
     let shared_docs: Option<HashMap<u64, toradb_index::IngestDoc>> =
         if order_by_metadata.is_some() || sel.distinct {
-            Some(dag.fetch_documents(&sel.table, &candidates.ids)?.into_iter().collect())
+            Some(
+                dag.fetch_documents(&sel.table, &candidates.ids)?
+                    .into_iter()
+                    .collect(),
+            )
         } else {
             None
         };
@@ -333,7 +292,11 @@ pub(crate) fn run_scan(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSearc
                 .map(String::as_str)
                 .unwrap_or("");
             let ord = toradb_core::typed_cmp(ty, va, vb).unwrap_or_else(|| va.cmp(vb));
-            if ob.descending { ord.reverse() } else { ord }
+            if ob.descending {
+                ord.reverse()
+            } else {
+                ord
+            }
         });
         candidates.reorder(&idx);
     }
@@ -349,7 +312,10 @@ pub(crate) fn run_scan(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSearc
                 .map(|c| match c.as_str() {
                     "id" => id.to_string(),
                     "score" => "0".into(),
-                    "text" => docs.and_then(|m| m.get(id)).map(|d| d.text.clone()).unwrap_or_default(),
+                    "text" => docs
+                        .and_then(|m| m.get(id))
+                        .map(|d| d.text.clone())
+                        .unwrap_or_default(),
                     meta => docs
                         .and_then(|m| m.get(id))
                         .and_then(|d| d.metadata.get(meta))
@@ -379,9 +345,11 @@ pub(crate) fn run_scan(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSearc
 
 fn direct_id_lookup(pred: &WherePred) -> Option<Vec<u64>> {
     match pred {
-        WherePred::Compare { column, op: CompareOp::Eq, value } if column == "id" => {
-            value.trim().parse::<u64>().ok().map(|id| vec![id])
-        }
+        WherePred::Compare {
+            column,
+            op: CompareOp::Eq,
+            value,
+        } if column == "id" => value.trim().parse::<u64>().ok().map(|id| vec![id]),
         WherePred::In { column, values } if column == "id" => values
             .iter()
             .map(|v| v.trim().parse::<u64>().ok())
@@ -467,19 +435,21 @@ pub fn explain_plan(dag: &DagRunner, sel: &SelectStmt) -> Result<String, String>
         .table_index_sidecars(&sel.table)
         .unwrap_or_default()
         .join(",");
-    let segment_scan = dag.db_path().map(|base| {
-        if sparse
-            && persist::table_has_segment_bm25_sidecars(base, &sel.table).unwrap_or(false)
-        {
-            "bm25_shards"
-        } else if vector
-            && persist::table_has_segment_hnsw_sidecars(base, &sel.table).unwrap_or(false)
-        {
-            "hnsw_shards"
-        } else {
-            "table_level"
-        }
-    }).unwrap_or("n/a");
+    let segment_scan = dag
+        .db_path()
+        .map(|base| {
+            if sparse && persist::table_has_segment_bm25_sidecars(base, &sel.table).unwrap_or(false)
+            {
+                "bm25_shards"
+            } else if vector
+                && persist::table_has_segment_hnsw_sidecars(base, &sel.table).unwrap_or(false)
+            {
+                "hnsw_shards"
+            } else {
+                "table_level"
+            }
+        })
+        .unwrap_or("n/a");
 
     let join = sel
         .join
@@ -609,10 +579,7 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
         apply_metadata_join(dag, &sel.table, join, &mut candidates)?;
     }
 
-    let order_by_metadata = sel
-        .order_by
-        .as_ref()
-        .filter(|ob| ob.column != "score");
+    let order_by_metadata = sel.order_by.as_ref().filter(|ob| ob.column != "score");
     let shared_docs: Option<HashMap<u64, toradb_index::IngestDoc>> =
         if order_by_metadata.is_some() || sel.distinct {
             Some(
@@ -645,13 +612,16 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
                     .and_then(|d| d.metadata.get(&ob.column))
                     .map(String::as_str)
                     .unwrap_or("");
-                let ord = toradb_core::typed_cmp(ty, va, vb)
-                    .unwrap_or_else(|| va.cmp(vb));
-                if ob.descending { ord.reverse() } else { ord }
+                let ord = toradb_core::typed_cmp(ty, va, vb).unwrap_or_else(|| va.cmp(vb));
+                if ob.descending {
+                    ord.reverse()
+                } else {
+                    ord
+                }
             });
             candidates.reorder(&idx);
         }
-        None => {}
+        None => candidates.sort_by_score(true),
     }
 
     if sel.distinct {
@@ -684,8 +654,7 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
     }
 
     let page = candidates.slice_range(offset as usize, limit as usize);
-    let projected =
-        project_retrieval_columns(dag, &sel.table, sel, &page.ids, &page.scores)?;
+    let projected = project_retrieval_columns(dag, &sel.table, sel, &page.ids, &page.scores)?;
 
     Ok(SqlSearchResult {
         ids: page.ids,

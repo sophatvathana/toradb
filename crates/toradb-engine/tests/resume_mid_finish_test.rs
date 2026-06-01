@@ -25,8 +25,6 @@ fn resume_index_build_is_idempotent_after_partial_finish() {
         let mut dag = DagRunner::open_with_reload(&dir, false).expect("reopen");
         dag.resume_index_build("docs", false).expect("resume2");
     }
-    assert!(
-        persist::table_has_segment_bm25_sidecars(&dir, "docs").unwrap_or(false)
-    );
+    assert!(persist::table_has_segment_bm25_sidecars(&dir, "docs").unwrap_or(false));
     let _ = std::fs::remove_dir_all(&dir);
 }
