@@ -39,7 +39,8 @@ fn expand_cte_select_depth(sel: &SelectStmt, max_depth: u32) -> Result<SelectStm
     expanded.having_clause = sel.having_clause.clone();
     expanded.limit = sel.limit;
     expanded.offset = sel.offset;
-    expanded.order_by_score_desc = sel.order_by_score_desc;
+    expanded.order_by = sel.order_by.clone();
+    expanded.distinct |= sel.distinct;
     expanded.stream |= sel.stream;
     expanded.explain |= sel.explain;
     expanded.distributed |= sel.distributed;
@@ -310,10 +311,13 @@ pub fn explain_plan(dag: &DagRunner, sel: &SelectStmt) -> Result<String, String>
         .as_ref()
         .map(|j| format!(" join {} on {}={}", j.right_table, j.left_key, j.right_key))
         .unwrap_or_default();
-    let order = match sel.order_by_score_desc {
-        Some(true) => " order_by_score_desc",
-        Some(false) => " order_by_score_asc",
-        None => "",
+    let order = match sel.order_by {
+        Some(ref ob) => format!(
+            " order_by={}_{}",
+            ob.column,
+            if ob.descending { "desc" } else { "asc" }
+        ),
+        None => String::new(),
     };
 
     Ok(format!(
@@ -410,7 +414,8 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
     let limit = sel.limit.max(1);
     let offset = sel.offset;
     let base_page = offset.saturating_add(limit).max(1);
-    let page_size = if sel.order_by_score_desc.is_some() {
+    let needs_window = sel.order_by.is_some() || sel.distinct;
+    let page_size = if needs_window {
         base_page.saturating_mul(20).min(1000).max(base_page)
     } else {
         base_page
@@ -428,9 +433,81 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
     if let Some(ref join) = sel.join {
         apply_metadata_join(dag, &sel.table, join, &mut candidates)?;
     }
-    if let Some(desc) = sel.order_by_score_desc {
-        candidates.sort_by_score(desc);
+
+    let order_by_metadata = sel
+        .order_by
+        .as_ref()
+        .filter(|ob| ob.column != "score");
+    let shared_docs: Option<HashMap<u64, toradb_index::IngestDoc>> =
+        if order_by_metadata.is_some() || sel.distinct {
+            Some(
+                dag.fetch_documents(&sel.table, &candidates.ids)?
+                    .into_iter()
+                    .collect(),
+            )
+        } else {
+            None
+        };
+
+    match sel.order_by.as_ref() {
+        Some(ob) if ob.column == "score" => candidates.sort_by_score(ob.descending),
+        Some(ob) => {
+            let docs = shared_docs.as_ref().expect("metadata fetched for ORDER BY");
+            let col_types = dag.column_types_for(&sel.table);
+            let ty = col_types
+                .get(&ob.column)
+                .copied()
+                .unwrap_or(toradb_core::ColumnType::Text);
+            let mut idx: Vec<usize> = (0..candidates.ids.len()).collect();
+            idx.sort_by(|&a, &b| {
+                let va = docs
+                    .get(&candidates.ids[a])
+                    .and_then(|d| d.metadata.get(&ob.column))
+                    .map(String::as_str)
+                    .unwrap_or("");
+                let vb = docs
+                    .get(&candidates.ids[b])
+                    .and_then(|d| d.metadata.get(&ob.column))
+                    .map(String::as_str)
+                    .unwrap_or("");
+                let ord = toradb_core::typed_cmp(ty, va, vb)
+                    .unwrap_or_else(|| va.cmp(vb));
+                if ob.descending { ord.reverse() } else { ord }
+            });
+            candidates.reorder(&idx);
+        }
+        None => {}
     }
+
+    if sel.distinct {
+        let docs = shared_docs.as_ref();
+        let projected_cols = resolve_retrieval_columns(sel)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut keep = Vec::with_capacity(candidates.ids.len());
+        for (i, id) in candidates.ids.iter().enumerate() {
+            let key: Vec<String> = projected_cols
+                .iter()
+                .map(|c| match c.as_str() {
+                    "id" => id.to_string(),
+                    "score" => format!("{:.6}", candidates.scores[i]),
+                    "text" => docs
+                        .and_then(|m| m.get(id))
+                        .map(|d| d.text.clone())
+                        .unwrap_or_default(),
+                    meta => docs
+                        .and_then(|m| m.get(id))
+                        .and_then(|d| d.metadata.get(meta))
+                        .cloned()
+                        .unwrap_or_default(),
+                })
+                .collect();
+            if seen.insert(key) {
+                keep.push(i);
+            }
+        }
+        candidates.retain_indices(&keep);
+    }
+
     let page = candidates.slice_range(offset as usize, limit as usize);
     let projected =
         project_retrieval_columns(dag, &sel.table, sel, &page.ids, &page.scores)?;

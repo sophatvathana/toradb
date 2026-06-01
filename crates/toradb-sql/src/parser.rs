@@ -242,7 +242,7 @@ fn parse_leaf_predicate(tokens: &[Token], i: &mut usize) -> Result<WherePred, St
 
     let mut negated = false;
     if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "NOT")
-        && matches!(tokens.get(*i + 1), Some(Token::Ident(k)) if k == "BETWEEN")
+        && matches!(tokens.get(*i + 1), Some(Token::Ident(k)) if k == "BETWEEN" || k == "LIKE")
     {
         negated = true;
         *i += 1;
@@ -256,6 +256,15 @@ fn parse_leaf_predicate(tokens: &[Token], i: &mut usize) -> Result<WherePred, St
             column,
             low,
             high,
+            negated,
+        });
+    }
+    if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "LIKE") {
+        *i += 1;
+        let pattern = parse_literal(tokens, i)?;
+        return Ok(WherePred::Like {
+            column,
+            pattern,
             negated,
         });
     }
@@ -507,6 +516,12 @@ fn parse_from_clause(
 
 pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, String> {
     expect_ident(tokens, i, "SELECT")?;
+    let distinct = if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "DISTINCT") {
+        *i += 1;
+        true
+    } else {
+        false
+    };
     let select_items = parse_select_exprs(tokens, i)?;
     if !matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "FROM") {
         return Err("SELECT requires FROM".into());
@@ -520,7 +535,7 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
     let mut vector_text = None;
     let mut limit = 20;
     let mut offset = 0u32;
-    let mut order_by_score_desc = None;
+    let mut order_by = None;
     let mut distributed = false;
     let mut hyde = false;
     let mut crag = false;
@@ -600,7 +615,7 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
                 }
             }
             Some(Token::Ident(k)) if k == "ORDER" => {
-                order_by_score_desc = Some(parse_order_by_score(tokens, i)?);
+                order_by = Some(parse_order_by(tokens, i)?);
             }
             Some(Token::Ident(k)) if k == "GROUP" => {
                 group_by = parse_group_by_clause(tokens, i)?;
@@ -620,6 +635,7 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
         table,
         join,
         select_items,
+        distinct,
         sparse,
         sparse_query,
         vector,
@@ -627,7 +643,7 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
         vector_text,
         limit,
         offset,
-        order_by_score_desc,
+        order_by,
         distributed,
         hyde,
         crag,
@@ -690,21 +706,26 @@ fn parse_qualified_table(tokens: &[Token], i: &mut usize) -> Result<(Option<Stri
     }
 }
 
-fn parse_order_by_score(tokens: &[Token], i: &mut usize) -> Result<bool, String> {
+fn parse_order_by(tokens: &[Token], i: &mut usize) -> Result<OrderBy, String> {
     expect_ident(tokens, i, "ORDER")?;
     expect_ident(tokens, i, "BY")?;
-    expect_ident(tokens, i, "SCORE")?;
-    match ident_at(tokens, *i).as_deref() {
+    let column = ident_at(tokens, *i)
+        .ok_or("ORDER BY requires a column name or SCORE")?
+        .to_lowercase();
+    *i += 1;
+    let default_desc = column == "score";
+    let descending = match ident_at(tokens, *i).as_deref() {
         Some("ASC") => {
             *i += 1;
-            Ok(false)
+            false
         }
         Some("DESC") => {
             *i += 1;
-            Ok(true)
+            true
         }
-        _ => Ok(true),
-    }
+        _ => default_desc,
+    };
+    Ok(OrderBy { column, descending })
 }
 
 pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {

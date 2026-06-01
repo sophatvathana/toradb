@@ -52,6 +52,23 @@ impl CandidateSet {
         self.scores = pairs.iter().map(|(_, s)| *s).collect();
     }
 
+    pub fn reorder(&mut self, order: &[usize]) {
+        let mut new_ids = Vec::with_capacity(order.len());
+        let mut new_scores = Vec::with_capacity(order.len());
+        for &idx in order {
+            if idx < self.ids.len() {
+                new_ids.push(self.ids[idx]);
+                new_scores.push(self.scores[idx]);
+            }
+        }
+        self.ids = new_ids;
+        self.scores = new_scores;
+    }
+
+    pub fn retain_indices(&mut self, keep: &[usize]) {
+        self.reorder(keep);
+    }
+
     pub fn slice_range(&self, offset: usize, limit: usize) -> Self {
         if offset >= self.len() {
             return Self::default();

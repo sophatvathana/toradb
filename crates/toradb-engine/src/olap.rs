@@ -76,6 +76,18 @@ fn having_matches(
                 false
             }
         }
+        WherePred::Like {
+            column,
+            pattern,
+            negated,
+        } => {
+            // HAVING LIKE only makes sense against a string group key.
+            if !group_cols.is_empty() && group_cols[0] == *column {
+                crate::metadata_filter::like_matches(group_key, pattern) ^ negated
+            } else {
+                false
+            }
+        }
     }
 }
 

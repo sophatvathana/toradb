@@ -93,8 +93,19 @@ pub enum WherePred {
         high: String,
         negated: bool,
     },
+    Like {
+        column: String,
+        pattern: String,
+        negated: bool,
+    },
     And(Vec<WherePred>),
     Or(Vec<WherePred>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OrderBy {
+    pub column: String,
+    pub descending: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,6 +127,8 @@ pub struct SelectStmt {
     pub table: String,
     pub join: Option<JoinClause>,
     pub select_items: Vec<SelectExpr>,
+    /// When true, dedupe projected rows (`SELECT DISTINCT ...`).
+    pub distinct: bool,
     /// BM25 / sparse method name (e.g. "bm25").
     pub sparse: Option<String>,
     /// Query text from BM25('...') or SPARSE SEARCH clause.
@@ -128,8 +141,9 @@ pub struct SelectStmt {
     pub vector_text: Option<String>,
     pub limit: u32,
     pub offset: u32,
-    /// `Some(true)` = ORDER BY score DESC, `Some(false)` = ASC, `None` = retrieval merge order.
-    pub order_by_score_desc: Option<bool>,
+    /// `ORDER BY <column> [ASC|DESC]`; `None` = retrieval merge order. A `column` of
+    /// `"score"` orders by relevance (the original behavior).
+    pub order_by: Option<OrderBy>,
     /// When true, scan segment shards in parallel (single-node or cluster distributed execution).
     pub distributed: bool,
     pub hyde: bool,

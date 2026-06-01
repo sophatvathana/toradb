@@ -212,13 +212,17 @@ impl Database {
                     rewrite,
                 } => {
                     let table = table.to_lowercase();
-                    let base = self.dag.db_path().ok_or_else(|| {
-                        pyo3::exceptions::PyValueError::new_err(
-                            "ALTER COLUMN TYPE requires a local on-disk database",
-                        )
-                    })?;
+                    let base = self
+                        .dag
+                        .db_path()
+                        .ok_or_else(|| {
+                            pyo3::exceptions::PyValueError::new_err(
+                                "ALTER COLUMN TYPE requires a local on-disk database",
+                            )
+                        })?
+                        .to_path_buf();
                     let ty = toradb_core::ColumnTypeSpec::parse(column_type);
-                    persist::alter_table_column_type(base, &table, column, ty)
+                    persist::alter_table_column_type(&base, &table, column, ty)
                         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
                     let compact_note = if *rewrite {
                         let report = self
@@ -232,7 +236,7 @@ impl Database {
                     } else {
                         None
                     };
-                    let needs = persist::table_needs_typed_segment_rewrite(base, &table)
+                    let needs = persist::table_needs_typed_segment_rewrite(&base, &table)
                         .unwrap_or(false);
                     let msg = persist::format_alter_column_type_message(
                         &table,

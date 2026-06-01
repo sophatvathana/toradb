@@ -27,12 +27,12 @@ pub fn format_select(sel: &SelectStmt) -> String {
             parts.push("VECTOR SEARCH embedding ANN('')".into());
         }
     }
-    if let Some(desc) = sel.order_by_score_desc {
-        parts.push(if desc {
-            "ORDER BY score DESC".into()
-        } else {
-            "ORDER BY score ASC".into()
-        });
+    if let Some(ref ob) = sel.order_by {
+        parts.push(format!(
+            "ORDER BY {} {}",
+            ob.column,
+            if ob.descending { "DESC" } else { "ASC" }
+        ));
     }
     if !sel.group_by.is_empty() {
         parts.push(format!("GROUP BY {}", sel.group_by.join(", ")));

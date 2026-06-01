@@ -88,3 +88,54 @@ fn parse_where_not_between() {
     assert_eq!(column, "published");
     assert!(negated);
 }
+
+#[test]
+fn parse_where_like() {
+    let stmts = parse(
+        "SELECT id, title FROM docs SPARSE SEARCH body BM25('x') WHERE title LIKE '%tesla%'",
+    )
+    .unwrap();
+    let Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+    let WherePred::Like { column, pattern, negated } = sel.where_clause.as_ref().unwrap() else {
+        panic!("like");
+    };
+    assert_eq!(column, "title");
+    assert_eq!(pattern, "%tesla%");
+    assert!(!negated);
+}
+
+#[test]
+fn parse_where_not_like() {
+    let stmts = parse(
+        "SELECT id FROM docs SPARSE SEARCH body BM25('x') WHERE name NOT LIKE 'a_c'",
+    )
+    .unwrap();
+    let Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+    let WherePred::Like { column, negated, .. } = sel.where_clause.as_ref().unwrap() else {
+        panic!("like");
+    };
+    assert_eq!(column, "name");
+    assert!(negated);
+}
+
+#[test]
+fn parse_select_distinct() {
+    let stmts = parse(
+        "SELECT DISTINCT tag FROM docs SPARSE SEARCH body BM25('x')",
+    )
+    .unwrap();
+    let Stmt::Select(sel) = &stmts[0] else {
+        panic!("select");
+    };
+    assert!(sel.distinct);
+
+    let stmts2 = parse("SELECT tag FROM docs SPARSE SEARCH body BM25('x')").unwrap();
+    let Stmt::Select(sel2) = &stmts2[0] else {
+        panic!("select");
+    };
+    assert!(!sel2.distinct);
+}

@@ -173,8 +173,11 @@ pub fn query_materialized_view(
     for (id, score) in stored.ids.into_iter().zip(stored.scores) {
         candidates.push(id, score);
     }
-    if let Some(desc) = sel.order_by_score_desc {
-        candidates.sort_by_score(desc);
+
+    if let Some(ref ob) = sel.order_by {
+        if ob.column == "score" {
+            candidates.sort_by_score(ob.descending);
+        }
     }
     let page = candidates.slice_range(sel.offset as usize, sel.limit.max(1) as usize);
     let source_table = source_table_from_view_query(base, view_name)?;

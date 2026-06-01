@@ -43,6 +43,34 @@ pub fn typed_eq(
     }
 }
 
+pub fn like_matches(text: &str, pattern: &str) -> bool {
+    let t: Vec<char> = text.chars().collect();
+    let p: Vec<char> = pattern.chars().collect();
+    let (mut ti, mut pi) = (0usize, 0usize);
+    let mut star: Option<usize> = None;
+    let mut star_ti = 0usize;
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '_' || p[pi] == t[ti]) {
+            ti += 1;
+            pi += 1;
+        } else if pi < p.len() && p[pi] == '%' {
+            star = Some(pi);
+            star_ti = ti;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            star_ti += 1;
+            ti = star_ti;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '%' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
 pub fn metadata_matches(
     pred: &WherePred,
     metadata: &HashMap<String, String>,
@@ -102,6 +130,38 @@ pub fn metadata_matches(
             );
             in_range ^ negated
         }
+        WherePred::Like {
+            column,
+            pattern,
+            negated,
+        } => {
+            let Some(v) = metadata.get(column) else {
+                return false;
+            };
+            like_matches(v, pattern) ^ negated
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::like_matches;
+
+    #[test]
+    fn like_wildcards() {
+        assert!(like_matches("nikola tesla", "%tesla%"));
+        assert!(like_matches("tesla", "tesla"));
+        assert!(like_matches("tesla", "t_sla"));
+        assert!(like_matches("tesla", "te%"));
+        assert!(like_matches("tesla", "%la"));
+        assert!(!like_matches("tesla", "edison%"));
+        assert!(!like_matches("tesla", "t_s")); // anchored, full match required
+        assert!(like_matches("anything", "%"));
+        assert!(like_matches("", "%"));
+        assert!(!like_matches("abc", "")); // empty pattern only matches empty text
+        assert!(like_matches("", ""));
+        // case-sensitive
+        assert!(!like_matches("Tesla", "tesla"));
     }
 }
 
