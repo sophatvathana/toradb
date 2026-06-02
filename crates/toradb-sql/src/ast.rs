@@ -181,4 +181,5 @@ pub struct SelectStmt {
     pub group_by: Vec<String>,
     pub where_clause: Option<WherePred>,
     pub having_clause: Option<WherePred>,
+    pub facets: Vec<String>,
 }

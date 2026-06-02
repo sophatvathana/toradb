@@ -40,6 +40,9 @@ pub fn format_select(sel: &SelectStmt) -> String {
     if !sel.group_by.is_empty() {
         parts.push(format!("GROUP BY {}", sel.group_by.join(", ")));
     }
+    if !sel.facets.is_empty() {
+        parts.push(format!("FACETS ({})", sel.facets.join(", ")));
+    }
     parts.push(format!("LIMIT {}", sel.limit));
     if sel.offset > 0 {
         parts.push(format!("OFFSET {}", sel.offset));

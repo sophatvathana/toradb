@@ -216,6 +216,7 @@ struct SearchRequestBody {
     depth: Option<u32>,
     query_vector: Option<Vec<f32>>,
     fetch_text: Option<bool>,
+    facets: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -235,10 +236,24 @@ struct SearchApiResponse {
     explain: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    facets: Vec<FacetResponse>,
     latency_ms: f64,
     search_ms: f64,
     fetch_ms: f64,
     metrics: Option<QueryMetricsResponse>,
+}
+
+#[derive(Serialize)]
+struct FacetResponse {
+    field: String,
+    values: Vec<FacetValueResponse>,
+}
+
+#[derive(Serialize)]
+struct FacetValueResponse {
+    value: String,
+    count: u64,
 }
 
 #[derive(Deserialize)]
@@ -1501,6 +1516,8 @@ fn execute_native_search(
             graph_expand: body.graph_expand,
             depth: body.depth,
             query_vector: body.query_vector.clone(),
+            facets: body.facets.clone().unwrap_or_default(),
+            facet_top_n: None,
         },
     )
     .map_err(map_search_error)?;
@@ -1559,6 +1576,22 @@ fn execute_native_search(
         .as_ref()
         .and_then(|p| serde_json::to_value(p).ok());
 
+    let facets = out
+        .facets
+        .into_iter()
+        .map(|f| FacetResponse {
+            field: f.field,
+            values: f
+                .values
+                .into_iter()
+                .map(|v| FacetValueResponse {
+                    value: v.value,
+                    count: v.count,
+                })
+                .collect(),
+        })
+        .collect();
+
     Ok(SearchApiResponse {
         table: body.table,
         query: body.query,
@@ -1566,6 +1599,7 @@ fn execute_native_search(
         hits,
         explain: out.explain_text,
         provenance,
+        facets,
         latency_ms,
         search_ms,
         fetch_ms,
@@ -1601,6 +1635,7 @@ async fn query_preview(
             depth: None,
             query_vector: None,
             fetch_text: Some(true),
+            facets: None,
         },
         false,
     )?;

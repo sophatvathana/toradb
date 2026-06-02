@@ -75,6 +75,7 @@ fn expand_cte_select_depth(sel: &SelectStmt, max_depth: u32) -> Result<SelectStm
     expanded.group_by = sel.group_by.clone();
     expanded.where_clause = sel.where_clause.clone();
     expanded.having_clause = sel.having_clause.clone();
+    expanded.facets = sel.facets.clone();
     expanded.limit = sel.limit;
     expanded.offset = sel.offset;
     expanded.order_by = sel.order_by.clone();
@@ -114,6 +115,7 @@ pub struct SqlSearchResult {
     pub projected: Vec<(String, SqlProjectedColumn)>,
     pub metrics: QueryMetrics,
     pub explain_text: Option<String>,
+    pub facets: Vec<crate::olap::FacetResult>,
 }
 
 fn resolve_retrieval_columns(sel: &SelectStmt) -> Result<Vec<String>, String> {
@@ -214,6 +216,7 @@ pub fn run_select(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSelectResu
             projected: Vec::new(),
             metrics: QueryMetrics::default(),
             explain_text: Some(text),
+            facets: Vec::new(),
         }));
     }
     if let Some(base) = dag.db_path().map(|p| p.to_path_buf()) {
@@ -340,6 +343,7 @@ pub(crate) fn run_scan(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSearc
         projected,
         metrics: QueryMetrics::default(),
         explain_text: None,
+        facets: Vec::new(),
     })
 }
 
@@ -464,9 +468,14 @@ pub fn explain_plan(dag: &DagRunner, sel: &SelectStmt) -> Result<String, String>
         ),
         None => String::new(),
     };
+    let facets = if sel.facets.is_empty() {
+        String::new()
+    } else {
+        format!(" facets=[{}]", sel.facets.join(","))
+    };
 
     Ok(format!(
-        "RetrievalScan(table={table} sparse={sparse} vector={vector} dense_backend={dense_backend} distributed={distributed} hyde={hyde} crag={crag} graph_expand={graph_expand} fusion_k={fusion_k} segment_scan={segment_scan} segments={segments} segment_workers={workers} indexes=[{indexes}] limit={limit} offset={offset}{join}{order})",
+        "RetrievalScan(table={table} sparse={sparse} vector={vector} dense_backend={dense_backend} distributed={distributed} hyde={hyde} crag={crag} graph_expand={graph_expand} fusion_k={fusion_k} segment_scan={segment_scan} segments={segments} segment_workers={workers} indexes=[{indexes}] limit={limit} offset={offset}{join}{order}{facets})",
         table = sel.table,
         sparse = sparse,
         vector = vector,
@@ -484,6 +493,7 @@ pub fn explain_plan(dag: &DagRunner, sel: &SelectStmt) -> Result<String, String>
         offset = sel.offset,
         join = join,
         order = order,
+        facets = facets,
     ))
 }
 
@@ -559,7 +569,9 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
     let limit = sel.limit.max(1);
     let offset = sel.offset;
     let base_page = offset.saturating_add(limit).max(1);
-    let needs_window = sel.order_by.is_some() || sel.distinct;
+    // Facets must count the full matched set, so widen the retrieval window the same way
+    // ORDER BY / DISTINCT do — otherwise a small LIMIT would also shrink the facet counts.
+    let needs_window = sel.order_by.is_some() || sel.distinct || !sel.facets.is_empty();
     let page_size = if needs_window {
         base_page.saturating_mul(20).min(1000).max(base_page)
     } else {
@@ -653,6 +665,19 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
         candidates.retain_indices(&keep);
     }
 
+    let facets = if sel.facets.is_empty() {
+        Vec::new()
+    } else {
+        let ids: std::collections::HashSet<u64> = candidates.ids.iter().copied().collect();
+        crate::olap::count_facets(
+            dag,
+            &sel.table,
+            &sel.facets,
+            &ids,
+            crate::olap::DEFAULT_FACET_TOP_N,
+        )?
+    };
+
     let page = candidates.slice_range(offset as usize, limit as usize);
     let projected = project_retrieval_columns(dag, &sel.table, sel, &page.ids, &page.scores)?;
 
@@ -662,5 +687,6 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
         projected,
         metrics,
         explain_text: None,
+        facets,
     })
 }

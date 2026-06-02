@@ -30,6 +30,55 @@ def test_local_text_search():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_faceted_search():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_facets_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                {"text": "Nikola Tesla AC motor", "category": "electronics"},
+                {"text": "Nikola Tesla wireless power", "category": "electronics"},
+                {"text": "Marie Curie radioactivity", "category": "books"},
+            ]
+        )
+        r = t.search("Nikola Tesla Marie Curie", top_k=5, facets=["category"])
+        f = r.facets
+        assert f["category"]["electronics"] == 2
+        assert f["category"]["books"] == 1
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_sql_facets_clause():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_facets_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                {"text": "Nikola Tesla AC motor", "category": "electronics"},
+                {"text": "Nikola Tesla wireless power", "category": "electronics"},
+                {"text": "Marie Curie radioactivity", "category": "books"},
+            ]
+        )
+        # LIMIT 1 returns a single hit, but facets count the full matched set.
+        r = db.sql(
+            "SELECT id FROM docs SPARSE SEARCH body "
+            "BM25('Nikola Tesla Marie Curie') FACETS (category) LIMIT 1"
+        )
+        assert len(r.to_pandas()["id"]) == 1
+        f = r.facets
+        assert f["category"]["electronics"] == 2
+        assert f["category"]["books"] == 1
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_hybrid_schema_builder():
     import shutil
 

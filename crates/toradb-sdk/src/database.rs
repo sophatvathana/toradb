@@ -352,6 +352,7 @@ impl Database {
                                 s.projected,
                                 s.metrics,
                                 s.explain_text,
+                                s.facets,
                             )))
                         }
                         sql_exec::SqlSelectResult::Aggregate(a) => {
@@ -525,8 +526,14 @@ impl Database {
             if n == 0 {
                 break;
             }
-            let results =
-                SearchResults::from_sql(page.ids, page.scores, page.projected, page.metrics, None);
+            let results = SearchResults::from_sql(
+                page.ids,
+                page.scores,
+                page.projected,
+                page.metrics,
+                None,
+                page.facets,
+            );
             list.append(results.into_pyobject(py)?)?;
             offset += n as u32;
             if n < page_size as usize {

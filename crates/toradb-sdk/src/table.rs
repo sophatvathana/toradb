@@ -100,7 +100,7 @@ impl Table {
         db.add_documents(&self.name, parsed)
     }
 
-    #[pyo3(signature = (query, top_k=None, offset=None, strategy=None, explain=None, graph_expand=None, depth=None, query_vector=None))]
+    #[pyo3(signature = (query, top_k=None, offset=None, strategy=None, explain=None, graph_expand=None, depth=None, query_vector=None, facets=None, facet_top_n=None))]
     fn search(
         &self,
         py: Python<'_>,
@@ -112,6 +112,8 @@ impl Table {
         graph_expand: Option<bool>,
         depth: Option<u32>,
         query_vector: Option<Vec<f32>>,
+        facets: Option<Vec<String>>,
+        facet_top_n: Option<usize>,
     ) -> PyResult<SearchResults> {
         let opts = TableSearchOptions {
             table: self.name.clone(),
@@ -123,6 +125,8 @@ impl Table {
             graph_expand,
             depth,
             query_vector,
+            facets: facets.unwrap_or_default(),
+            facet_top_n,
         };
         let db_handle = self.db.clone_ref(py);
         let out = py.detach(move || {
@@ -138,6 +142,16 @@ impl Table {
             .provenance
             .as_ref()
             .and_then(|p| serde_json::to_string_pretty(p).ok());
+        let facets = out
+            .facets
+            .into_iter()
+            .map(|f| {
+                (
+                    f.field,
+                    f.values.into_iter().map(|v| (v.value, v.count)).collect(),
+                )
+            })
+            .collect();
         Ok(SearchResults {
             ids: out.ids,
             scores: out.scores,
@@ -145,6 +159,7 @@ impl Table {
             metrics: out.metrics,
             explain_text: out.explain_text,
             provenance_json,
+            facets,
         })
     }
 
@@ -178,6 +193,8 @@ pub struct SearchResults {
     metrics: toradb_core::QueryMetrics,
     explain_text: Option<String>,
     provenance_json: Option<String>,
+    /// Per-field value counts over the matched set: `field -> [(value, count)]`.
+    facets: Vec<(String, Vec<(String, u64)>)>,
 }
 
 impl SearchResults {
@@ -187,6 +204,7 @@ impl SearchResults {
         projected: Vec<(String, toradb_engine::sql_exec::SqlProjectedColumn)>,
         metrics: toradb_core::QueryMetrics,
         explain_text: Option<String>,
+        facets: Vec<toradb_engine::FacetResult>,
     ) -> Self {
         Self {
             ids,
@@ -198,6 +216,15 @@ impl SearchResults {
             metrics,
             explain_text,
             provenance_json: None,
+            facets: facets
+                .into_iter()
+                .map(|f| {
+                    (
+                        f.field,
+                        f.values.into_iter().map(|v| (v.value, v.count)).collect(),
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -241,6 +268,19 @@ impl SearchResults {
     #[getter]
     fn provenance(&self) -> Option<String> {
         self.provenance_json.clone()
+    }
+
+    #[getter]
+    fn facets<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        for (field, values) in &self.facets {
+            let inner = PyDict::new(py);
+            for (value, count) in values {
+                inner.set_item(value, *count)?;
+            }
+            dict.set_item(field, inner)?;
+        }
+        Ok(dict)
     }
 
     #[getter]

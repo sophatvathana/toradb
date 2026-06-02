@@ -196,6 +196,7 @@ fn where_clause_boundary(tokens: &[Token], i: usize) -> bool {
         k.as_str(),
         "GROUP" | "HAVING" | "ORDER" | "LIMIT" | "OFFSET" | "SPARSE" | "VECTOR" | "JOIN"
             | "HYDE" | "CRAG" | "GRAPH" | "FUSION" | "DISTRIBUTED" | "STREAM" | "EXPLAIN"
+            | "FACETS"
     ))
 }
 
@@ -351,6 +352,41 @@ fn parse_group_by_clause(tokens: &[Token], i: &mut usize) -> Result<Vec<String>,
             continue;
         }
         break;
+    }
+    Ok(out)
+}
+
+fn parse_facets_clause(tokens: &[Token], i: &mut usize) -> Result<Vec<String>, String> {
+    expect_ident(tokens, i, "FACETS")?;
+    if !matches!(tokens.get(*i), Some(Token::LParen)) {
+        return Err("FACETS requires (col1, col2, ...)".into());
+    }
+    *i += 1;
+    let mut out = Vec::new();
+    loop {
+        if matches!(tokens.get(*i), Some(Token::RParen)) {
+            *i += 1;
+            break;
+        }
+        let Some(col) = ident_at(tokens, *i) else {
+            return Err("FACETS requires column names".into());
+        };
+        out.push(col.to_lowercase());
+        *i += 1;
+        match tokens.get(*i) {
+            Some(Token::Comma) => {
+                *i += 1;
+                continue;
+            }
+            Some(Token::RParen) => {
+                *i += 1;
+                break;
+            }
+            _ => return Err("expected , or ) in FACETS list".into()),
+        }
+    }
+    if out.is_empty() {
+        return Err("FACETS requires at least one column".into());
     }
     Ok(out)
 }
@@ -548,6 +584,7 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
     let mut group_by = Vec::new();
     let mut where_clause = None;
     let mut having_clause = None;
+    let mut facets = Vec::new();
     while *i < tokens.len() && !matches!(tokens.get(*i), Some(Token::Eof) | Some(Token::RParen)) {
         match tokens.get(*i) {
             Some(Token::Ident(k)) if k == "HYDE" => {
@@ -627,6 +664,9 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
             Some(Token::Ident(k)) if k == "HAVING" => {
                 having_clause = Some(parse_having_clause(tokens, i)?);
             }
+            Some(Token::Ident(k)) if k == "FACETS" => {
+                facets = parse_facets_clause(tokens, i)?;
+            }
             Some(Token::Semi) | Some(Token::Eof) | Some(Token::RParen) => break,
             _ => *i += 1,
         }
@@ -656,6 +696,7 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
         group_by,
         where_clause,
         having_clause,
+        facets,
     })
 }
 

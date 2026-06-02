@@ -104,21 +104,87 @@ fn value_column_name(func: &AggFunc, column: Option<&str>) -> String {
     }
 }
 
+pub(crate) fn metadata_field_value(
+    field: &str,
+    id: u64,
+    metadata: &HashMap<String, String>,
+) -> String {
+    if field.eq_ignore_ascii_case("id") {
+        id.to_string()
+    } else {
+        metadata
+            .get(field)
+            .cloned()
+            .unwrap_or_else(|| "_null".into())
+    }
+}
+
 fn group_key(group_cols: &[String], id: u64, metadata: &HashMap<String, String>) -> String {
     if group_cols.is_empty() {
         return "_all".into();
     }
     group_cols
         .iter()
-        .map(|col| {
-            if col.eq_ignore_ascii_case("id") {
-                id.to_string()
-            } else {
-                metadata.get(col).cloned().unwrap_or_else(|| "_null".into())
-            }
-        })
+        .map(|col| metadata_field_value(col, id, metadata))
         .collect::<Vec<_>>()
         .join("|")
+}
+
+pub const DEFAULT_FACET_TOP_N: usize = 20;
+
+#[derive(Debug, Clone)]
+pub struct FacetValue {
+    pub value: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FacetResult {
+    pub field: String,
+    pub values: Vec<FacetValue>,
+}
+
+pub fn count_facets(
+    dag: &mut DagRunner,
+    table: &str,
+    fields: &[String],
+    candidates: &HashSet<u64>,
+    top_n: usize,
+) -> Result<Vec<FacetResult>, String> {
+    if fields.is_empty() {
+        return Ok(Vec::new());
+    }
+    dag.ensure_table(table);
+    let mut counts: Vec<HashMap<String, u64>> = vec![HashMap::new(); fields.len()];
+    dag.scan_table_id_metadata(table, |id, metadata| {
+        if !candidates.contains(&id) {
+            return Ok(());
+        }
+        for (fi, field) in fields.iter().enumerate() {
+            let value = metadata_field_value(field, id, metadata);
+            *counts[fi].entry(value).or_insert(0) += 1;
+        }
+        Ok(())
+    })?;
+
+    Ok(fields
+        .iter()
+        .zip(counts.into_iter())
+        .map(|(field, map)| {
+            let mut values: Vec<FacetValue> = map
+                .into_iter()
+                .map(|(value, count)| FacetValue { value, count })
+                .collect();
+            values.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value)));
+            if top_n > 0 {
+                values.truncate(top_n);
+            }
+            FacetResult {
+                field: field.clone(),
+                values,
+            }
+        })
+        .collect())
 }
 
 fn aggregate_specs(sel: &SelectStmt) -> Result<Vec<(AggFunc, Option<String>)>, String> {

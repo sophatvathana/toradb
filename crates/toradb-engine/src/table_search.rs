@@ -17,6 +17,8 @@ pub struct TableSearchOptions {
     pub graph_expand: Option<bool>,
     pub depth: Option<u32>,
     pub query_vector: Option<Vec<f32>>,
+    pub facets: Vec<String>,
+    pub facet_top_n: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -29,12 +31,16 @@ pub struct TableSearchResult {
     pub strategy_used: Option<String>,
     /// Structured provenance DAG (populated when `explain=true`).
     pub provenance: Option<ProvenanceRecord>,
+    pub facets: Vec<crate::olap::FacetResult>,
 }
 
-fn exec_ctx(top_k: Option<u32>, offset: Option<u32>) -> ExecCtx {
+fn exec_ctx(top_k: Option<u32>, offset: Option<u32>, want_facets: bool) -> ExecCtx {
     let k = top_k.unwrap_or(20);
     let off = offset.unwrap_or(0);
-    let fetch = off.saturating_add(k).min(1000);
+    let mut fetch = off.saturating_add(k).min(1000);
+    if want_facets {
+        fetch = fetch.saturating_mul(20).min(1000).max(fetch);
+    }
     ExecCtx::new(
         fetch.saturating_mul(50).min(1000),
         fetch.saturating_mul(5).min(100),
@@ -102,7 +108,11 @@ fn configure_batch(dag: &DagRunner, opts: &TableSearchOptions) -> (Batch, ExecCt
             strategy_used.clone(),
         ));
     }
-    let ctx = tune_ctx(exec_ctx(opts.top_k, opts.offset), &opts.query, strategy);
+    let ctx = tune_ctx(
+        exec_ctx(opts.top_k, opts.offset, !opts.facets.is_empty()),
+        &opts.query,
+        strategy,
+    );
     (batch, ctx, strategy_used)
 }
 
@@ -176,9 +186,27 @@ pub fn run_table_search(
         None
     };
 
+    let facets = if opts.facets.is_empty() {
+        Vec::new()
+    } else {
+        let candidate_ids: std::collections::HashSet<u64> =
+            batch.candidates.ids.iter().copied().collect();
+        let top_n = opts.facet_top_n.unwrap_or(crate::olap::DEFAULT_FACET_TOP_N);
+        crate::olap::count_facets(dag, &opts.table, &opts.facets, &candidate_ids, top_n)?
+    };
+
     let provenance = batch.provenance.take().and_then(|mut prov| {
         prov.set_final(&page.ids);
         prov.set_total_latency_ms(elapsed_ms);
+        prov.set_facets(facets.iter().map(|f| {
+            (
+                f.field.clone(),
+                f.values
+                    .iter()
+                    .map(|v| (v.value.clone(), v.count))
+                    .collect::<Vec<_>>(),
+            )
+        }));
         prov.finish()
     });
 
@@ -194,5 +222,6 @@ pub fn run_table_search(
         explain_text,
         strategy_used,
         provenance,
+        facets,
     })
 }

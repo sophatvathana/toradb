@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Faceted search** — `search(facets=[...])` and `SELECT ... FACETS (col, ...)` return
+  per-field value counts over the full matched result set (independent of `LIMIT`/`OFFSET`
+  paging). Exposed via `SearchResults.facets` (dict-of-dicts), the `/api/search` REST
+  response, and persisted into the per-table search log alongside the provenance trace.
+
 ## [0.1.0] - 2026-06-01
 
 First public release.

@@ -42,6 +42,8 @@ fn search_with_explain_populates_provenance() {
             graph_expand: None,
             depth: None,
             query_vector: None,
+            facets: Vec::new(),
+            facet_top_n: None,
         },
     )
     .unwrap();
@@ -112,6 +114,8 @@ fn hybrid_provenance_records_distinct_sparse_and_dense_tiers() {
             graph_expand: None,
             depth: None,
             query_vector: Some(vec![0.1, 0.9, 0.0, 0.0]),
+            facets: Vec::new(),
+            facet_top_n: None,
         },
     )
     .unwrap();
@@ -164,6 +168,8 @@ fn provenance_records_per_tier_latency() {
             graph_expand: None,
             depth: None,
             query_vector: Some(vec![0.1, 0.9, 0.0, 0.0]),
+            facets: Vec::new(),
+            facet_top_n: None,
         },
     )
     .unwrap();
@@ -196,6 +202,8 @@ fn search_without_explain_returns_no_provenance() {
             graph_expand: None,
             depth: None,
             query_vector: None,
+            facets: Vec::new(),
+            facet_top_n: None,
         },
     )
     .unwrap();
@@ -221,6 +229,8 @@ fn provenance_serialises_to_valid_json() {
             graph_expand: None,
             depth: None,
             query_vector: None,
+            facets: Vec::new(),
+            facet_top_n: None,
         },
     )
     .unwrap();
@@ -262,6 +272,8 @@ fn provenance_written_to_search_log_on_disk() {
             graph_expand: None,
             depth: None,
             query_vector: None,
+            facets: Vec::new(),
+            facet_top_n: None,
         },
     )
     .unwrap();

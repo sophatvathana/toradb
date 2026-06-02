@@ -192,5 +192,6 @@ pub fn query_materialized_view(
         projected,
         metrics: QueryMetrics::default(),
         explain_text: None,
+        facets: Vec::new(),
     })
 }

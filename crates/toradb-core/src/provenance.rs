@@ -43,6 +43,8 @@ pub struct ProvenanceRecord {
     pub tier3: TierTrace,
     pub final_ids: Vec<DocId>,
     pub total_latency_ms: f64,
+    #[serde(default)]
+    pub facets: Vec<(String, Vec<(String, u64)>)>,
 }
 
 /// Zero-cost when disabled: only allocates when `enabled = true`.
@@ -64,6 +66,7 @@ impl ProvenanceCollector {
                 tier3: TierTrace::default(),
                 final_ids: Vec::new(),
                 total_latency_ms: 0.0,
+                facets: Vec::new(),
             },
         }
     }
@@ -152,6 +155,19 @@ impl ProvenanceCollector {
         }
     }
 
+    pub fn set_facets<I, V>(&mut self, facets: I)
+    where
+        I: IntoIterator<Item = (String, V)>,
+        V: IntoIterator<Item = (String, u64)>,
+    {
+        if self.enabled {
+            self.record.facets = facets
+                .into_iter()
+                .map(|(field, values)| (field, values.into_iter().collect()))
+                .collect();
+        }
+    }
+
     pub fn finish(self) -> Option<ProvenanceRecord> {
         if self.enabled {
             Some(self.record)
@@ -171,6 +187,7 @@ impl Default for ProvenanceRecord {
             tier3: TierTrace::default(),
             final_ids: Vec::new(),
             total_latency_ms: 0.0,
+            facets: Vec::new(),
         }
     }
 }

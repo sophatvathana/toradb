@@ -19,6 +19,7 @@ pub mod sql_exec;
 pub mod table_search;
 
 pub use adaptive::tune_ctx;
+pub use olap::{count_facets, FacetResult, FacetValue, DEFAULT_FACET_TOP_N};
 pub use table_search::{run_table_search, TableSearchOptions, TableSearchResult};
 
 pub use dag::DagRunner;
