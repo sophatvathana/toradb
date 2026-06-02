@@ -5,47 +5,38 @@ import { usePathname } from "next/navigation";
 import {
   Activity,
   BarChart3,
-  CircleDot,
   Clock3,
   Database,
   Gauge,
-  LayoutGrid,
   Layers,
+  ScrollText,
   Search,
   ServerCog,
   Table2,
   Upload,
-  Workflow,
 } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
 
 import { GlobalSearch } from "@/components/global-search";
 import { Badge } from "@/components/ui/badge";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { cacheHitRatio } from "@/lib/api";
 import { usePlatformStore } from "@/stores/platform-store";
 
-const ICON_RAIL_WIDTH = 68;
-const NAV_SIDEBAR_WIDTH = 240;
+const SIDEBAR_WIDTH = 248;
 
 const NAV_ITEMS = [
-  { href: "/overview", icon: Gauge, title: "Workspace Overview" },
+  { href: "/overview", icon: Gauge, title: "Overview" },
   { href: "/search", icon: Search, title: "Search" },
   { href: "/query", icon: Database, title: "Query" },
+  { href: "/analytics", icon: BarChart3, title: "Analytics" },
   { href: "/query-log", icon: Clock3, title: "Query Log" },
+  { href: "/provenance", icon: ScrollText, title: "Provenance" },
   { href: "/catalog", icon: Table2, title: "Catalog" },
   { href: "/schema", icon: ServerCog, title: "Schema" },
   { href: "/views", icon: Layers, title: "Materialized Views" },
   { href: "/ingest", icon: Upload, title: "Ingest" },
   { href: "/jobs", icon: Activity, title: "Background Jobs" },
-] as const;
-
-const RAIL_ITEMS = [
-  { href: "/overview", icon: LayoutGrid, label: "Overview" },
-  { href: "/search", icon: Search, label: "Search" },
-  { href: "/query", icon: Database, label: "Query" },
-  { href: "/ingest", icon: Upload, label: "Ingest" },
-  { href: "/jobs", icon: Workflow, label: "Jobs" },
-  { href: "/query-log", icon: BarChart3, label: "Log" },
 ] as const;
 
 function isNavActive(pathname: string, href: string): boolean {
@@ -62,53 +53,29 @@ export function PlatformShell({ children }: { children: ReactNode }) {
   const error = usePlatformStore((s) => s.error);
 
   const ratio = cacheHitRatio(metrics);
-  const sidebarOffset = ICON_RAIL_WIDTH + NAV_SIDEBAR_WIDTH;
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
-      {/* Icon rail — fixed to viewport */}
+      {/* Single calm sidebar */}
       <aside
-        className="fixed inset-y-0 left-0 z-50 flex w-[68px] flex-col border-r border-border bg-card/80 p-3 backdrop-blur-md"
-        aria-label="Quick navigation"
-      >
-        <div className="mb-2 shrink-0 rounded-lg border border-border bg-card p-2">
-          <ServerCog className="size-5 text-primary" />
-        </div>
-        <nav className="flex flex-1 flex-col items-center gap-2 overflow-y-auto">
-          {RAIL_ITEMS.map(({ href, icon: Icon, label }) => (
-            <Link
-              key={href}
-              href={href}
-              title={label}
-              aria-label={label}
-              className={`shrink-0 rounded-md border p-2 transition-colors ${
-                isNavActive(pathname, href)
-                  ? "border-primary/50 bg-primary/20 text-primary"
-                  : "border-border bg-card text-muted-foreground hover:border-primary/30 hover:text-foreground"
-              }`}
-            >
-              <Icon className="size-4" />
-            </Link>
-          ))}
-        </nav>
-      </aside>
-
-      {/* Primary sidebar — fixed, scrollable nav when content is tall */}
-      <aside
-        className="fixed inset-y-0 left-[68px] z-40 flex w-60 flex-col border-r border-border bg-card/90 backdrop-blur-md"
+        className="fixed inset-y-0 left-0 z-40 flex w-62 flex-col border-r border-border bg-card"
+        style={{ width: SIDEBAR_WIDTH }}
         aria-label="Platform navigation"
       >
-        <div className="shrink-0 border-b border-border/60 px-4 py-4">
-          <h1 className="text-lg font-semibold">ToraDB Console</h1>
-          <p
-            className="mt-0.5 truncate text-xs text-muted-foreground"
-            title={health?.db_path}
-          >
-            {health?.db_path ?? "Connecting…"}
-          </p>
+        <div className="flex shrink-0 items-center gap-2 px-4 py-4">
+          <Database className="size-5 text-primary" />
+          <div className="min-w-0">
+            <div className="font-mono text-sm font-medium tracking-tight">ToraDB</div>
+            <p
+              className="truncate text-xs text-muted-foreground"
+              title={health?.db_path}
+            >
+              {health?.db_path ?? "Connecting…"}
+            </p>
+          </div>
         </div>
 
-        <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-3 text-sm">
+        <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3 py-2 text-sm">
           {NAV_ITEMS.map(({ href, icon, title }) => (
             <NavRow
               key={href}
@@ -120,40 +87,33 @@ export function PlatformShell({ children }: { children: ReactNode }) {
           ))}
         </nav>
 
-        <div className="shrink-0 border-t border-border/60 p-4">
-          <div className="rounded-lg border border-border bg-muted/30 p-3">
+        <div className="shrink-0 border-t border-border p-4">
+          <div className="rounded-lg border border-border bg-muted/40 p-3">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">
               Cluster Health
             </div>
-            <div className="mt-2 flex items-center gap-2">
-              <CircleDot
-                className={`size-3 shrink-0 ${health?.status === "ok" ? "text-emerald-400" : "text-amber-400"}`}
+            <div className="mt-2 flex items-center gap-2 text-sm">
+              <span
+                className={`inline-block size-2 shrink-0 rounded-full ${
+                  health?.status === "ok" ? "bg-success" : "bg-warning"
+                }`}
               />
-              <span className="text-sm">
-                {health?.status === "ok" ? "Operational" : "Unknown"}
-              </span>
+              {health?.status === "ok" ? "Operational" : "Unknown"}
             </div>
-            <div className="mt-2 text-xs text-muted-foreground">
+            <div className="mt-1 text-xs text-muted-foreground">
               {health ? `${health.tables.length} tables` : "—"}
             </div>
           </div>
         </div>
       </aside>
 
-      {/* Main content — offset by fixed sidebars */}
-      <div
-        className="min-h-dvh min-w-0"
-        style={{ paddingLeft: sidebarOffset }}
-      >
-        <main className="min-h-dvh p-5">
-          <header className="sticky top-0 z-20 mb-4 flex items-center justify-between rounded-xl border border-border bg-card/80 px-4 py-3 shadow-sm backdrop-blur-md">
-            <div>
-              <h2 className="text-xl font-semibold">Operational Control Plane</h2>
-              <p className="text-sm text-muted-foreground">
-                Live metrics from toradb-api
-              </p>
-            </div>
+      {/* Main content — offset by the fixed sidebar */}
+      <div className="min-h-dvh min-w-0" style={{ paddingLeft: SIDEBAR_WIDTH }}>
+        <main className="min-h-dvh px-6 pb-8">
+          <header className="sticky top-0 z-20 -mx-6 mb-6 flex items-center justify-between border-b border-border bg-background/80 px-6 py-3 backdrop-blur-sm">
+            <h2 className="text-lg font-semibold tracking-tight">Control plane</h2>
             <div className="flex shrink-0 items-center gap-2">
+              <ThemeToggle />
               <GlobalSearch />
               <Badge variant="outline">cache hit {ratio}</Badge>
               <Badge variant="secondary">{metrics?.query_count ?? 0} queries</Badge>
@@ -161,7 +121,7 @@ export function PlatformShell({ children }: { children: ReactNode }) {
           </header>
 
           {error && (
-            <div className="mb-4 rounded-md border border-destructive/50 bg-destructive/20 p-2 text-sm text-destructive-foreground">
+            <div className="mb-4 rounded-md border border-destructive/50 bg-destructive/15 p-2 text-sm text-destructive">
               {error}
             </div>
           )}
@@ -187,13 +147,13 @@ function NavRow({
   return (
     <Link
       href={href}
-      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 transition-colors ${
+      className={`flex w-full items-center gap-2.5 rounded-md border-l-2 px-2.5 py-2 transition-colors ${
         selected
-          ? "bg-primary/20 text-primary"
-          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          ? "border-primary bg-accent font-medium text-foreground"
+          : "border-transparent text-muted-foreground hover:bg-accent hover:text-foreground"
       }`}
     >
-      <Icon className="size-4 shrink-0" />
+      <Icon className={`size-4 shrink-0 ${selected ? "text-primary" : ""}`} />
       <span className="truncate">{title}</span>
     </Link>
   );

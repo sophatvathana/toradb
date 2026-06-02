@@ -38,9 +38,11 @@ import {
   type QueryHistoryEntry,
   type QueryMetricsResponse,
   type SavedQuery,
+  type SavedSearch,
   type SqlResponse,
   type TableDetailResponse,
   type TableInfo,
+  type TableSearchRequest,
 } from "@/lib/api";
 
 const DEFAULT_SQL =
@@ -71,6 +73,7 @@ type PlatformState = {
   sampleColumns: string[];
   ingestJob: IngestJob | null;
   savedQueries: SavedQuery[];
+  savedSearches: SavedSearch[];
   previousTasks: OpTask[];
 
   loading: boolean;
@@ -154,6 +157,8 @@ type PlatformState = {
   addSavedQuery: (name: string, sql: string) => void;
   removeSavedQuery: (id: string) => void;
   loadSavedQuery: (id: string) => void;
+  addSavedSearch: (name: string, request: TableSearchRequest) => void;
+  removeSavedSearch: (id: string) => void;
 };
 
 function applySqlResult(
@@ -184,6 +189,7 @@ export const usePlatformStore = create<PlatformState>()(
       sampleColumns: [],
       ingestJob: null,
       savedQueries: [],
+      savedSearches: [],
       previousTasks: [],
 
       loading: false,
@@ -611,6 +617,15 @@ export const usePlatformStore = create<PlatformState>()(
         set({ savedQueries: get().savedQueries.filter((q) => q.id !== id) });
       },
 
+      addSavedSearch: (name, request) => {
+        const id = crypto.randomUUID();
+        set({ savedSearches: [...get().savedSearches, { id, name, request }] });
+      },
+
+      removeSavedSearch: (id) => {
+        set({ savedSearches: get().savedSearches.filter((s) => s.id !== id) });
+      },
+
       loadSavedQuery: (id) => {
         const q = get().savedQueries.find((s) => s.id === id);
         if (q) set({ sql: q.sql, queryError: "", lastExplainText: null });
@@ -630,6 +645,7 @@ export const usePlatformStore = create<PlatformState>()(
       partialize: (state) => ({
         sql: state.sql,
         savedQueries: state.savedQueries,
+        savedSearches: state.savedSearches,
       }),
     },
   ),

@@ -243,6 +243,53 @@ export function ExplainPanel({
           </div>
         )}
 
+        {provenance.score_breakdown && provenance.score_breakdown.length > 0 && (
+          <div>
+            <div className="mb-2 text-sm font-semibold">
+              Score breakdown
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                base × boost × decay → final
+              </span>
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Doc</TableHead>
+                  <TableHead>Base</TableHead>
+                  <TableHead>Boost</TableHead>
+                  <TableHead>Decay</TableHead>
+                  <TableHead>Final</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {provenance.score_breakdown.slice(0, 20).map((b) => (
+                  <TableRow key={b.id}>
+                    <TableCell className="font-mono">#{b.id}</TableCell>
+                    <TableCell className="font-mono text-xs">{b.base.toFixed(4)}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {b.boost === 1 ? (
+                        <span className="text-muted-foreground">1.00</span>
+                      ) : (
+                        <span className="text-primary">×{b.boost.toFixed(2)}</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {b.decay === 1 ? (
+                        <span className="text-muted-foreground">1.00</span>
+                      ) : (
+                        <span className="text-warning">×{b.decay.toFixed(2)}</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs font-medium">
+                      {b.final_score.toFixed(4)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+
         {showRaw && text && (
           <pre className="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 font-mono text-xs leading-relaxed text-foreground">
             {text}

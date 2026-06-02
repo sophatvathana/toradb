@@ -1,27 +1,60 @@
 @import "tailwindcss";
 @plugin "tailwindcss-animate";
 
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
 :root {
-  --background: #090f1d;
-  --foreground: #d8e3ff;
-  --card: #111a31;
-  --card-foreground: #d8e3ff;
-  --popover: #111a31;
-  --popover-foreground: #d8e3ff;
-  --primary: #4a89ff;
-  --primary-foreground: #eaf2ff;
-  --secondary: #1b2746;
-  --secondary-foreground: #c4d4ff;
-  --muted: #13203d;
-  --muted-foreground: #92a5cb;
-  --accent: #1f2f59;
-  --accent-foreground: #d8e3ff;
-  --destructive: #ef4444;
-  --destructive-foreground: #fff1f2;
-  --border: #273960;
-  --input: #273960;
-  --ring: #4a89ff;
-  --radius: 0.625rem;
+  --background: #faf9f5;
+  --foreground: #2a2a28;
+  --card: #ffffff;
+  --card-foreground: #2a2a28;
+  --popover: #ffffff;
+  --popover-foreground: #2a2a28;
+  --primary: #c96442;
+  --primary-foreground: #fdfdfb;
+  --secondary: #efece3;
+  --secondary-foreground: #44423c;
+  --muted: #f2efe7;
+  --muted-foreground: #6b6760;
+  --accent: #f0ebe0;
+  --accent-foreground: #2a2a28;
+  --destructive: #b3402b;
+  --destructive-foreground: #fdf3f1;
+  --success: #4f7a52;
+  --success-foreground: #f2f7f1;
+  --warning: #b07a2c;
+  --warning-foreground: #fbf6ec;
+  --border: #e6e1d6;
+  --input: #e6e1d6;
+  --ring: #c96442;
+  --radius: 0.5rem;
+}
+
+/* Dark theme — warm near-black + brightened clay. */
+:root[data-theme="dark"] {
+  --background: #1f1e1c;
+  --foreground: #e8e5dd;
+  --card: #262624;
+  --card-foreground: #e8e5dd;
+  --popover: #2a2a27;
+  --popover-foreground: #e8e5dd;
+  --primary: #d97757;
+  --primary-foreground: #1f1e1c;
+  --secondary: #34322e;
+  --secondary-foreground: #d6d2c8;
+  --muted: #2c2b28;
+  --muted-foreground: #9a9589;
+  --accent: #34322e;
+  --accent-foreground: #e8e5dd;
+  --destructive: #e06a52;
+  --destructive-foreground: #1f1e1c;
+  --success: #7fa979;
+  --success-foreground: #16201a;
+  --warning: #d6a35c;
+  --warning-foreground: #1f1e1c;
+  --border: #3a3833;
+  --input: #3a3833;
+  --ring: #d97757;
 }
 
 @theme inline {
@@ -41,6 +74,10 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -48,14 +85,50 @@
   --font-mono: var(--font-geist-mono);
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
-}
+@layer base {
+  html {
+    color-scheme: light;
+  }
+  html[data-theme="dark"] {
+    color-scheme: dark;
+  }
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: -0.005em;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 24%, transparent);
+  }
+
+  /* Thin warm scrollbar that follows the theme. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--muted-foreground);
+    background-clip: content-box;
+  }
 }

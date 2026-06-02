@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { runSql } from "@/lib/api";
+import { deleteDocuments, runSql } from "@/lib/api";
 import { usePlatformStore } from "@/stores/platform-store";
 
 const COLUMN_TYPES = [
@@ -58,6 +58,10 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
   const [indexColumn, setIndexColumn] = useState("text");
   const [indexUsing, setIndexUsing] = useState("BM25");
   const [indexCreateLoading, setIndexCreateLoading] = useState(false);
+  const [workersInput, setWorkersInput] = useState("");
+  const [workersLoading, setWorkersLoading] = useState(false);
+  const [deleteIds, setDeleteIds] = useState("");
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   function formatAlterType(type: string, vectorDim: string): string {
     if (type === "vector" && vectorDim.trim()) {
@@ -180,6 +184,122 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
                   <span className="text-muted-foreground">Bulk ingest:</span>{" "}
                   {detail.bulk_ingest_active ? "active" : "no"}
                 </p>
+
+                {/* Segment workers editor — ALTER TABLE … SET SEGMENT_WORKERS */}
+                <div className="flex flex-wrap items-end gap-2 border-t pt-3">
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Segment workers</label>
+                    <Input
+                      className="h-8 w-24 text-xs"
+                      type="number"
+                      min={1}
+                      placeholder={String(detail.segment_workers)}
+                      value={workersInput}
+                      onChange={(e) => setWorkersInput(e.target.value)}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={workersLoading || !workersInput.trim()}
+                    onClick={() => {
+                      const n = Number(workersInput);
+                      if (!Number.isInteger(n) || n < 1) {
+                        toast({
+                          title: "Invalid value",
+                          description: "Segment workers must be a positive integer.",
+                          variant: "error",
+                        });
+                        return;
+                      }
+                      setWorkersLoading(true);
+                      void runSql(
+                        `ALTER TABLE ${tableName} SET SEGMENT_WORKERS = ${n}`,
+                      )
+                        .then(async () => {
+                          toast({
+                            title: "Segment workers updated",
+                            description: `${tableName} → ${n} workers`,
+                          });
+                          setWorkersInput("");
+                          await fetchTableDetailAction(tableName);
+                        })
+                        .catch((err) => {
+                          toast({
+                            title: "Update failed",
+                            description: err instanceof Error ? err.message : String(err),
+                            variant: "error",
+                          });
+                        })
+                        .finally(() => setWorkersLoading(false));
+                    }}
+                  >
+                    {workersLoading ? "Applying…" : "Set workers"}
+                  </Button>
+                  <p className="self-end pb-1 text-xs text-muted-foreground">
+                    Parallel segment scan threads for distributed search.
+                  </p>
+                </div>
+
+                {/* Soft-delete documents by id — POST /api/tables/{name}/delete */}
+                <div className="flex flex-wrap items-end gap-2 border-t pt-3">
+                  <div className="flex-1 space-y-1">
+                    <label className="text-xs text-muted-foreground">
+                      Delete documents by id
+                    </label>
+                    <Input
+                      className="h-8 font-mono text-xs"
+                      placeholder="comma-separated ids, e.g. 3, 17, 42"
+                      value={deleteIds}
+                      onChange={(e) => setDeleteIds(e.target.value)}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={deleteLoading || !deleteIds.trim()}
+                    onClick={() => {
+                      const ids = deleteIds
+                        .split(",")
+                        .map((s) => Number(s.trim()))
+                        .filter((n) => Number.isInteger(n) && n >= 0);
+                      if (ids.length === 0) {
+                        toast({
+                          title: "No valid ids",
+                          description: "Enter comma-separated non-negative integers.",
+                          variant: "error",
+                        });
+                        return;
+                      }
+                      setDeleteLoading(true);
+                      void deleteDocuments(tableName, ids)
+                        .then(async (res) => {
+                          toast({
+                            title: "Documents deleted",
+                            description: `Soft-deleted ${res.deleted} of ${ids.length} id(s).`,
+                          });
+                          setDeleteIds("");
+                          await fetchTableDetailAction(tableName);
+                          await fetchTableSampleAction(tableName);
+                        })
+                        .catch((err) => {
+                          toast({
+                            title: "Delete failed",
+                            description: err instanceof Error ? err.message : String(err),
+                            variant: "error",
+                          });
+                        })
+                        .finally(() => setDeleteLoading(false));
+                    }}
+                  >
+                    {deleteLoading ? "Deleting…" : "Delete"}
+                  </Button>
+                  <p className="self-end pb-1 text-xs text-muted-foreground">
+                    Soft delete (tombstoned; reclaimed on compaction).
+                  </p>
+                </div>
               </CardContent>
             </Card>
           )}
@@ -204,7 +324,7 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
                   </p>
                 )}
                 {detail.needs_segment_rewrite && (
-                  <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-900 dark:text-amber-100">
+                  <p className="rounded-md border border-warning/40 bg-warning/10 p-2 text-xs text-warning">
                     Segments use the legacy layout. Run{" "}
                     <strong>Compact (full)</strong> below or enable{" "}
                     <strong>Rewrite segments</strong> when altering a column type.
@@ -280,7 +400,7 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
                             title: "ALTER failed",
                             description:
                               err instanceof Error ? err.message : String(err),
-                            variant: "destructive",
+                            variant: "error",
                           });
                         })
                         .finally(() => setTypeAlterLoading(false));
@@ -380,7 +500,7 @@ export function CatalogTableClient({ tableName }: { tableName: string }) {
                         toast({
                           title: "CREATE INDEX failed",
                           description: err instanceof Error ? err.message : String(err),
-                          variant: "destructive",
+                          variant: "error",
                         });
                       })
                       .finally(() => setIndexCreateLoading(false));
