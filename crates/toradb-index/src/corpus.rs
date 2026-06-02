@@ -122,9 +122,10 @@ impl TableCorpus {
         params: Option<(f32, f32)>,
     ) -> CandidateSet {
         match params {
-            Some((k1, b)) => self
-                .bm25
-                .search_with_params(query, k, crate::sparse::bm25::Bm25Params { k1, b }),
+            Some((k1, b)) => {
+                self.bm25
+                    .search_with_params(query, k, crate::sparse::bm25::Bm25Params { k1, b })
+            }
             None => self.bm25.search(query, k),
         }
     }

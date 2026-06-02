@@ -186,4 +186,6 @@ pub struct SelectStmt {
     pub bm25_b: Option<f32>,
     pub field_boosts: std::collections::HashMap<String, f32>,
     pub decay: Option<(String, f32)>,
+    pub highlight: bool,
+    pub snippet_len: Option<u32>,
 }

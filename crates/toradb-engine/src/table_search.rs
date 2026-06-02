@@ -23,6 +23,8 @@ pub struct TableSearchOptions {
     pub bm25_params: Option<(f32, f32)>,
     pub field_boosts: std::collections::HashMap<String, f32>,
     pub decay: Option<(String, f32)>,
+    pub highlight: bool,
+    pub snippet_len: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +38,8 @@ pub struct TableSearchResult {
     /// Structured provenance DAG (populated when `explain=true`).
     pub provenance: Option<ProvenanceRecord>,
     pub facets: Vec<crate::olap::FacetResult>,
+    /// Matched-term snippets, aligned with `ids` (empty unless `highlight`).
+    pub snippets: Vec<String>,
 }
 
 fn exec_ctx(top_k: Option<u32>, offset: Option<u32>, widen: bool) -> ExecCtx {
@@ -245,6 +249,33 @@ pub fn run_table_search(
         crate::olap::count_facets(dag, &opts.table, &opts.facets, &candidate_ids, top_n)?
     };
 
+    let snippets = if opts.highlight && !page.ids.is_empty() {
+        let max_chars = if opts.snippet_len == 0 {
+            160
+        } else {
+            opts.snippet_len as usize
+        };
+        let qtokens = crate::snippets::snippet_query_tokens(&opts.query);
+        let docs: std::collections::HashMap<u64, toradb_index::IngestDoc> = dag
+            .fetch_documents(&opts.table, &page.ids)?
+            .into_iter()
+            .collect();
+        page.ids
+            .iter()
+            .map(|id| {
+                docs.get(id)
+                    .map(|d| {
+                        crate::snippets::generate_snippet(
+                            &d.text, &qtokens, max_chars, "<em>", "</em>",
+                        )
+                    })
+                    .unwrap_or_default()
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     let provenance = batch.provenance.take().and_then(|mut prov| {
         prov.set_final(&page.ids);
         prov.set_total_latency_ms(elapsed_ms);
@@ -273,5 +304,6 @@ pub fn run_table_search(
         strategy_used,
         provenance,
         facets,
+        snippets,
     })
 }

@@ -1,7 +1,6 @@
 //! Run with:
 //!   cargo test -p toradb-index --release --test sparse_bench -- --nocapture --ignored
 
-
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -42,7 +41,12 @@ fn build(num_docs: usize, vocab: usize, expansion: usize) -> (SparseWeightedInde
     (idx, words)
 }
 
-fn time(idx: &SparseWeightedIndex, q: &HashMap<String, f32>, profile: SparseProfile, iters: usize) -> f64 {
+fn time(
+    idx: &SparseWeightedIndex,
+    q: &HashMap<String, f32>,
+    profile: SparseProfile,
+    iters: usize,
+) -> f64 {
     let _ = idx.search_text(q, 20, profile);
     let start = Instant::now();
     for _ in 0..iters {
@@ -61,16 +65,21 @@ fn bench_splade_vs_seismic() {
     let iters = 30;
 
     let mut rng = Rng(0x1234_5678);
-    let short: HashMap<String, f32> =
-        (0..5).map(|_| (words[rng.below(vocab)].clone(), rng.unit())).collect();
-    let long: HashMap<String, f32> =
-        (0..150).map(|_| (words[rng.below(vocab)].clone(), rng.unit())).collect();
+    let short: HashMap<String, f32> = (0..5)
+        .map(|_| (words[rng.below(vocab)].clone(), rng.unit()))
+        .collect();
+    let long: HashMap<String, f32> = (0..150)
+        .map(|_| (words[rng.below(vocab)].clone(), rng.unit()))
+        .collect();
 
     println!("\n=== learned-sparse ({num_docs} docs, vocab {vocab}, expansion {expansion}) ===");
     for (name, q) in [("short(5)", &short), ("long(150)", &long)] {
         let s = time(&idx, q, SparseProfile::Splade, iters);
         let m = time(&idx, q, SparseProfile::Seismic, iters);
-        println!("{name:>10}: splade {s:8.3} ms   seismic {m:8.3} ms  ({:.2}x)", s / m.max(1e-6));
+        println!(
+            "{name:>10}: splade {s:8.3} ms   seismic {m:8.3} ms  ({:.2}x)",
+            s / m.max(1e-6)
+        );
     }
     println!();
 }

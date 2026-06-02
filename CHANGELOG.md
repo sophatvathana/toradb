@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Search highlighting / snippets** — `search(highlight=True[, snippet_len=160])` and
+  `SELECT ... HIGHLIGHT[(len)]` return a short document excerpt per hit, centered on the
+  densest cluster of matched query terms with matches wrapped in `<em>…</em>`. Exposed via
+  `SearchResults.snippets` (SDK), a `snippet` column in SQL `to_pandas()`, and a `snippet`
+  field on `/api/search` hits. Reuses the BM25 tokenizer; no index or model changes.
+
 - **Ranking knobs** — tune relevance per query: BM25 `k1`/`b`
   (`BM25('q', k1=1.5, b=0.6)` / `search(k1=, b=)`), per-field score boosts
   (`BOOST(field, 2.0)` / `search(boosts={field: 2.0})`), and temporal decay

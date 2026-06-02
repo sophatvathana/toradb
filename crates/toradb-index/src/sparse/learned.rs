@@ -491,12 +491,19 @@ mod tests {
             let k = 10;
             let want = brute_force(&docs, &q, k);
             let got = idx.search_text(&q, k, SparseProfile::Splade);
-            let got_pairs: Vec<(DocId, f32)> =
-                got.ids.iter().copied().zip(got.scores.iter().copied()).collect();
+            let got_pairs: Vec<(DocId, f32)> = got
+                .ids
+                .iter()
+                .copied()
+                .zip(got.scores.iter().copied())
+                .collect();
             assert_eq!(got_pairs.len(), want.len(), "result count mismatch");
             for (i, ((gid, gs), (wid, ws))) in got_pairs.iter().zip(want.iter()).enumerate() {
                 assert_eq!(*gid, *wid, "doc mismatch at rank {i}");
-                assert!((gs - ws).abs() < 1e-4, "score mismatch at rank {i}: {gs} vs {ws}");
+                assert!(
+                    (gs - ws).abs() < 1e-4,
+                    "score mismatch at rank {i}: {gs} vs {ws}"
+                );
             }
         }
     }
@@ -514,7 +521,11 @@ mod tests {
         assert_eq!(got.ids.len(), 10);
         // Highest-weight docs (id % 100 == 99) should dominate the top-k.
         for &id in &got.ids {
-            assert_eq!(id % 100, 99, "Seismic top-k should be the highest-weight postings");
+            assert_eq!(
+                id % 100,
+                99,
+                "Seismic top-k should be the highest-weight postings"
+            );
         }
     }
 

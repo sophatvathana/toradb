@@ -20,8 +20,6 @@ pub use compression::{CompressionConfig, IndexMode};
 pub use exec_ctx::ExecCtx;
 pub use ingest::IngestOptions;
 pub use metrics::QueryMetrics;
-pub use provenance::{
-    DropStage, ProvenanceCollector, ProvenanceRecord, ScoreBreakdown, TierTrace,
-};
+pub use provenance::{DropStage, ProvenanceCollector, ProvenanceRecord, ScoreBreakdown, TierTrace};
 pub use schema::{ColumnDef, ColumnKind, ColumnType, ColumnTypeSpec, DocId, Schema, SegmentId};
 pub use typed_compare::{parse_timestamp_millis, typed_cmp};

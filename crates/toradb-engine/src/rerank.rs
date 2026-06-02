@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use toradb_core::{parse_timestamp_millis, CandidateSet, DecaySpec, ProvenanceCollector, ScoreBreakdown};
+use toradb_core::{
+    parse_timestamp_millis, CandidateSet, DecaySpec, ProvenanceCollector, ScoreBreakdown,
+};
 
 use crate::dag::DagRunner;
 
@@ -35,9 +37,7 @@ pub fn apply_ranking_knobs(
         let mut boost = 1.0f32;
         if let Some(meta) = meta {
             for (field, &factor) in field_boosts {
-                let has = meta
-                    .get(field)
-                    .is_some_and(|v| !v.trim().is_empty());
+                let has = meta.get(field).is_some_and(|v| !v.trim().is_empty());
                 if has {
                     boost *= factor;
                 }
@@ -46,7 +46,10 @@ pub fn apply_ranking_knobs(
 
         let mut decay_factor = 1.0f32;
         if let (Some(spec), Some(meta)) = (decay.as_ref(), meta) {
-            if let Some(ts) = meta.get(&spec.field).and_then(|v| parse_timestamp_millis(v)) {
+            if let Some(ts) = meta
+                .get(&spec.field)
+                .and_then(|v| parse_timestamp_millis(v))
+            {
                 let age_days = (now_unix_millis - ts) as f32 / 86_400_000.0;
                 if age_days > 0.0 && spec.half_life_days > 0.0 {
                     decay_factor = 0.5f32.powf(age_days / spec.half_life_days);

@@ -6,7 +6,10 @@ use toradb_index::IngestDoc;
 fn doc(text: &str, meta: &[(&str, &str)]) -> IngestDoc {
     IngestDoc {
         text: text.into(),
-        metadata: meta.iter().map(|&(k, v)| (k.to_string(), v.to_string())).collect(),
+        metadata: meta
+            .iter()
+            .map(|&(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
         vector: None,
         sparse: None,
     }
@@ -29,6 +32,8 @@ fn base_opts(table: &str, query: &str) -> TableSearchOptions {
         bm25_params: None,
         field_boosts: HashMap::new(),
         decay: None,
+        highlight: false,
+        snippet_len: 0,
     }
 }
 
@@ -101,16 +106,16 @@ fn provenance_records_score_breakdown() {
     let dir = std::env::temp_dir().join("toradb_knobs_prov");
     let _ = std::fs::remove_dir_all(&dir);
     let mut dag = DagRunner::open(&dir).expect("open");
-    dag.add_documents(
-        "docs",
-        vec![doc("tesla motor", &[("editor_pick", "yes")])],
-    )
-    .expect("add");
+    dag.add_documents("docs", vec![doc("tesla motor", &[("editor_pick", "yes")])])
+        .expect("add");
     let mut opts = base_opts("docs", "tesla motor");
     opts.field_boosts = [("editor_pick".to_string(), 3.0)].into();
     let res = run_table_search(&mut dag, opts).unwrap();
     let prov = res.provenance.expect("provenance");
-    assert!(!prov.score_breakdown.is_empty(), "breakdown should be recorded");
+    assert!(
+        !prov.score_breakdown.is_empty(),
+        "breakdown should be recorded"
+    );
     let row = &prov.score_breakdown[0];
     assert!((row.boost - 3.0).abs() < 1e-6);
     assert!((row.final_score - row.base * row.boost * row.decay).abs() < 1e-4);

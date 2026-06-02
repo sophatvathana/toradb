@@ -621,11 +621,7 @@ pub fn save_bm25_sidecar(base: &Path, table: &str, snap: &Bm25Snapshot) -> Resul
     bm25_tbm3::write_tbm3_file(&bm25_table_bin_path(base, table), snap)
 }
 
-pub fn save_sparse_sidecar(
-    base: &Path,
-    table: &str,
-    snap: &SparseSnapshot,
-) -> Result<(), String> {
+pub fn save_sparse_sidecar(base: &Path, table: &str, snap: &SparseSnapshot) -> Result<(), String> {
     let dir = indexes_dir(base, table);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     learned_sparse::write_lsp1_file(&sparse_table_bin_path(base, table), snap)

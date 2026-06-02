@@ -2,7 +2,8 @@ use toradb_sql::{ast::Stmt, format_select, parse};
 
 #[test]
 fn parse_bm25_params() {
-    let stmts = parse("SELECT id FROM docs SPARSE SEARCH body BM25('tesla', k1=1.5, b=0.6)").unwrap();
+    let stmts =
+        parse("SELECT id FROM docs SPARSE SEARCH body BM25('tesla', k1=1.5, b=0.6)").unwrap();
     let Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };
@@ -37,9 +38,10 @@ fn parse_boost_clauses() {
 
 #[test]
 fn parse_decay_clause() {
-    let stmts =
-        parse("SELECT id FROM docs SPARSE SEARCH body BM25('tesla') DECAY(published, half_life=30)")
-            .unwrap();
+    let stmts = parse(
+        "SELECT id FROM docs SPARSE SEARCH body BM25('tesla') DECAY(published, half_life=30)",
+    )
+    .unwrap();
     let Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };
@@ -58,7 +60,10 @@ fn ranking_knobs_round_trip_through_format() {
     assert!(rendered.contains("k1=1.5"), "{rendered}");
     assert!(rendered.contains("b=0.6"), "{rendered}");
     assert!(rendered.contains("BOOST(title, 2)"), "{rendered}");
-    assert!(rendered.contains("DECAY(published, half_life=30)"), "{rendered}");
+    assert!(
+        rendered.contains("DECAY(published, half_life=30)"),
+        "{rendered}"
+    );
 
     let reparsed = parse(&rendered).unwrap();
     let Stmt::Select(sel2) = &reparsed[0] else {

@@ -80,6 +80,8 @@ fn expand_cte_select_depth(sel: &SelectStmt, max_depth: u32) -> Result<SelectStm
     expanded.bm25_b = sel.bm25_b;
     expanded.field_boosts = sel.field_boosts.clone();
     expanded.decay = sel.decay.clone();
+    expanded.highlight = sel.highlight;
+    expanded.snippet_len = sel.snippet_len;
     expanded.limit = sel.limit;
     expanded.offset = sel.offset;
     expanded.order_by = sel.order_by.clone();
@@ -164,13 +166,14 @@ pub fn project_retrieval_columns(
     scores: &[f32],
 ) -> Result<Vec<(String, SqlProjectedColumn)>, String> {
     let columns = resolve_retrieval_columns(sel)?;
-    let docs_by_id: HashMap<u64, toradb_index::IngestDoc> = if needs_document_fetch(&columns) {
-        dag.fetch_documents(table, ids)?.into_iter().collect()
-    } else {
-        HashMap::new()
-    };
+    let docs_by_id: HashMap<u64, toradb_index::IngestDoc> =
+        if needs_document_fetch(&columns) || sel.highlight {
+            dag.fetch_documents(table, ids)?.into_iter().collect()
+        } else {
+            HashMap::new()
+        };
 
-    let mut out = Vec::with_capacity(columns.len());
+    let mut out = Vec::with_capacity(columns.len() + sel.highlight as usize);
     for col in columns {
         let data = match col.as_str() {
             "id" => SqlProjectedColumn::U64(ids.to_vec()),
@@ -198,6 +201,25 @@ pub fn project_retrieval_columns(
             ),
         };
         out.push((col, data));
+    }
+    if sel.highlight {
+        let max_chars = sel.snippet_len.unwrap_or(160) as usize;
+        let qtokens =
+            crate::snippets::snippet_query_tokens(sel.sparse_query.as_deref().unwrap_or_default());
+        let snippets: Vec<String> = ids
+            .iter()
+            .map(|id| {
+                docs_by_id
+                    .get(id)
+                    .map(|d| {
+                        crate::snippets::generate_snippet(
+                            &d.text, &qtokens, max_chars, "<em>", "</em>",
+                        )
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
+        out.push(("snippet".to_string(), SqlProjectedColumn::Str(snippets)));
     }
     Ok(out)
 }

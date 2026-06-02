@@ -16,6 +16,7 @@ pub mod operator;
 pub mod persist;
 pub mod rerank;
 pub mod scheduler;
+pub mod snippets;
 pub mod sql_exec;
 pub mod table_search;
 

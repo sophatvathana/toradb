@@ -224,6 +224,45 @@ def test_sql_ranking_clauses():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_highlight_snippets():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_highlight_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                "Nikola Tesla invented the alternating current induction motor",
+                "Marie Curie studied radioactivity",
+            ]
+        )
+        r = t.search("alternating current motor", top_k=5, highlight=True)
+        snips = r.snippets
+        assert len(snips) == len(list(r.to_pandas()["id"]))
+        assert "<em>" in snips[0], f"expected highlighted snippet, got {snips[0]!r}"
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_sql_highlight_column():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_highlight_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(["Nikola Tesla alternating current motor"])
+        frame = db.sql(
+            "SELECT id FROM docs SPARSE SEARCH body BM25('alternating current') "
+            "HIGHLIGHT(120) LIMIT 5"
+        ).to_pandas()
+        assert "snippet" in frame
+        assert "<em>" in frame["snippet"][0]
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_hybrid_schema_builder():
     import shutil
 

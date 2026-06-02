@@ -19,7 +19,10 @@ pub fn format_select(sel: &SelectStmt) -> String {
         if let Some(b) = sel.bm25_b {
             args.push_str(&format!(", b={b}"));
         }
-        parts.push(format!("SPARSE SEARCH body {}({args})", method.to_uppercase()));
+        parts.push(format!(
+            "SPARSE SEARCH body {}({args})",
+            method.to_uppercase()
+        ));
     }
     if sel.vector {
         if let Some(ref v) = sel.vector_query {
@@ -54,6 +57,12 @@ pub fn format_select(sel: &SelectStmt) -> String {
     }
     if let Some((ref field, half_life)) = sel.decay {
         parts.push(format!("DECAY({field}, half_life={half_life})"));
+    }
+    if sel.highlight {
+        match sel.snippet_len {
+            Some(n) => parts.push(format!("HIGHLIGHT({n})")),
+            None => parts.push("HIGHLIGHT".to_string()),
+        }
     }
     parts.push(format!("LIMIT {}", sel.limit));
     if sel.offset > 0 {

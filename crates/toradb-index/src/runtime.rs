@@ -37,15 +37,14 @@ impl RetrievalRuntime {
         };
 
         if batch.tier1_enable_sparse {
-            let learned = crate::sparse::learned::SparseProfile::from_backend(
-                batch.sparse_backend.as_str(),
-            )
-            .and_then(|profile| {
-                let t = self.store.table(table)?;
-                let qs = batch.query_sparse.as_ref()?;
-                (t.has_sparse_index() && !qs.is_empty())
-                    .then(|| t.sparse_search(qs, cap, profile))
-            });
+            let learned =
+                crate::sparse::learned::SparseProfile::from_backend(batch.sparse_backend.as_str())
+                    .and_then(|profile| {
+                        let t = self.store.table(table)?;
+                        let qs = batch.query_sparse.as_ref()?;
+                        (t.has_sparse_index() && !qs.is_empty())
+                            .then(|| t.sparse_search(qs, cap, profile))
+                    });
             let sparse = learned.unwrap_or_else(|| {
                 self.store
                     .table(table)

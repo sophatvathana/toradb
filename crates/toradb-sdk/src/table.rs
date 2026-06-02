@@ -109,7 +109,7 @@ impl Table {
         db.add_documents(&self.name, parsed)
     }
 
-    #[pyo3(signature = (query, top_k=None, offset=None, strategy=None, explain=None, graph_expand=None, depth=None, query_vector=None, facets=None, facet_top_n=None, sparse=None, k1=None, b=None, boosts=None, decay=None))]
+    #[pyo3(signature = (query, top_k=None, offset=None, strategy=None, explain=None, graph_expand=None, depth=None, query_vector=None, facets=None, facet_top_n=None, sparse=None, k1=None, b=None, boosts=None, decay=None, highlight=None, snippet_len=None))]
     #[allow(clippy::too_many_arguments)]
     fn search(
         &self,
@@ -129,6 +129,8 @@ impl Table {
         b: Option<f32>,
         boosts: Option<HashMap<String, f32>>,
         decay: Option<(String, f32)>,
+        highlight: Option<bool>,
+        snippet_len: Option<u32>,
     ) -> PyResult<SearchResults> {
         let bm25_params = match (k1, b) {
             (None, None) => None,
@@ -150,6 +152,8 @@ impl Table {
             bm25_params,
             field_boosts: boosts.unwrap_or_default(),
             decay,
+            highlight: highlight.unwrap_or(false),
+            snippet_len: snippet_len.unwrap_or(0),
         };
         let db_handle = self.db.clone_ref(py);
         let out = py.detach(move || {
@@ -183,6 +187,7 @@ impl Table {
             explain_text: out.explain_text,
             provenance_json,
             facets,
+            snippets: out.snippets,
         })
     }
 
@@ -218,6 +223,7 @@ pub struct SearchResults {
     provenance_json: Option<String>,
     /// Per-field value counts over the matched set: `field -> [(value, count)]`.
     facets: Vec<(String, Vec<(String, u64)>)>,
+    snippets: Vec<String>,
 }
 
 impl SearchResults {
@@ -229,6 +235,8 @@ impl SearchResults {
         explain_text: Option<String>,
         facets: Vec<toradb_engine::FacetResult>,
     ) -> Self {
+        // The SQL path surfaces snippets as a projected "snippet" column (to_pandas),
+        // so the native `snippets` vec stays empty here.
         Self {
             ids,
             scores,
@@ -248,6 +256,7 @@ impl SearchResults {
                     )
                 })
                 .collect(),
+            snippets: Vec::new(),
         }
     }
 }
@@ -291,6 +300,21 @@ impl SearchResults {
     #[getter]
     fn provenance(&self) -> Option<String> {
         self.provenance_json.clone()
+    }
+
+    #[getter]
+    fn snippets(&self) -> Vec<String> {
+        if !self.snippets.is_empty() {
+            return self.snippets.clone();
+        }
+        for (name, col) in &self.projected {
+            if name == "snippet" {
+                if let SearchColumn::Str(v) = col {
+                    return v.clone();
+                }
+            }
+        }
+        Vec::new()
     }
 
     #[getter]

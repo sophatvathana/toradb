@@ -22,7 +22,11 @@ fn doc(text: &str) -> IngestDoc {
     }
 }
 
-fn opts(table: &str, query: &str, query_sparse: Option<HashMap<String, f32>>) -> TableSearchOptions {
+fn opts(
+    table: &str,
+    query: &str,
+    query_sparse: Option<HashMap<String, f32>>,
+) -> TableSearchOptions {
     TableSearchOptions {
         table: table.into(),
         query: query.into(),
@@ -39,6 +43,8 @@ fn opts(table: &str, query: &str, query_sparse: Option<HashMap<String, f32>>) ->
         bm25_params: None,
         field_boosts: std::collections::HashMap::new(),
         decay: None,
+        highlight: false,
+        snippet_len: 0,
     }
 }
 
@@ -48,14 +54,8 @@ fn splade_uses_learned_weights() {
     let _ = std::fs::remove_dir_all(&dir);
     let mut dag = DagRunner::open(&dir).expect("open");
 
-    dag.add_documents(
-        "docs",
-        vec![
-            doc("tesla alternating"),
-            doc("tesla ac"),
-        ],
-    )
-    .expect("add");
+    dag.add_documents("docs", vec![doc("tesla alternating"), doc("tesla ac")])
+        .expect("add");
 
     let q = fake_encode("tesla alternating");
     let res = run_table_search(&mut dag, opts("docs", "tesla alternating", Some(q))).unwrap();
@@ -72,7 +72,10 @@ fn splade_falls_back_to_bm25_without_query_sparse() {
     let mut dag = DagRunner::open(&dir).expect("open");
     dag.add_documents(
         "docs",
-        vec![doc("Nikola Tesla alternating current motor"), doc("Marie Curie radioactivity")],
+        vec![
+            doc("Nikola Tesla alternating current motor"),
+            doc("Marie Curie radioactivity"),
+        ],
     )
     .expect("add");
 

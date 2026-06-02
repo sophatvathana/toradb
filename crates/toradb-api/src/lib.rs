@@ -222,6 +222,8 @@ struct SearchRequestBody {
     bm25_b: Option<f32>,
     boosts: Option<std::collections::HashMap<String, f32>>,
     decay: Option<(String, f32)>,
+    highlight: Option<bool>,
+    snippet_len: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -230,6 +232,8 @@ struct SearchHitResponse {
     score: f32,
     text: Option<String>,
     metadata: std::collections::HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snippet: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1524,15 +1528,22 @@ fn execute_native_search(
             facets: body.facets.clone().unwrap_or_default(),
             facet_top_n: None,
             query_sparse: body.sparse.clone(),
-            bm25_params: body.bm25_k1.zip(Some(body.bm25_b.unwrap_or(0.75)))
+            bm25_params: body
+                .bm25_k1
+                .zip(Some(body.bm25_b.unwrap_or(0.75)))
                 .or(body.bm25_b.map(|b| (1.2, b))),
             field_boosts: body.boosts.clone().unwrap_or_default(),
             decay: body.decay.clone(),
+            highlight: body.highlight.unwrap_or(false),
+            snippet_len: body.snippet_len.unwrap_or(0),
         },
     )
     .map_err(map_search_error)?;
     strategy_report = out.strategy_used.clone().or(strategy_report);
     let search_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    let snippet_at =
+        |idx: usize| -> Option<String> { out.snippets.get(idx).filter(|s| !s.is_empty()).cloned() };
 
     let fetch_started = Instant::now();
     let mut hits = Vec::with_capacity(out.ids.len());
@@ -1542,22 +1553,24 @@ fn execute_native_search(
             .map_err(|e| ApiError::internal(format!("failed to load document text: {e}")))?;
         let doc_map: std::collections::HashMap<u64, _> =
             docs.into_iter().map(|(id, doc)| (id, doc)).collect();
-        for (id, score) in out.ids.iter().zip(out.scores.iter()) {
+        for (idx, (id, score)) in out.ids.iter().zip(out.scores.iter()).enumerate() {
             let doc = doc_map.get(id);
             hits.push(SearchHitResponse {
                 id: *id,
                 score: *score,
                 text: Some(doc.map(|d| d.text.clone()).unwrap_or_default()),
                 metadata: doc.map(|d| d.metadata.clone()).unwrap_or_default(),
+                snippet: snippet_at(idx),
             });
         }
     } else {
-        for (id, score) in out.ids.iter().zip(out.scores.iter()) {
+        for (idx, (id, score)) in out.ids.iter().zip(out.scores.iter()).enumerate() {
             hits.push(SearchHitResponse {
                 id: *id,
                 score: *score,
                 text: None, // fetch_text=false — client should not expect snippets
                 metadata: std::collections::HashMap::new(),
+                snippet: snippet_at(idx),
             });
         }
     }
@@ -1651,6 +1664,8 @@ async fn query_preview(
             bm25_b: None,
             boosts: None,
             decay: None,
+            highlight: None,
+            snippet_len: None,
         },
         false,
     )?;

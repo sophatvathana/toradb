@@ -74,6 +74,8 @@ fn table_search_returns_facets() {
             bm25_params: None,
             field_boosts: std::collections::HashMap::new(),
             decay: None,
+            highlight: false,
+            snippet_len: 0,
         },
     )
     .unwrap();

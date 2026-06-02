@@ -247,7 +247,7 @@ mod tests {
         let mut idx = SparseWeightedIndex::default();
         idx.add_document(0, &map(&[("x", 1.0)]));
         let mut bytes = encode_lsp1(&idx.snapshot());
-        bytes[4] = 99;  
+        bytes[4] = 99;
         assert!(snapshot_from_lsp1(&bytes).is_err());
     }
 }

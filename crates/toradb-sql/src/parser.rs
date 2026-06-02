@@ -196,7 +196,7 @@ fn where_clause_boundary(tokens: &[Token], i: usize) -> bool {
         k.as_str(),
         "GROUP" | "HAVING" | "ORDER" | "LIMIT" | "OFFSET" | "SPARSE" | "VECTOR" | "JOIN"
             | "HYDE" | "CRAG" | "GRAPH" | "FUSION" | "DISTRIBUTED" | "STREAM" | "EXPLAIN"
-            | "FACETS" | "BOOST" | "DECAY"
+            | "FACETS" | "BOOST" | "DECAY" | "HIGHLIGHT"
     ))
 }
 
@@ -391,6 +391,26 @@ fn parse_facets_clause(tokens: &[Token], i: &mut usize) -> Result<Vec<String>, S
     Ok(out)
 }
 
+fn parse_highlight_clause(tokens: &[Token], i: &mut usize) -> Result<Option<u32>, String> {
+    expect_ident(tokens, i, "HIGHLIGHT")?;
+    if !matches!(tokens.get(*i), Some(Token::LParen)) {
+        return Ok(None);
+    }
+    *i += 1;
+    let len = match tokens.get(*i) {
+        Some(Token::Number(n)) => {
+            *i += 1;
+            Some(*n)
+        }
+        _ => return Err("HIGHLIGHT(len) requires a number".into()),
+    };
+    if !matches!(tokens.get(*i), Some(Token::RParen)) {
+        return Err("HIGHLIGHT requires closing )".into());
+    }
+    *i += 1;
+    Ok(len)
+}
+
 /// `BOOST(field, factor)` — single clause; the caller loops for repeats.
 fn parse_boost_clause(tokens: &[Token], i: &mut usize) -> Result<(String, f32), String> {
     expect_ident(tokens, i, "BOOST")?;
@@ -567,8 +587,7 @@ fn parse_sparse_search(
                     if matches!(tokens.get(*i), Some(Token::Eq)) {
                         *i += 1;
                     }
-                    let val = number_at_f32(tokens, i)
-                        .ok_or("BM25 k1/b requires a number")?;
+                    let val = number_at_f32(tokens, i).ok_or("BM25 k1/b requires a number")?;
                     if is_k1 {
                         k1 = Some(val);
                     } else {
@@ -679,6 +698,8 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
     let mut bm25_b: Option<f32> = None;
     let mut field_boosts: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
     let mut decay: Option<(String, f32)> = None;
+    let mut highlight = false;
+    let mut snippet_len: Option<u32> = None;
     while *i < tokens.len() && !matches!(tokens.get(*i), Some(Token::Eof) | Some(Token::RParen)) {
         match tokens.get(*i) {
             Some(Token::Ident(k)) if k == "HYDE" => {
@@ -774,6 +795,10 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
             Some(Token::Ident(k)) if k == "DECAY" => {
                 decay = Some(parse_decay_clause(tokens, i)?);
             }
+            Some(Token::Ident(k)) if k == "HIGHLIGHT" => {
+                snippet_len = parse_highlight_clause(tokens, i)?;
+                highlight = true;
+            }
             Some(Token::Semi) | Some(Token::Eof) | Some(Token::RParen) => break,
             _ => *i += 1,
         }
@@ -808,6 +833,8 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
         bm25_b,
         field_boosts,
         decay,
+        highlight,
+        snippet_len,
     })
 }
 

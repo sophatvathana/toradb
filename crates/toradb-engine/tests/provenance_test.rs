@@ -51,6 +51,8 @@ fn search_with_explain_populates_provenance() {
             bm25_params: None,
             field_boosts: std::collections::HashMap::new(),
             decay: None,
+            highlight: false,
+            snippet_len: 0,
         },
     )
     .unwrap();
@@ -131,6 +133,8 @@ fn hybrid_provenance_records_distinct_sparse_and_dense_tiers() {
             bm25_params: None,
             field_boosts: std::collections::HashMap::new(),
             decay: None,
+            highlight: false,
+            snippet_len: 0,
         },
     )
     .unwrap();
@@ -189,6 +193,8 @@ fn provenance_records_per_tier_latency() {
             bm25_params: None,
             field_boosts: std::collections::HashMap::new(),
             decay: None,
+            highlight: false,
+            snippet_len: 0,
         },
     )
     .unwrap();
@@ -227,6 +233,8 @@ fn search_without_explain_returns_no_provenance() {
             bm25_params: None,
             field_boosts: std::collections::HashMap::new(),
             decay: None,
+            highlight: false,
+            snippet_len: 0,
         },
     )
     .unwrap();
@@ -258,6 +266,8 @@ fn provenance_serialises_to_valid_json() {
             bm25_params: None,
             field_boosts: std::collections::HashMap::new(),
             decay: None,
+            highlight: false,
+            snippet_len: 0,
         },
     )
     .unwrap();
@@ -306,6 +316,8 @@ fn provenance_written_to_search_log_on_disk() {
             bm25_params: None,
             field_boosts: std::collections::HashMap::new(),
             decay: None,
+            highlight: false,
+            snippet_len: 0,
         },
     )
     .unwrap();
