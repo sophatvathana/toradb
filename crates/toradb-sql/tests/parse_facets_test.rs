@@ -2,8 +2,8 @@ use toradb_sql::{ast::Stmt, format_select, parse};
 
 #[test]
 fn parse_single_facet() {
-    let stmts = parse("SELECT id FROM docs SPARSE SEARCH body BM25('tesla') FACETS (category)")
-        .unwrap();
+    let stmts =
+        parse("SELECT id FROM docs SPARSE SEARCH body BM25('tesla') FACETS (category)").unwrap();
     let Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };

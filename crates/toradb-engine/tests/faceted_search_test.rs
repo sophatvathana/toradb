@@ -96,7 +96,8 @@ fn facets_are_independent_of_pagination() {
     let toradb_sql::ast::Stmt::Select(sel) = &stmts[0] else {
         panic!("select");
     };
-    let sql_exec::SqlSelectResult::Search(out) = sql_exec::run_select(&mut dag, sel).unwrap() else {
+    let sql_exec::SqlSelectResult::Search(out) = sql_exec::run_select(&mut dag, sel).unwrap()
+    else {
         panic!("search");
     };
 
