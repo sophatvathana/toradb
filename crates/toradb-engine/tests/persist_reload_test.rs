@@ -14,6 +14,7 @@ fn reload_restores_corpus_from_parquet() {
                 text: "Nikola Tesla alternating current motor".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("add");

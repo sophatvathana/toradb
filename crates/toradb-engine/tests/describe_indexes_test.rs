@@ -20,6 +20,7 @@ fn table_index_sidecars_lists_diskann_after_vector_flush() {
                 text: format!("doc {i}"),
                 metadata: Default::default(),
                 vector: Some(unit_vector(i, dim)),
+                sparse: None,
             })
             .collect();
         dag.add_documents("emb", docs).expect("add");

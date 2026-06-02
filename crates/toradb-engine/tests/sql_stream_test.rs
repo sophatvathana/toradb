@@ -13,6 +13,7 @@ fn stream_select_pages_with_offset() {
             text: format!("Nikola Tesla item {i} motor"),
             metadata: Default::default(),
             vector: None,
+            sparse: None,
         })
         .collect();
     dag.add_documents("docs", docs).expect("add");

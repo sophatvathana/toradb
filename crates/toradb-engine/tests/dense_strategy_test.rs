@@ -12,11 +12,13 @@ fn dense_strategy_skips_bm25_tier1() {
                 text: "alpha beta".into(),
                 metadata: Default::default(),
                 vector: Some(vec![1.0, 0.0]),
+                sparse: None,
             },
             IngestDoc {
                 text: "gamma delta".into(),
                 metadata: Default::default(),
                 vector: Some(vec![0.0, 1.0]),
+                sparse: None,
             },
         ],
     )

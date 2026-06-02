@@ -14,6 +14,7 @@ fn sql_search_offset_skips_top_hits() {
                 text: format!("Nikola Tesla document number {i}"),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             })
             .collect();
         dag.add_documents("docs", docs).expect("add");

@@ -14,6 +14,7 @@ fn list_tables_finds_manifest_dirs() {
                 text: "Nikola Tesla coil".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("add");

@@ -26,6 +26,7 @@ fn parse_ingest_doc(item: &Bound<'_, PyAny>) -> PyResult<IngestDoc> {
             text,
             metadata: HashMap::new(),
             vector: None,
+            sparse: None,
         });
     }
 
@@ -44,6 +45,7 @@ fn parse_ingest_doc(item: &Bound<'_, PyAny>) -> PyResult<IngestDoc> {
 
     let mut metadata = HashMap::new();
     let mut vector = None;
+    let mut sparse = None;
 
     for (key, value) in dict.iter() {
         let k = key.extract::<String>()?;
@@ -53,6 +55,12 @@ fn parse_ingest_doc(item: &Bound<'_, PyAny>) -> PyResult<IngestDoc> {
         if k == "vector" || k == "embedding" {
             if let Ok(v) = value.extract::<Vec<f32>>() {
                 vector = Some(v);
+            }
+            continue;
+        }
+        if k == "sparse" {
+            if let Ok(m) = value.extract::<HashMap<String, f32>>() {
+                sparse = Some(m);
             }
             continue;
         }
@@ -69,6 +77,7 @@ fn parse_ingest_doc(item: &Bound<'_, PyAny>) -> PyResult<IngestDoc> {
         text,
         metadata,
         vector,
+        sparse,
     })
 }
 
@@ -100,7 +109,8 @@ impl Table {
         db.add_documents(&self.name, parsed)
     }
 
-    #[pyo3(signature = (query, top_k=None, offset=None, strategy=None, explain=None, graph_expand=None, depth=None, query_vector=None, facets=None, facet_top_n=None))]
+    #[pyo3(signature = (query, top_k=None, offset=None, strategy=None, explain=None, graph_expand=None, depth=None, query_vector=None, facets=None, facet_top_n=None, sparse=None, k1=None, b=None, boosts=None, decay=None))]
+    #[allow(clippy::too_many_arguments)]
     fn search(
         &self,
         py: Python<'_>,
@@ -114,7 +124,16 @@ impl Table {
         query_vector: Option<Vec<f32>>,
         facets: Option<Vec<String>>,
         facet_top_n: Option<usize>,
+        sparse: Option<HashMap<String, f32>>,
+        k1: Option<f32>,
+        b: Option<f32>,
+        boosts: Option<HashMap<String, f32>>,
+        decay: Option<(String, f32)>,
     ) -> PyResult<SearchResults> {
+        let bm25_params = match (k1, b) {
+            (None, None) => None,
+            (k1, b) => Some((k1.unwrap_or(1.2), b.unwrap_or(0.75))),
+        };
         let opts = TableSearchOptions {
             table: self.name.clone(),
             query: query.to_string(),
@@ -127,6 +146,10 @@ impl Table {
             query_vector,
             facets: facets.unwrap_or_default(),
             facet_top_n,
+            query_sparse: sparse,
+            bm25_params,
+            field_boosts: boosts.unwrap_or_default(),
+            decay,
         };
         let db_handle = self.db.clone_ref(py);
         let out = py.detach(move || {

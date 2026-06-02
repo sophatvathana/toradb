@@ -16,11 +16,13 @@ fn fetch_documents_by_ids_from_segment_only_table() {
                     text: "alpha bravo document".into(),
                     metadata: [("tag".into(), "a".into())].into_iter().collect(),
                     vector: None,
+                    sparse: None,
                 },
                 toradb_index::IngestDoc {
                     text: "charlie delta passage".into(),
                     metadata: Default::default(),
                     vector: None,
+                    sparse: None,
                 },
             ],
         )

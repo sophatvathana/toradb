@@ -20,6 +20,7 @@ fn per_segment_hnsw_shards_persist_and_search_without_table_graph() {
                 text: format!("doc {i}"),
                 metadata: Default::default(),
                 vector: Some(unit_vector(i, dim)),
+                sparse: None,
             })
             .collect();
         dag.add_documents("embeddings", docs).expect("add");

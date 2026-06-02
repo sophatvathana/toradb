@@ -76,6 +76,10 @@ fn expand_cte_select_depth(sel: &SelectStmt, max_depth: u32) -> Result<SelectStm
     expanded.where_clause = sel.where_clause.clone();
     expanded.having_clause = sel.having_clause.clone();
     expanded.facets = sel.facets.clone();
+    expanded.bm25_k1 = sel.bm25_k1;
+    expanded.bm25_b = sel.bm25_b;
+    expanded.field_boosts = sel.field_boosts.clone();
+    expanded.decay = sel.decay.clone();
     expanded.limit = sel.limit;
     expanded.offset = sel.offset;
     expanded.order_by = sel.order_by.clone();
@@ -548,6 +552,18 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
         .clone()
         .unwrap_or_else(|| "bm25".into())
         .to_lowercase();
+    batch.bm25_params = match (sel.bm25_k1, sel.bm25_b) {
+        (None, None) => None,
+        (k1, b) => Some((k1.unwrap_or(1.2), b.unwrap_or(0.75))),
+    };
+    batch.field_boosts = sel.field_boosts.clone();
+    batch.decay = sel
+        .decay
+        .clone()
+        .map(|(field, half_life_days)| toradb_core::DecaySpec {
+            field,
+            half_life_days,
+        });
     if vector && !sparse && dag.table_has_diskann_sidecar(&sel.table) {
         batch.tier1_use_diskann = true;
     }
@@ -571,7 +587,10 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
     let base_page = offset.saturating_add(limit).max(1);
     // Facets must count the full matched set, so widen the retrieval window the same way
     // ORDER BY / DISTINCT do — otherwise a small LIMIT would also shrink the facet counts.
-    let needs_window = sel.order_by.is_some() || sel.distinct || !sel.facets.is_empty();
+    let needs_window = sel.order_by.is_some()
+        || sel.distinct
+        || !sel.facets.is_empty()
+        || crate::rerank::knobs_active(&batch.field_boosts, &batch.decay);
     let page_size = if needs_window {
         base_page.saturating_mul(20).min(1000).max(base_page)
     } else {
@@ -589,6 +608,21 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
     }
     if let Some(ref join) = sel.join {
         apply_metadata_join(dag, &sel.table, join, &mut candidates)?;
+    }
+    if crate::rerank::knobs_active(&batch.field_boosts, &batch.decay) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        crate::rerank::apply_ranking_knobs(
+            dag,
+            &sel.table,
+            &mut candidates,
+            &batch.field_boosts,
+            &batch.decay,
+            now,
+            None,
+        )?;
     }
 
     let order_by_metadata = sel.order_by.as_ref().filter(|ob| ob.column != "score");

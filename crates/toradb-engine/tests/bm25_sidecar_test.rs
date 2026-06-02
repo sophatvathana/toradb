@@ -18,6 +18,7 @@ fn bm25_sidecar_written_on_flush_and_used_on_reload() {
                 text: "Nikola Tesla alternating current".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("add");
@@ -58,6 +59,7 @@ fn segment_sparse_up_to_date_without_build_manifest_entry() {
                 text: "Nikola Tesla coil".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("add");
@@ -93,6 +95,7 @@ fn tbm3_sidecar_search_after_flush() {
                 text: "Nikola Tesla alternating current motor".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("add");
@@ -121,6 +124,7 @@ fn table_has_segment_bm25_sidecars_after_flush() {
                 text: "Nikola Tesla coil".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("add");
@@ -146,6 +150,7 @@ fn reload_uses_per_segment_bm25_when_table_sidecar_missing() {
                 text: "Nikola Tesla wireless transmission".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("add");

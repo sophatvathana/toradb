@@ -19,6 +19,10 @@ pub struct TableSearchOptions {
     pub query_vector: Option<Vec<f32>>,
     pub facets: Vec<String>,
     pub facet_top_n: Option<usize>,
+    pub query_sparse: Option<std::collections::HashMap<String, f32>>,
+    pub bm25_params: Option<(f32, f32)>,
+    pub field_boosts: std::collections::HashMap<String, f32>,
+    pub decay: Option<(String, f32)>,
 }
 
 #[derive(Debug, Clone)]
@@ -34,11 +38,11 @@ pub struct TableSearchResult {
     pub facets: Vec<crate::olap::FacetResult>,
 }
 
-fn exec_ctx(top_k: Option<u32>, offset: Option<u32>, want_facets: bool) -> ExecCtx {
+fn exec_ctx(top_k: Option<u32>, offset: Option<u32>, widen: bool) -> ExecCtx {
     let k = top_k.unwrap_or(20);
     let off = offset.unwrap_or(0);
     let mut fetch = off.saturating_add(k).min(1000);
-    if want_facets {
+    if widen {
         fetch = fetch.saturating_mul(20).min(1000).max(fetch);
     }
     ExecCtx::new(
@@ -46,6 +50,13 @@ fn exec_ctx(top_k: Option<u32>, offset: Option<u32>, want_facets: bool) -> ExecC
         fetch.saturating_mul(5).min(100),
         fetch,
     )
+}
+
+fn now_unix_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn is_segment_only_table(dag: &DagRunner, table: &str) -> bool {
@@ -67,6 +78,7 @@ fn configure_batch(dag: &DagRunner, opts: &TableSearchOptions) -> (Batch, ExecCt
     batch.table = opts.table.clone();
     batch.query = opts.query.clone();
     batch.query_vector = opts.query_vector.clone();
+    batch.query_sparse = opts.query_sparse.clone();
     batch.tier1_enable_sparse = !matches!(
         strategy,
         Some("dense") | Some("vector") | Some("hnsw") | Some("diskann") | Some("ann")
@@ -100,6 +112,15 @@ fn configure_batch(dag: &DagRunner, opts: &TableSearchOptions) -> (Batch, ExecCt
         opts.graph_expand.unwrap_or(false) || matches!(strategy, Some("graph") | Some("hybrid"));
     batch.graph_depth = opts.depth.unwrap_or(2);
     batch.distributed_segments = matches!(strategy, Some("distributed"));
+    batch.bm25_params = opts.bm25_params;
+    batch.field_boosts = opts.field_boosts.clone();
+    batch.decay = opts
+        .decay
+        .clone()
+        .map(|(field, half_life_days)| toradb_core::DecaySpec {
+            field,
+            half_life_days,
+        });
     let strategy_used = strategy.map(str::to_string);
     if opts.explain {
         batch.provenance = Some(ProvenanceCollector::new(
@@ -108,8 +129,10 @@ fn configure_batch(dag: &DagRunner, opts: &TableSearchOptions) -> (Batch, ExecCt
             strategy_used.clone(),
         ));
     }
+    let knobs = crate::rerank::knobs_active(&batch.field_boosts, &batch.decay);
+    let widen = !opts.facets.is_empty() || knobs;
     let ctx = tune_ctx(
-        exec_ctx(opts.top_k, opts.offset, !opts.facets.is_empty()),
+        exec_ctx(opts.top_k, opts.offset, widen),
         &opts.query,
         strategy,
     );
@@ -135,8 +158,18 @@ fn format_explain(
     } else {
         metrics.segment_workers
     };
+    let sparse_backend = match batch.sparse_backend.as_str() {
+        b @ ("splade" | "seismic") => {
+            if batch.query_sparse.as_ref().is_some_and(|m| !m.is_empty()) {
+                b.to_string()
+            } else {
+                format!("{b}(fallback=bm25)")
+            }
+        }
+        other => other.to_string(),
+    };
     format!(
-        "table={table} strategy={strategy:?} dense_backend={dense_backend} sparse={} dense={} graph_expand={} depth={} hyde={} crag={} distributed={} segment_workers={} segments_scanned={} tier1={} tier2={} tier3={}",
+        "table={table} strategy={strategy:?} dense_backend={dense_backend} sparse_backend={sparse_backend} sparse={} dense={} graph_expand={} depth={} hyde={} crag={} distributed={} segment_workers={} segments_scanned={} tier1={} tier2={} tier3={}",
         batch.tier1_enable_sparse,
         batch.tier1_enable_dense,
         batch.graph_expand,
@@ -164,6 +197,23 @@ pub fn run_table_search(
     }
     let t0 = std::time::Instant::now();
     let metrics = dag.run(&mut batch, &ctx);
+
+    if crate::rerank::knobs_active(&batch.field_boosts, &batch.decay) {
+        let now = now_unix_millis();
+        let mut candidates = std::mem::take(&mut batch.candidates);
+        let mut prov = batch.provenance.take();
+        crate::rerank::apply_ranking_knobs(
+            dag,
+            &opts.table,
+            &mut candidates,
+            &batch.field_boosts,
+            &batch.decay,
+            now,
+            prov.as_mut(),
+        )?;
+        batch.candidates = candidates;
+        batch.provenance = prov;
+    }
     let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     let top_k = opts.top_k.unwrap_or(20) as usize;

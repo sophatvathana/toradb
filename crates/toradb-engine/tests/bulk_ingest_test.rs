@@ -12,6 +12,7 @@ fn tesla_docs(n: usize, offset: usize) -> Vec<IngestDoc> {
             ),
             metadata: Default::default(),
             vector: None,
+            sparse: None,
         })
         .collect()
 }

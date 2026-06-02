@@ -54,6 +54,7 @@ fn show_indexes_and_create_table_sql() {
             text: "patent motor".into(),
             metadata: Default::default(),
             vector: None,
+            sparse: None,
         }],
     )
     .expect("add");

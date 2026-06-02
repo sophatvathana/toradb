@@ -15,6 +15,7 @@ fn ingest_appends_wal_flush_record() {
                 text: "Nikola Tesla motor".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("add");

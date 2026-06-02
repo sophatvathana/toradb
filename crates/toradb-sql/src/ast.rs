@@ -182,4 +182,8 @@ pub struct SelectStmt {
     pub where_clause: Option<WherePred>,
     pub having_clause: Option<WherePred>,
     pub facets: Vec<String>,
+    pub bm25_k1: Option<f32>,
+    pub bm25_b: Option<f32>,
+    pub field_boosts: std::collections::HashMap<String, f32>,
+    pub decay: Option<(String, f32)>,
 }

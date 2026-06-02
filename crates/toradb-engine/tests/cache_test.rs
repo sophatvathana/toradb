@@ -13,6 +13,7 @@ fn reload_hits_segment_cache() {
                 text: "cached doc".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .unwrap();

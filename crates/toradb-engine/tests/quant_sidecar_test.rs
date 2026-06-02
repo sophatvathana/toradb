@@ -11,6 +11,7 @@ fn quant_sidecar_written_on_flush() {
             text: "vec doc".into(),
             metadata: Default::default(),
             vector: Some(vec![0.5, 1.0, 1.5]),
+            sparse: None,
         }],
     )
     .unwrap();

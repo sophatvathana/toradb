@@ -1,11 +1,20 @@
+use std::collections::HashMap;
+
 use crate::candidate::CandidateSet;
 use crate::provenance::ProvenanceCollector;
+
+#[derive(Debug, Clone)]
+pub struct DecaySpec {
+    pub field: String,
+    pub half_life_days: f32,
+}
 
 #[derive(Debug, Clone)]
 pub struct Batch {
     pub candidates: CandidateSet,
     /// Query text propagated through the DAG (SDK and SQL lowering).
     pub query: String,
+    pub query_sparse: Option<HashMap<String, f32>>,
     pub enable_hyde: bool,
     pub enable_crag: bool,
     pub graph_expand: bool,
@@ -24,6 +33,9 @@ pub struct Batch {
     pub sparse_backend: String,
     /// RRF fusion constant (default 60).
     pub fusion_k: u32,
+    pub bm25_params: Option<(f32, f32)>,
+    pub field_boosts: HashMap<String, f32>,
+    pub decay: Option<DecaySpec>,
     pub provenance: Option<ProvenanceCollector>,
 }
 
@@ -32,6 +44,7 @@ impl Default for Batch {
         Self {
             candidates: CandidateSet::default(),
             query: String::new(),
+            query_sparse: None,
             enable_hyde: false,
             enable_crag: false,
             graph_expand: false,
@@ -45,6 +58,9 @@ impl Default for Batch {
             distributed_segments: false,
             sparse_backend: "bm25".into(),
             fusion_k: 60,
+            bm25_params: None,
+            field_boosts: HashMap::new(),
+            decay: None,
             provenance: None,
         }
     }

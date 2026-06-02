@@ -15,6 +15,7 @@ fn flush_batch_checkpoints_wal_after_manifest() {
                 text: "Nikola Tesla motor".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("add");

@@ -14,6 +14,7 @@ fn table_documents_reads_parquet_when_corpus_empty() {
                 text: "Nikola Tesla coil".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("add");

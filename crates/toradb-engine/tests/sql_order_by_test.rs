@@ -14,16 +14,19 @@ fn sql_search_order_by_score_desc() {
                 text: "unrelated physics".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "Nikola Tesla Nikola Tesla alternating current motor".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "Nikola Tesla once".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
         ];
         dag.add_documents("docs", docs).expect("add");
@@ -85,11 +88,13 @@ fn sql_search_order_by_score_asc() {
                 text: "Nikola Tesla motor motor motor".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "Nikola".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
         ];
         dag.add_documents("docs", docs).expect("add");

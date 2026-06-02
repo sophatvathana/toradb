@@ -13,6 +13,7 @@ fn explain_search_returns_plan_text() {
             text: "Nikola Tesla motor".into(),
             metadata: Default::default(),
             vector: None,
+            sparse: None,
         }],
     )
     .unwrap();
@@ -55,6 +56,7 @@ fn explain_analytics_returns_plan_text() {
             text: "Nikola Tesla motor".into(),
             metadata: Default::default(),
             vector: None,
+            sparse: None,
         }],
     )
     .unwrap();

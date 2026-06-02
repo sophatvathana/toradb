@@ -9,12 +9,14 @@ use crate::dense::turboquant_codec::TurboQuantSnapshot;
 use crate::dense::vector_codec::VectorSnapshot;
 use crate::graph::csr::CsrGraph;
 use crate::sparse::bm25::{tokenize, Bm25Index, Bm25Snapshot};
+use crate::sparse::learned::{SparseProfile, SparseSnapshot, SparseWeightedIndex};
 
 #[derive(Debug, Clone)]
 pub struct IngestDoc {
     pub text: String,
     pub metadata: HashMap<String, String>,
     pub vector: Option<Vec<f32>>,
+    pub sparse: Option<HashMap<String, f32>>,
 }
 
 #[derive(Debug)]
@@ -22,12 +24,14 @@ pub(crate) struct StoredDoc {
     pub text: String,
     pub metadata: HashMap<String, String>,
     pub vector: Option<Vec<f32>>,
+    pub sparse: Option<HashMap<String, f32>>,
     pub segment: u32,
 }
 
 #[derive(Debug, Default)]
 pub struct TableCorpus {
     bm25: Bm25Index,
+    sparse: SparseWeightedIndex,
     hnsw: Option<HnswIndex>,
     diskann: Option<HnswIndex>,
     segment_hnsw: HashMap<u32, HnswIndex>,
@@ -84,6 +88,11 @@ impl TableCorpus {
         if !opts.defer_bm25 {
             self.bm25.add_document(id, &doc.text);
         }
+        if !opts.defer_sparse {
+            if let Some(ref sp) = doc.sparse {
+                self.sparse.add_document(id, sp);
+            }
+        }
         if !opts.defer_graph {
             if id > 0 {
                 self.graph.edges.push((id - 1, id));
@@ -96,6 +105,7 @@ impl TableCorpus {
                 text: doc.text,
                 metadata: doc.metadata,
                 vector: doc.vector,
+                sparse: doc.sparse,
                 segment,
             },
         );
@@ -105,8 +115,55 @@ impl TableCorpus {
         self.bm25.search(query, k)
     }
 
+    pub fn bm25_search_params(
+        &self,
+        query: &str,
+        k: usize,
+        params: Option<(f32, f32)>,
+    ) -> CandidateSet {
+        match params {
+            Some((k1, b)) => self
+                .bm25
+                .search_with_params(query, k, crate::sparse::bm25::Bm25Params { k1, b }),
+            None => self.bm25.search(query, k),
+        }
+    }
+
     pub fn has_bm25_index(&self) -> bool {
         self.bm25.doc_count() > 0
+    }
+
+    pub fn sparse_search(
+        &self,
+        query: &HashMap<String, f32>,
+        k: usize,
+        profile: SparseProfile,
+    ) -> CandidateSet {
+        self.sparse.search_text(query, k, profile)
+    }
+
+    pub fn has_sparse_index(&self) -> bool {
+        self.sparse.doc_count() > 0
+    }
+
+    pub fn sparse_snapshot(&self) -> Option<SparseSnapshot> {
+        (self.sparse.doc_count() > 0).then(|| self.sparse.snapshot())
+    }
+
+    pub fn restore_sparse(&mut self, snap: SparseSnapshot) {
+        self.sparse = SparseWeightedIndex::from_snapshot(snap);
+    }
+
+    pub fn rebuild_sparse(&mut self) {
+        let mut ids: Vec<DocId> = self.docs.keys().copied().collect();
+        ids.sort_unstable();
+        let mut idx = SparseWeightedIndex::default();
+        for id in ids {
+            if let Some(sp) = self.docs.get(&id).and_then(|d| d.sparse.as_ref()) {
+                idx.add_document(id, sp);
+            }
+        }
+        self.sparse = idx;
     }
 
     pub fn rebuild_hnsw(&mut self) {
@@ -426,6 +483,9 @@ impl TableCorpus {
             }
         }
         self.bm25.add_document(id, &doc.text);
+        if let Some(ref sp) = doc.sparse {
+            self.sparse.add_document(id, sp);
+        }
         if id > 0 {
             self.graph.edges.push((id - 1, id));
             self.graph.edges.push((id, id - 1));
@@ -436,6 +496,7 @@ impl TableCorpus {
                 text: doc.text,
                 metadata: doc.metadata,
                 vector: doc.vector,
+                sparse: doc.sparse,
                 segment,
             },
         );
@@ -460,6 +521,7 @@ impl TableCorpus {
                 text: doc.text,
                 metadata: doc.metadata,
                 vector: doc.vector,
+                sparse: doc.sparse,
                 segment,
             },
         );
@@ -501,6 +563,7 @@ impl TableCorpus {
                             text: d.text.clone(),
                             metadata: d.metadata.clone(),
                             vector: d.vector.clone(),
+                            sparse: d.sparse.clone(),
                         },
                     )
                 })
@@ -692,6 +755,7 @@ impl CorpusStore {
                             text: d.text.clone(),
                             metadata: d.metadata.clone(),
                             vector: d.vector.clone(),
+                            sparse: d.sparse.clone(),
                         },
                     )
                 })
@@ -732,6 +796,18 @@ impl CorpusStore {
 
     pub fn bm25_snapshot(&self, table: &str) -> Option<Bm25Snapshot> {
         self.table(table).map(|t| t.bm25_snapshot())
+    }
+
+    pub fn rebuild_sparse(&mut self, table: &str) {
+        self.ensure_table(table).rebuild_sparse();
+    }
+
+    pub fn restore_sparse(&mut self, table: &str, snap: SparseSnapshot) {
+        self.ensure_table(table).restore_sparse(snap);
+    }
+
+    pub fn sparse_snapshot(&self, table: &str) -> Option<SparseSnapshot> {
+        self.table(table).and_then(|t| t.sparse_snapshot())
     }
 
     pub fn expand_query_terms(&self, table: &str, query: &str) -> String {

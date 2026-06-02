@@ -15,16 +15,19 @@ fn group_by_counts_metadata_tags() {
                 text: "Nikola Tesla alternating current".into(),
                 metadata: [("tag".into(), "patent".into())].into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "Nikola Tesla wireless power".into(),
                 metadata: [("tag".into(), "patent".into())].into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "Marie Curie radioactivity".into(),
                 metadata: [("tag".into(), "science".into())].into(),
                 vector: None,
+                sparse: None,
             },
         ],
     )
@@ -65,16 +68,19 @@ fn trivial_count_without_group_by() {
                 text: "a".into(),
                 metadata: [("tag".into(), "x".into())].into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "b".into(),
                 metadata: [("tag".into(), "y".into())].into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "c".into(),
                 metadata: [("tag".into(), "x".into())].into(),
                 vector: None,
+                sparse: None,
             },
         ],
     )
@@ -108,11 +114,13 @@ fn group_by_id_uses_doc_id_not_metadata() {
                 text: "a".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "b".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
         ],
     )
@@ -145,11 +153,13 @@ fn search_then_group_by_filters_docs() {
                 text: "Nikola Tesla alternating current motor".into(),
                 metadata: [("tag".into(), "patent".into())].into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "Marie Curie radioactivity".into(),
                 metadata: [("tag".into(), "science".into())].into(),
                 vector: None,
+                sparse: None,
             },
         ],
     )
@@ -185,11 +195,13 @@ fn vector_search_then_group_by_filters_docs() {
                 text: "Nikola Tesla coil".into(),
                 metadata: [("tag".into(), "patent".into())].into(),
                 vector: Some(vec![1.0, 0.0]),
+                sparse: None,
             },
             IngestDoc {
                 text: "Marie Curie radiation".into(),
                 metadata: [("tag".into(), "science".into())].into(),
                 vector: Some(vec![0.0, 1.0]),
+                sparse: None,
             },
         ],
     )
@@ -226,16 +238,19 @@ fn hybrid_sparse_vector_search_then_group_by() {
                 text: "Nikola Tesla alternating current motor".into(),
                 metadata: [("tag".into(), "patent".into())].into(),
                 vector: Some(vec![1.0, 0.0]),
+                sparse: None,
             },
             IngestDoc {
                 text: "Nikola Tesla wireless power transmission".into(),
                 metadata: [("tag".into(), "patent".into())].into(),
                 vector: Some(vec![0.95, 0.05]),
+                sparse: None,
             },
             IngestDoc {
                 text: "Marie Curie radioactivity".into(),
                 metadata: [("tag".into(), "science".into())].into(),
                 vector: Some(vec![0.0, 1.0]),
+                sparse: None,
             },
         ],
     )
@@ -280,6 +295,7 @@ fn sum_aggregate_on_numeric_metadata() {
                 ]
                 .into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "doc b".into(),
@@ -289,6 +305,7 @@ fn sum_aggregate_on_numeric_metadata() {
                 ]
                 .into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "doc c".into(),
@@ -298,6 +315,7 @@ fn sum_aggregate_on_numeric_metadata() {
                 ]
                 .into(),
                 vector: None,
+                sparse: None,
             },
         ],
     )
@@ -338,11 +356,13 @@ fn where_eq_filters_before_group_by() {
                 text: "Nikola Tesla AC".into(),
                 metadata: [("tag".into(), "patent".into())].into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "Marie Curie radiation".into(),
                 metadata: [("tag".into(), "science".into())].into(),
                 vector: None,
+                sparse: None,
             },
         ],
     )
@@ -376,16 +396,19 @@ fn where_in_filters_groups() {
                 text: "a".into(),
                 metadata: [("tag".into(), "patent".into())].into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "b".into(),
                 metadata: [("tag".into(), "science".into())].into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "c".into(),
                 metadata: [("tag".into(), "other".into())].into(),
                 vector: None,
+                sparse: None,
             },
         ],
     )
@@ -425,6 +448,7 @@ fn where_gt_numeric_metadata() {
                 ]
                 .into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "high".into(),
@@ -434,6 +458,7 @@ fn where_gt_numeric_metadata() {
                 ]
                 .into(),
                 vector: None,
+                sparse: None,
             },
         ],
     )
@@ -468,16 +493,19 @@ fn filtered_count_with_where() {
                 text: "a".into(),
                 metadata: [("tag".into(), "science".into())].into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "b".into(),
                 metadata: [("tag".into(), "science".into())].into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "c".into(),
                 metadata: [("tag".into(), "patent".into())].into(),
                 vector: None,
+                sparse: None,
             },
         ],
     )
@@ -514,6 +542,7 @@ fn multi_group_and_multi_aggregate_with_having() {
                 ]
                 .into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "b".into(),
@@ -524,6 +553,7 @@ fn multi_group_and_multi_aggregate_with_having() {
                 ]
                 .into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "c".into(),
@@ -534,6 +564,7 @@ fn multi_group_and_multi_aggregate_with_having() {
                 ]
                 .into(),
                 vector: None,
+                sparse: None,
             },
         ],
     )
@@ -574,16 +605,19 @@ fn aggregate_offset_applies_after_sort() {
                 text: "a".into(),
                 metadata: [("tag".into(), "a".into())].into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "b".into(),
                 metadata: [("tag".into(), "b".into())].into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "c".into(),
                 metadata: [("tag".into(), "c".into())].into(),
                 vector: None,
+                sparse: None,
             },
         ],
     )

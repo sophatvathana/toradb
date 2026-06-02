@@ -8,6 +8,18 @@ pub(crate) const B: f32 = 0.75;
 
 pub(crate) const MAX_QUERY_TERMS: usize = 32;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bm25Params {
+    pub k1: f32,
+    pub b: f32,
+}
+
+impl Default for Bm25Params {
+    fn default() -> Self {
+        Self { k1: K1, b: B }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Bm25Index {
     postings: HashMap<String, Vec<(DocId, u32)>>,
@@ -43,6 +55,10 @@ impl Bm25Index {
     }
 
     pub fn search(&self, query: &str, k: usize) -> CandidateSet {
+        self.search_with_params(query, k, Bm25Params::default())
+    }
+
+    pub fn search_with_params(&self, query: &str, k: usize, params: Bm25Params) -> CandidateSet {
         bm25_search(
             &self.postings,
             &self.doc_len,
@@ -51,6 +67,7 @@ impl Bm25Index {
             self.avg_dl,
             query,
             k,
+            params,
         )
     }
 
@@ -104,6 +121,10 @@ pub struct Bm25Snapshot {
 
 impl Bm25Snapshot {
     pub fn search(&self, query: &str, k: usize) -> CandidateSet {
+        self.search_with_params(query, k, Bm25Params::default())
+    }
+
+    pub fn search_with_params(&self, query: &str, k: usize, params: Bm25Params) -> CandidateSet {
         bm25_search(
             &self.postings,
             &self.doc_len,
@@ -112,6 +133,7 @@ impl Bm25Snapshot {
             self.avg_dl,
             query,
             k,
+            params,
         )
     }
 
@@ -236,10 +258,10 @@ impl Bm25Interner {
 }
 
 #[inline(always)]
-fn term_doc_score(weight: f32, tf: u32, dl: f32, avg_dl: f32) -> f32 {
+fn term_doc_score(weight: f32, tf: u32, dl: f32, avg_dl: f32, params: Bm25Params) -> f32 {
     let tf = tf as f32;
-    let denom = tf + K1 * (1.0 - B + B * dl / avg_dl.max(1.0));
-    weight * (tf * (K1 + 1.0)) / denom
+    let denom = tf + params.k1 * (1.0 - params.b + params.b * dl / avg_dl.max(1.0));
+    weight * (tf * (params.k1 + 1.0)) / denom
 }
 
 struct TermCursor<'a> {
@@ -302,6 +324,7 @@ impl PartialOrd for HeapItem {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn bm25_search(
     postings: &HashMap<String, Vec<(DocId, u32)>>,
     doc_len: &HashMap<DocId, u32>,
@@ -310,6 +333,7 @@ fn bm25_search(
     avg_dl: f32,
     query: &str,
     k: usize,
+    params: Bm25Params,
 ) -> CandidateSet {
     if k == 0 {
         return CandidateSet::default();
@@ -375,7 +399,7 @@ fn bm25_search(
             posts,
             pos: 0,
             weight: *weight,
-            max_contrib: *weight * (K1 + 1.0),
+            max_contrib: *weight * (params.k1 + 1.0),
         });
     }
 
@@ -426,7 +450,7 @@ fn bm25_search(
             for c in cursors.iter_mut() {
                 if c.current() == Some(pivot_doc) {
                     let tf = c.posts[c.pos].1;
-                    score += term_doc_score(c.weight, tf, dl, avg_dl);
+                    score += term_doc_score(c.weight, tf, dl, avg_dl, params);
                     c.pos += 1;
                 } else {
                     break;
@@ -551,7 +575,7 @@ pub fn tokenize_into(text: &str, out: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{tokenize, Bm25Index, Bm25Snapshot};
+    use super::{tokenize, Bm25Index, Bm25Params, Bm25Snapshot};
 
     #[test]
     fn tokenize_english_tesla_terms() {
@@ -725,5 +749,39 @@ mod tests {
         let query = format!("rareword {filler}");
         let res = index.search(&query, 5);
         assert_eq!(res.ids.first(), Some(&999u64));
+    }
+
+    #[test]
+    fn default_params_match_constants() {
+        let docs = [
+            (0u64, "tesla tesla tesla motor"),
+            (1u64, "tesla motor design"),
+        ];
+        let snap = Bm25Snapshot::from_documents(docs.iter().map(|(id, t)| (*id, *t)));
+        let idx = Bm25Index::from_snapshot(snap);
+        let a = idx.search("tesla motor", 5);
+        let b = idx.search_with_params("tesla motor", 5, Bm25Params::default());
+        assert_eq!(a.ids, b.ids);
+        for (x, y) in a.scores.iter().zip(b.scores.iter()) {
+            assert!((x - y).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn params_change_scores() {
+        let docs = [
+            (0u64, "tesla tesla tesla tesla tesla motor"),
+            (1u64, "tesla motor"),
+        ];
+        let snap = Bm25Snapshot::from_documents(docs.iter().map(|(id, t)| (*id, *t)));
+        let idx = Bm25Index::from_snapshot(snap);
+        let low = idx.search_with_params("tesla", 5, Bm25Params { k1: 0.1, b: 0.75 });
+        let high = idx.search_with_params("tesla", 5, Bm25Params { k1: 5.0, b: 0.75 });
+        let s0_low = low.scores[low.ids.iter().position(|&i| i == 0).unwrap()];
+        let s0_high = high.scores[high.ids.iter().position(|&i| i == 0).unwrap()];
+        assert!(
+            s0_high > s0_low,
+            "higher k1 should raise the high-tf doc score: {s0_high} vs {s0_low}"
+        );
     }
 }

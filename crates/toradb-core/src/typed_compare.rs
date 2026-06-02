@@ -69,7 +69,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146097 + doe - 719468
 }
 
-fn parse_timestamp_millis(s: &str) -> Option<i64> {
+pub fn parse_timestamp_millis(s: &str) -> Option<i64> {
     let s = s.trim().trim_end_matches('Z');
     let days = parse_date_days(s)?;
     let mut millis = days * 86_400_000;

@@ -34,6 +34,7 @@ fn doc(text: &str, kv: &[(&str, &str)]) -> IngestDoc {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect(),
         vector: None,
+        sparse: None,
     }
 }
 

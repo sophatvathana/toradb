@@ -67,6 +67,7 @@ fn table_row_count_prefers_in_memory_corpus() {
             text: "ram".into(),
             metadata: Default::default(),
             vector: None,
+            sparse: None,
         }],
         1,
         toradb_core::IngestOptions::default(),

@@ -9,7 +9,8 @@ use toradb_index::sparse::bm25::tokenize;
 use toradb_index::sparse::bm25_lexicon::{self, Bm25LexiconView};
 use toradb_index::sparse::bm25_route::{self, Bm25RouteView};
 use toradb_index::sparse::bm25_tbm3;
-use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, VectorSnapshot};
+use toradb_index::sparse::learned_sparse;
+use toradb_index::{Bm25Snapshot, CorpusStore, IngestDoc, SparseSnapshot, VectorSnapshot};
 use toradb_storage::cache::{get_or_mmap, read_segment_cached, CachedBm25Segment, StorageCaches};
 use toradb_storage::columnar::{
     bm25_snapshot_from_segment, parquet_row_count, read_segment, read_segment_id_bounds,
@@ -107,6 +108,10 @@ fn indexes_dir(base: &Path, table: &str) -> PathBuf {
 
 fn bm25_table_bin_path(base: &Path, table: &str) -> PathBuf {
     indexes_dir(base, table).join("bm25.bin")
+}
+
+fn sparse_table_bin_path(base: &Path, table: &str) -> PathBuf {
+    indexes_dir(base, table).join("sparse.bin")
 }
 
 fn segment_bm25_bin_path(base: &Path, table: &str, segment_parquet: &str) -> PathBuf {
@@ -570,6 +575,9 @@ pub fn table_index_sidecars(base: &Path, table: &str) -> Result<Vec<String>, Str
     if bm25_table_bin_path(base, table).exists() {
         names.push("bm25".into());
     }
+    if sparse_table_bin_path(base, table).exists() {
+        names.push("sparse".into());
+    }
     if table_vectors_bin_path(base, table).exists() {
         names.push("vectors".into());
     }
@@ -611,6 +619,29 @@ pub fn table_has_segment_hnsw_sidecars(base: &Path, table: &str) -> Result<bool,
 
 pub fn save_bm25_sidecar(base: &Path, table: &str, snap: &Bm25Snapshot) -> Result<(), String> {
     bm25_tbm3::write_tbm3_file(&bm25_table_bin_path(base, table), snap)
+}
+
+pub fn save_sparse_sidecar(
+    base: &Path,
+    table: &str,
+    snap: &SparseSnapshot,
+) -> Result<(), String> {
+    let dir = indexes_dir(base, table);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    learned_sparse::write_lsp1_file(&sparse_table_bin_path(base, table), snap)
+}
+
+pub fn load_sparse_sidecar(
+    base: &Path,
+    table: &str,
+    caches: Option<&mut StorageCaches>,
+) -> Result<Option<SparseSnapshot>, String> {
+    let bin = sparse_table_bin_path(base, table);
+    if bin.exists() {
+        let mmap = get_or_mmap(&bin, caches)?;
+        return learned_sparse::snapshot_from_lsp1(mmap.as_ref()).map(Some);
+    }
+    Ok(None)
 }
 
 pub fn save_segment_bm25_sidecar(
@@ -1251,6 +1282,7 @@ pub fn read_table_documents(
                     text: doc.text,
                     metadata: doc.metadata,
                     vector: doc.embedding,
+                    sparse: None,
                 },
             ));
         }
@@ -1316,6 +1348,7 @@ fn columnar_to_ingest(doc: ColumnarDoc) -> IngestDoc {
         text: doc.text,
         metadata: doc.metadata,
         vector: doc.embedding,
+        sparse: None,
     }
 }
 
@@ -1464,6 +1497,10 @@ fn restore_bm25_index(
         if let Some(snap) = store.bm25_snapshot(table) {
             save_bm25_sidecar(base, table, &snap)?;
         }
+    }
+    // Learned-sparse sidecar is optional: absent for text-only / older tables.
+    if let Some(snap) = load_sparse_sidecar(base, table, caches.as_deref_mut())? {
+        store.restore_sparse(table, snap);
     }
     restore_hnsw_index(base, table, store, num_segments, caches.as_deref_mut())?;
     restore_diskann_index(base, table, store, caches.as_deref_mut())?;
@@ -1631,6 +1668,7 @@ pub fn load_table(
                     text: doc.text,
                     metadata: doc.metadata,
                     vector: embedding,
+                    sparse: None,
                 },
                 num_segments,
             );
@@ -2104,6 +2142,12 @@ pub fn save_table_indexes(
     if let Some(snap) = store.bm25_snapshot(table) {
         save_bm25_sidecar(base, table, &snap)?;
     }
+    if store.sparse_snapshot(table).is_none() {
+        store.rebuild_sparse(table);
+    }
+    if let Some(snap) = store.sparse_snapshot(table) {
+        save_sparse_sidecar(base, table, &snap)?;
+    }
     if let Some(snap) = vector_snapshot_from_store(store, table) {
         save_table_vector_sidecar(base, table, &snap)?;
     }
@@ -2207,6 +2251,7 @@ pub fn reload_table_texts_from_segments(
                 text: doc.text,
                 metadata: doc.metadata,
                 vector: doc.embedding,
+                sparse: None,
             };
             store.insert_stored(table, doc.id, ingest, num_segments);
             loaded += 1;

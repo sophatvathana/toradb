@@ -21,6 +21,7 @@ fn sql_vector_search_uses_diskann_sidecar_when_present() {
                 text: format!("doc {i}"),
                 metadata: Default::default(),
                 vector: Some(unit_vector(i, dim)),
+                sparse: None,
             })
             .collect();
         dag.add_documents("emb", docs).expect("add");

@@ -13,6 +13,7 @@ fn resume_index_build_is_idempotent_after_partial_finish() {
                 text: format!("document {i} keyword"),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             })
             .collect();
         dag.add_documents("docs", docs).expect("add");

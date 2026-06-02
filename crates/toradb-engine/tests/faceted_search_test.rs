@@ -9,6 +9,7 @@ fn doc(text: &str, category: &str) -> IngestDoc {
         text: text.into(),
         metadata: [("category".into(), category.into())].into(),
         vector: None,
+        sparse: None,
     }
 }
 
@@ -69,6 +70,10 @@ fn table_search_returns_facets() {
             query_vector: None,
             facets: vec!["category".into()],
             facet_top_n: None,
+            query_sparse: None,
+            bm25_params: None,
+            field_boosts: std::collections::HashMap::new(),
+            decay: None,
         },
     )
     .unwrap();

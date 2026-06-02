@@ -16,11 +16,13 @@ fn bulk_finish_segment_only_skips_merged_bm25() {
                     text: "Nikola Tesla alternating current motor".into(),
                     metadata: Default::default(),
                     vector: None,
+                    sparse: None,
                 },
                 toradb_index::IngestDoc {
                     text: "wireless power transmission experiments".into(),
                     metadata: Default::default(),
                     vector: None,
+                    sparse: None,
                 },
             ],
         )

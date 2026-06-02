@@ -54,6 +54,7 @@ fn open_after_crash_before_manifest_recovers_docs() {
                 text: "alternating current".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("add");

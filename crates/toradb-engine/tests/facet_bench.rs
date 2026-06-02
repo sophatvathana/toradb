@@ -33,6 +33,7 @@ fn build_table(dag: &mut DagRunner, num_docs: usize, cardinality: usize) {
             text: format!("Nikola Tesla document {d}"),
             metadata: [("category".into(), cat)].into(),
             vector: None,
+            sparse: None,
         });
         if buf.len() == chunk {
             dag.add_documents("docs", std::mem::take(&mut buf)).unwrap();

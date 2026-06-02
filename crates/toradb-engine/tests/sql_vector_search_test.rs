@@ -15,11 +15,13 @@ fn sql_vector_search_returns_nearest_embedding() {
                 text: "Nikola Tesla coil".into(),
                 metadata: Default::default(),
                 vector: Some(vec![1.0, 0.0, 0.0, 0.0]),
+                sparse: None,
             },
             IngestDoc {
                 text: "Marie Curie radiation".into(),
                 metadata: Default::default(),
                 vector: Some(vec![0.0, 1.0, 0.0, 0.0]),
+                sparse: None,
             },
         ],
     )

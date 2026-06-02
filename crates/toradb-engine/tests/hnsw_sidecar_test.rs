@@ -20,6 +20,7 @@ fn hnsw_sidecar_written_on_flush_and_used_on_reload() {
                 text: format!("doc {i}"),
                 metadata: Default::default(),
                 vector: Some(unit_vector(i, dim)),
+                sparse: None,
             })
             .collect();
         dag.add_documents("embeddings", docs).expect("add");

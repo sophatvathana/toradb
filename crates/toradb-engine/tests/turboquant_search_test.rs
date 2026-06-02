@@ -25,6 +25,7 @@ fn search_uses_turboquant_segments_after_reopen() {
                 text: format!("vec doc {i}"),
                 metadata: Default::default(),
                 vector: Some(make_vec(i, 64)),
+                sparse: None,
             })
             .collect();
         dag.add_documents("vecs", docs).unwrap();

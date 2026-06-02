@@ -8,6 +8,29 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Ranking knobs** — tune relevance per query: BM25 `k1`/`b`
+  (`BM25('q', k1=1.5, b=0.6)` / `search(k1=, b=)`), per-field score boosts
+  (`BOOST(field, 2.0)` / `search(boosts={field: 2.0})`), and temporal decay
+  (`DECAY(field, half_life=30)` / `search(decay=(field, 30))`, `0.5^(age_days/half_life)`).
+  Boosts and decay run as a final re-rank over the matched window; the per-doc
+  `base × boost × decay = final` decomposition is recorded in the provenance
+  `score_breakdown`. Available via the Python SDK, the SQL dialect, and `/api/search`.
+
+- **Genuine learned-sparse retrieval (SPLADE / Seismic)** — replaces the previous
+  BM25-heuristic stubs with a real weighted-sparse engine: documents and queries are
+  `{token: weight}` maps (from your learned model) scored by a weighted-WAND dot product.
+  SPLADE runs exact top-k; Seismic adds per-term posting truncation. Register a
+  `SparseEncoder` (`toradb.local(path, sparse_encoder=...)`) — model-agnostic, mirroring
+  the dense embedder contract — or pass `sparse={token: weight}` to `add()`/`search()`.
+  Persisted via a new `sparse.bin` (`LSP1`) sidecar. SQL `SPARSE SEARCH … SPLADE('q')`
+  falls back to BM25 (no encoder in SQL context), shown in EXPLAIN as
+  `sparse_backend=splade(fallback=bm25)`.
+
+### Changed
+
+- `IngestDoc` / Python documents accept an optional `sparse` field; `Table.search`
+  accepts an optional `sparse` (query weights) argument.
+
 - **Faceted search** — `search(facets=[...])` and `SELECT ... FACETS (col, ...)` return
   per-field value counts over the full matched result set (independent of `LIMIT`/`OFFSET`
   paging). Exposed via `SearchResults.facets` (dict-of-dicts), the `/api/search` REST

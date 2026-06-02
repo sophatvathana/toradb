@@ -43,6 +43,7 @@ fn doc(text: &str, tag: &str) -> IngestDoc {
         text: text.into(),
         metadata: [("tag".to_string(), tag.to_string())].into(),
         vector: None,
+        sparse: None,
     }
 }
 

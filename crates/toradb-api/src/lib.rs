@@ -217,6 +217,11 @@ struct SearchRequestBody {
     query_vector: Option<Vec<f32>>,
     fetch_text: Option<bool>,
     facets: Option<Vec<String>>,
+    sparse: Option<std::collections::HashMap<String, f32>>,
+    bm25_k1: Option<f32>,
+    bm25_b: Option<f32>,
+    boosts: Option<std::collections::HashMap<String, f32>>,
+    decay: Option<(String, f32)>,
 }
 
 #[derive(Serialize)]
@@ -1518,6 +1523,11 @@ fn execute_native_search(
             query_vector: body.query_vector.clone(),
             facets: body.facets.clone().unwrap_or_default(),
             facet_top_n: None,
+            query_sparse: body.sparse.clone(),
+            bm25_params: body.bm25_k1.zip(Some(body.bm25_b.unwrap_or(0.75)))
+                .or(body.bm25_b.map(|b| (1.2, b))),
+            field_boosts: body.boosts.clone().unwrap_or_default(),
+            decay: body.decay.clone(),
         },
     )
     .map_err(map_search_error)?;
@@ -1636,6 +1646,11 @@ async fn query_preview(
             query_vector: None,
             fetch_text: Some(true),
             facets: None,
+            sparse: None,
+            bm25_k1: None,
+            bm25_b: None,
+            boosts: None,
+            decay: None,
         },
         false,
     )?;

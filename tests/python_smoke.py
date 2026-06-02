@@ -79,6 +79,151 @@ def test_sql_facets_clause():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def test_learned_sparse_splade_encoder():
+    import shutil
+
+    from toradb.embeddings import SparseEncoder
+
+    enc = SparseEncoder(
+        lambda texts: [
+            {tok.lower(): float(len(tok)) for tok in t.split()} for t in texts
+        ]
+    )
+    path = Path(tempfile.mkdtemp(prefix="toradb_splade_"))
+    try:
+        db = toradb.local(str(path), sparse_encoder=enc)
+        t = db.create_table("docs", mode="text")
+        t.add(["tesla alternating", "tesla ac"])
+        r = t.search("tesla alternating")
+        ids = list(r.to_pandas()["id"])
+        assert ids[0] == 0, f"SPLADE should rank the high-weight doc first, got {ids}"
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_learned_sparse_explicit_sparse_kwarg():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_splade_kwarg_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                {"text": "tesla alternating", "sparse": {"tesla": 5.0, "alternating": 11.0}},
+                {"text": "tesla ac", "sparse": {"tesla": 5.0, "ac": 2.0}},
+            ]
+        )
+        r = t.search(
+            "tesla alternating",
+            strategy="splade",
+            sparse={"tesla": 5.0, "alternating": 11.0},
+        )
+        ids = list(r.to_pandas()["id"])
+        assert ids[0] == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_sql_splade_falls_back_to_bm25_in_explain():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_splade_explain_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(["Nikola Tesla alternating current motor"])
+        r = t.search("Nikola Tesla", top_k=5, strategy="splade", explain=True)
+        text = r.explain()
+        assert "sparse_backend=splade(fallback=bm25)" in text, text
+        assert len(r.to_pandas()["id"]) > 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_ranking_field_boost():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_boost_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                {"text": "tesla tesla motor"},  # higher BM25
+                {"text": "tesla motor", "editor_pick": "yes"},  # boosted
+            ]
+        )
+        base = list(t.search("tesla motor").to_pandas()["id"])
+        assert base[0] == 0
+        boosted = list(
+            t.search("tesla motor", boosts={"editor_pick": 5.0}).to_pandas()["id"]
+        )
+        assert boosted[0] == 1, f"boost should promote the editor pick, got {boosted}"
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_ranking_temporal_decay_and_breakdown():
+    import json
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_decay_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                {"text": "tesla motor", "published": "2020-01-01"},
+                {"text": "tesla motor", "published": "2999-01-01"},
+            ]
+        )
+        r = t.search("tesla motor", decay=("published", 30.0), explain=True)
+        ids = list(r.to_pandas()["id"])
+        assert ids[0] == 1, f"recent doc should win under decay, got {ids}"
+        prov = json.loads(r.provenance)
+        assert prov.get("score_breakdown"), "provenance should include a score breakdown"
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_ranking_bm25_params():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_k1b_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(["tesla tesla tesla tesla motor", "tesla motor"])
+        # Just exercise the kwargs end-to-end; high k1 favors the high-tf doc.
+        ids = list(t.search("tesla", k1=5.0, b=0.75).to_pandas()["id"])
+        assert ids[0] == 0
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_sql_ranking_clauses():
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="toradb_sql_rank_"))
+    try:
+        db = toradb.local(str(path))
+        t = db.create_table("docs", mode="text")
+        t.add(
+            [
+                {"text": "tesla tesla motor"},
+                {"text": "tesla motor", "editor_pick": "yes"},
+            ]
+        )
+        frame = db.sql(
+            "SELECT id FROM docs SPARSE SEARCH body BM25('tesla motor', k1=1.5) "
+            "BOOST(editor_pick, 5.0) LIMIT 5"
+        ).to_pandas()
+        assert list(frame["id"])[0] == 1
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_hybrid_schema_builder():
     import shutil
 

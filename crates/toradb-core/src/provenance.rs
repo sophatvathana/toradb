@@ -9,6 +9,15 @@ pub struct ScoredDoc {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoreBreakdown {
+    pub id: DocId,
+    pub base: f32,
+    pub boost: f32,
+    pub decay: f32,
+    pub final_score: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DropRecord {
     pub id: DocId,
     pub stage: DropStage,
@@ -45,6 +54,8 @@ pub struct ProvenanceRecord {
     pub total_latency_ms: f64,
     #[serde(default)]
     pub facets: Vec<(String, Vec<(String, u64)>)>,
+    #[serde(default)]
+    pub score_breakdown: Vec<ScoreBreakdown>,
 }
 
 /// Zero-cost when disabled: only allocates when `enabled = true`.
@@ -67,6 +78,7 @@ impl ProvenanceCollector {
                 final_ids: Vec::new(),
                 total_latency_ms: 0.0,
                 facets: Vec::new(),
+                score_breakdown: Vec::new(),
             },
         }
     }
@@ -168,6 +180,12 @@ impl ProvenanceCollector {
         }
     }
 
+    pub fn set_score_breakdown(&mut self, rows: Vec<ScoreBreakdown>) {
+        if self.enabled {
+            self.record.score_breakdown = rows;
+        }
+    }
+
     pub fn finish(self) -> Option<ProvenanceRecord> {
         if self.enabled {
             Some(self.record)
@@ -188,6 +206,7 @@ impl Default for ProvenanceRecord {
             final_ids: Vec::new(),
             total_latency_ms: 0.0,
             facets: Vec::new(),
+            score_breakdown: Vec::new(),
         }
     }
 }

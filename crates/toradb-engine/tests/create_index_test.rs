@@ -17,6 +17,7 @@ fn create_index_hnsw_persists_sidecar() {
                     text: format!("doc {i}"),
                     metadata: Default::default(),
                     vector: Some(v),
+                    sparse: None,
                 }
             })
             .collect();
@@ -64,6 +65,7 @@ fn create_index_bm25_rebuilds_sparse() {
                 text: "Nikola Tesla alternating current motor".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("add");

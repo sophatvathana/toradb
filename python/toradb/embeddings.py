@@ -15,13 +15,21 @@ and hybrid retrieval work without bringing your own vectors on every call::
 Without an embedder, ``toradb.local(path)`` returns the raw database unchanged.
 """
 
-from typing import Any, Callable, List, Optional, Sequence, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 # An embedder may be supplied as:
 #   * an Embedder instance,
 #   * a plain callable list[str] -> list[list[float]], or
 #   * any object exposing embed_documents()/embed_query() (e.g. a LangChain embeddings obj).
 EmbedderLike = Union["Embedder", Callable[[List[str]], List[List[float]]], Any]
+
+# A learned-sparse encoder (SPLADE / Seismic) maps text -> {token: weight}. It may be:
+#   * a SparseEncoder instance,
+#   * a plain callable list[str] -> list[dict[str, float]], or
+#   * any object exposing encode_documents()/encode_query().
+SparseEncoderLike = Union[
+    "SparseEncoder", Callable[[List[str]], List[Dict[str, float]]], Any
+]
 
 
 class Embedder:
@@ -84,6 +92,55 @@ class Embedder:
         )
 
 
+class SparseEncoder:
+    """Wraps a text -> list[{token: weight}] function for learned-sparse retrieval.
+
+    The returned maps are passed verbatim to ToraDB, which interns tokens and scores a
+    weighted dot product (SPLADE / Seismic). ToraDB runs no model itself — this is the
+    same model-agnostic contract as :class:`Embedder`, just producing sparse weights.
+    """
+
+    def __init__(self, func: Callable[[List[str]], Sequence[Dict[str, float]]]):
+        if not callable(func):
+            raise TypeError(
+                "SparseEncoder func must be callable: list[str] -> list[dict[str, float]]"
+            )
+        self._func = func
+
+    def encode_documents(self, texts: List[str]) -> List[Dict[str, float]]:
+        if not texts:
+            return []
+        raw = self._func(list(texts))
+        maps = [{str(k): float(v) for k, v in dict(m).items()} for m in raw]
+        if len(maps) != len(texts):
+            raise ValueError(
+                f"sparse encoder returned {len(maps)} maps for {len(texts)} texts"
+            )
+        return maps
+
+    def encode_query(self, text: str) -> Dict[str, float]:
+        return self.encode_documents([text])[0]
+
+    @classmethod
+    def coerce(cls, encoder: Optional[SparseEncoderLike]) -> Optional["SparseEncoder"]:
+        if encoder is None or isinstance(encoder, cls):
+            return encoder
+        if hasattr(encoder, "encode_documents") and hasattr(encoder, "encode_query"):
+            obj = encoder
+
+            def _fn(texts: List[str]) -> List[Dict[str, float]]:
+                return [dict(m) for m in obj.encode_documents(texts)]
+
+            return cls(_fn)
+        if callable(encoder):
+            return cls(encoder)
+        raise TypeError(
+            "sparse_encoder must be a SparseEncoder, a callable "
+            "list[str]->list[dict[str,float]], or an object with "
+            "encode_documents()/encode_query()"
+        )
+
+
 def _has_vector(doc: dict) -> bool:
     return doc.get("vector") is not None or doc.get("embedding") is not None
 
@@ -91,23 +148,31 @@ def _has_vector(doc: dict) -> bool:
 class EmbeddingTable:
     """Wraps a Rust `Table`, auto-embedding on `add()`/`search()`. Delegates all else."""
 
-    def __init__(self, inner, embedder: Optional[Embedder]):
+    def __init__(
+        self,
+        inner,
+        embedder: Optional[Embedder],
+        sparse_encoder: Optional["SparseEncoder"] = None,
+    ):
         self._inner = inner
         self._embedder = embedder
+        self._sparse_encoder = sparse_encoder
         self._ingested_dim: Optional[int] = None
 
     # -- ingest ---------------------------------------------------------------
     def add(self, docs):
-        if self._embedder is None:
+        if self._embedder is None and self._sparse_encoder is None:
             return self._inner.add(docs)
 
         normalized = []
         to_embed: List[str] = []
         embed_targets = []  # indices into `normalized` needing a vector
+        sparse_targets = []  # indices into `normalized` needing a sparse map
+        to_encode: List[str] = []
         for doc in docs:
             d = {"text": doc} if isinstance(doc, str) else dict(doc)
-            if not _has_vector(d):
-                text = d.get("text")
+            text = d.get("text")
+            if self._embedder is not None and not _has_vector(d):
                 if not isinstance(text, str):
                     raise ValueError(
                         "auto-embedding requires a string 'text' field on each document "
@@ -115,6 +180,14 @@ class EmbeddingTable:
                     )
                 embed_targets.append(len(normalized))
                 to_embed.append(text)
+            if self._sparse_encoder is not None and d.get("sparse") is None:
+                if not isinstance(text, str):
+                    raise ValueError(
+                        "sparse encoding requires a string 'text' field on each document "
+                        "(or supply 'sparse' explicitly)"
+                    )
+                sparse_targets.append(len(normalized))
+                to_encode.append(text)
             normalized.append(d)
 
         if to_embed:
@@ -123,6 +196,10 @@ class EmbeddingTable:
             self._check_table_dim(dim)
             for idx, vec in zip(embed_targets, vecs):
                 normalized[idx]["embedding"] = vec
+        if to_encode:
+            maps = self._sparse_encoder.encode_documents(to_encode)
+            for idx, m in zip(sparse_targets, maps):
+                normalized[idx]["sparse"] = m
         return self._inner.add(normalized)
 
     def _check_table_dim(self, dim):
@@ -152,6 +229,16 @@ class EmbeddingTable:
     # -- search ---------------------------------------------------------------
     def search(self, query, **kwargs):
         if (
+            self._sparse_encoder is not None
+            and kwargs.get("sparse") is None
+            and isinstance(query, str)
+        ):
+            kwargs["sparse"] = self._sparse_encoder.encode_query(query)
+            # Default to SPLADE unless the caller asked for a specific sparse profile.
+            strat = kwargs.get("strategy")
+            if strat not in ("splade", "seismic"):
+                kwargs["strategy"] = "splade"
+        elif (
             self._embedder is not None
             and kwargs.get("query_vector") is None
             and isinstance(query, str)
@@ -168,27 +255,40 @@ class EmbeddingTable:
 class EmbeddingDatabase:
     """Wraps a Rust `Database`; hands out `EmbeddingTable`s. Delegates all else."""
 
-    def __init__(self, inner, embedder: Optional[Embedder]):
+    def __init__(
+        self,
+        inner,
+        embedder: Optional[Embedder],
+        sparse_encoder: Optional["SparseEncoder"] = None,
+    ):
         self._inner = inner
         self._embedder = embedder
+        self._sparse_encoder = sparse_encoder
 
     def table(self, name):
-        return EmbeddingTable(self._inner.table(name), self._embedder)
+        return EmbeddingTable(
+            self._inner.table(name), self._embedder, self._sparse_encoder
+        )
 
     def create_table(self, name, mode=None, schema=None):
         inner = self._inner.create_table(name, mode, schema)
-        return EmbeddingTable(inner, self._embedder)
+        return EmbeddingTable(inner, self._embedder, self._sparse_encoder)
 
     def __getattr__(self, name):
         return getattr(self._inner, name)
 
 
-def wrap_database(inner, embedder: Optional[EmbedderLike]):
-    """Return `inner` unchanged when no embedder, else an `EmbeddingDatabase`."""
+def wrap_database(
+    inner,
+    embedder: Optional[EmbedderLike],
+    sparse_encoder: Optional[SparseEncoderLike] = None,
+):
+    """Return `inner` unchanged when no encoder is given, else an `EmbeddingDatabase`."""
     emb = Embedder.coerce(embedder)
-    if emb is None:
+    sparse = SparseEncoder.coerce(sparse_encoder)
+    if emb is None and sparse is None:
         return inner
-    return EmbeddingDatabase(inner, emb)
+    return EmbeddingDatabase(inner, emb, sparse)
 
 
 # --- built-in adapters (deps imported lazily; optional) ----------------------
@@ -230,3 +330,42 @@ def OpenAIEmbedder(
         return [d.embedding for d in resp.data]
 
     return Embedder(_fn, dim=dim)
+
+
+def SpladeEncoder(model: str = "naver/splade-v3", **encode_kwargs) -> SparseEncoder:
+    """Learned-sparse encoder backed by a SPLADE model. Requires `toradb[splade]`.
+
+    Produces `{token: weight}` maps from the model's term-importance logits. ToraDB
+    indexes and scores the weights; the model runs only here in Python.
+    """
+    try:
+        import torch
+        from transformers import AutoModelForMaskedLM, AutoTokenizer
+    except ImportError as e:  # pragma: no cover - exercised only without the dep
+        raise ImportError(
+            "SpladeEncoder requires transformers + torch (pip install 'toradb[splade]')"
+        ) from e
+
+    tokenizer = AutoTokenizer.from_pretrained(model)
+    splade = AutoModelForMaskedLM.from_pretrained(model)
+    splade.eval()
+    vocab = {v: k for k, v in tokenizer.get_vocab().items()}
+
+    def _fn(texts: List[str]) -> List[Dict[str, float]]:
+        out: List[Dict[str, float]] = []
+        with torch.no_grad():
+            enc = tokenizer(
+                list(texts), return_tensors="pt", padding=True, truncation=True, **encode_kwargs
+            )
+            logits = splade(**enc).logits
+            # SPLADE pooling: max over sequence of log(1 + relu(logits)).
+            weights = torch.max(
+                torch.log1p(torch.relu(logits)) * enc["attention_mask"].unsqueeze(-1),
+                dim=1,
+            ).values
+        for row in weights:
+            nz = torch.nonzero(row).squeeze(-1)
+            out.append({vocab[int(i)]: float(row[int(i)]) for i in nz})
+        return out
+
+    return SparseEncoder(_fn)

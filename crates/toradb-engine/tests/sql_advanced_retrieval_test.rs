@@ -12,6 +12,7 @@ fn sql_hyde_crag_graph_and_fusion_parse_and_run() {
             text: format!("Nikola Tesla motor coil {i}"),
             metadata: Default::default(),
             vector: None,
+            sparse: None,
         })
         .collect();
     dag.add_documents("docs", docs).expect("add");

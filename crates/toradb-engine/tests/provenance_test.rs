@@ -10,16 +10,19 @@ fn make_dag() -> (DagRunner, tempfile::TempDir) {
                 text: "Nikola Tesla invented the AC motor and the Tesla coil".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
             toradb_index::IngestDoc {
                 text: "Thomas Edison pioneered the light bulb and direct current".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
             toradb_index::IngestDoc {
                 text: "Marie Curie discovered radium and polonium".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
         ],
     )
@@ -44,6 +47,10 @@ fn search_with_explain_populates_provenance() {
             query_vector: None,
             facets: Vec::new(),
             facet_top_n: None,
+            query_sparse: None,
+            bm25_params: None,
+            field_boosts: std::collections::HashMap::new(),
+            decay: None,
         },
     )
     .unwrap();
@@ -77,21 +84,25 @@ fn make_hybrid_dag() -> (DagRunner, tempfile::TempDir) {
                 text: "Nikola Tesla invented the AC motor and the Tesla coil".into(),
                 metadata: Default::default(),
                 vector: Some(vec![1.0, 0.0, 0.0, 0.0]),
+                sparse: None,
             },
             toradb_index::IngestDoc {
                 text: "Thomas Edison pioneered the light bulb and direct current".into(),
                 metadata: Default::default(),
                 vector: Some(vec![0.0, 1.0, 0.0, 0.0]),
+                sparse: None,
             },
             toradb_index::IngestDoc {
                 text: "Marie Curie discovered radium and polonium".into(),
                 metadata: Default::default(),
                 vector: Some(vec![0.0, 0.0, 1.0, 0.0]),
+                sparse: None,
             },
             toradb_index::IngestDoc {
                 text: "Albert Einstein formulated the theory of relativity".into(),
                 metadata: Default::default(),
                 vector: Some(vec![0.0, 0.0, 0.0, 1.0]),
+                sparse: None,
             },
         ],
     )
@@ -116,6 +127,10 @@ fn hybrid_provenance_records_distinct_sparse_and_dense_tiers() {
             query_vector: Some(vec![0.1, 0.9, 0.0, 0.0]),
             facets: Vec::new(),
             facet_top_n: None,
+            query_sparse: None,
+            bm25_params: None,
+            field_boosts: std::collections::HashMap::new(),
+            decay: None,
         },
     )
     .unwrap();
@@ -170,6 +185,10 @@ fn provenance_records_per_tier_latency() {
             query_vector: Some(vec![0.1, 0.9, 0.0, 0.0]),
             facets: Vec::new(),
             facet_top_n: None,
+            query_sparse: None,
+            bm25_params: None,
+            field_boosts: std::collections::HashMap::new(),
+            decay: None,
         },
     )
     .unwrap();
@@ -204,6 +223,10 @@ fn search_without_explain_returns_no_provenance() {
             query_vector: None,
             facets: Vec::new(),
             facet_top_n: None,
+            query_sparse: None,
+            bm25_params: None,
+            field_boosts: std::collections::HashMap::new(),
+            decay: None,
         },
     )
     .unwrap();
@@ -231,6 +254,10 @@ fn provenance_serialises_to_valid_json() {
             query_vector: None,
             facets: Vec::new(),
             facet_top_n: None,
+            query_sparse: None,
+            bm25_params: None,
+            field_boosts: std::collections::HashMap::new(),
+            decay: None,
         },
     )
     .unwrap();
@@ -256,6 +283,7 @@ fn provenance_written_to_search_log_on_disk() {
             text: "Marie Curie discovered radium".into(),
             metadata: Default::default(),
             vector: None,
+            sparse: None,
         }],
     )
     .unwrap();
@@ -274,6 +302,10 @@ fn provenance_written_to_search_log_on_disk() {
             query_vector: None,
             facets: Vec::new(),
             facet_top_n: None,
+            query_sparse: None,
+            bm25_params: None,
+            field_boosts: std::collections::HashMap::new(),
+            decay: None,
         },
     )
     .unwrap();

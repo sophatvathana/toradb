@@ -15,6 +15,7 @@ fn tier1_respects_budget() {
                 ),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
             4,
             IngestOptions::default(),

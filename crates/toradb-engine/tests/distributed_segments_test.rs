@@ -15,6 +15,7 @@ fn distributed_sql_sets_parallel_segment_scan() {
                 text: format!("Nikola Tesla document {i} motor"),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             })
             .collect();
         dag.add_documents("docs", docs).expect("add");

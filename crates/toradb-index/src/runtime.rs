@@ -37,15 +37,21 @@ impl RetrievalRuntime {
         };
 
         if batch.tier1_enable_sparse {
-            let sparse = match batch.sparse_backend.as_str() {
-                "splade" => crate::sparse::splade::search(&self.store, table, q, cap),
-                "seismic" => crate::sparse::seismic::search(&self.store, table, q, cap),
-                _ => self
-                    .store
+            let learned = crate::sparse::learned::SparseProfile::from_backend(
+                batch.sparse_backend.as_str(),
+            )
+            .and_then(|profile| {
+                let t = self.store.table(table)?;
+                let qs = batch.query_sparse.as_ref()?;
+                (t.has_sparse_index() && !qs.is_empty())
+                    .then(|| t.sparse_search(qs, cap, profile))
+            });
+            let sparse = learned.unwrap_or_else(|| {
+                self.store
                     .table(table)
-                    .map(|t| t.bm25_search(q, cap))
-                    .unwrap_or_default(),
-            };
+                    .map(|t| t.bm25_search_params(q, cap, batch.bm25_params))
+                    .unwrap_or_default()
+            });
             if let Some(p) = prov.as_mut() {
                 for (i, &id) in sparse.ids.iter().enumerate() {
                     p.record_bm25(id, sparse.scores[i]);

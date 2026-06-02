@@ -51,6 +51,7 @@ fn compact_full_migrates_legacy_segments_to_native_typed_layout() {
             text: "other".into(),
             metadata: [("rank".to_string(), "5".to_string())].into(),
             vector: None,
+            sparse: None,
         }],
     )
     .ok();

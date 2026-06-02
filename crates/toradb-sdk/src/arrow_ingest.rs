@@ -63,6 +63,7 @@ fn ingest_record_batch(batch: &RecordBatch) -> Result<Vec<IngestDoc>, String> {
             text,
             metadata,
             vector,
+            sparse: None,
         });
     }
     Ok(docs)

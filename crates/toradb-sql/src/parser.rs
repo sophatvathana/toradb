@@ -196,7 +196,7 @@ fn where_clause_boundary(tokens: &[Token], i: usize) -> bool {
         k.as_str(),
         "GROUP" | "HAVING" | "ORDER" | "LIMIT" | "OFFSET" | "SPARSE" | "VECTOR" | "JOIN"
             | "HYDE" | "CRAG" | "GRAPH" | "FUSION" | "DISTRIBUTED" | "STREAM" | "EXPLAIN"
-            | "FACETS"
+            | "FACETS" | "BOOST" | "DECAY"
     ))
 }
 
@@ -391,6 +391,59 @@ fn parse_facets_clause(tokens: &[Token], i: &mut usize) -> Result<Vec<String>, S
     Ok(out)
 }
 
+/// `BOOST(field, factor)` — single clause; the caller loops for repeats.
+fn parse_boost_clause(tokens: &[Token], i: &mut usize) -> Result<(String, f32), String> {
+    expect_ident(tokens, i, "BOOST")?;
+    if !matches!(tokens.get(*i), Some(Token::LParen)) {
+        return Err("BOOST requires (field, factor)".into());
+    }
+    *i += 1;
+    let field = ident_at(tokens, *i)
+        .ok_or("BOOST requires a field name")?
+        .to_lowercase();
+    *i += 1;
+    if !matches!(tokens.get(*i), Some(Token::Comma)) {
+        return Err("BOOST requires (field, factor)".into());
+    }
+    *i += 1;
+    let factor = number_at_f32(tokens, i).ok_or("BOOST factor must be a number")?;
+    if !matches!(tokens.get(*i), Some(Token::RParen)) {
+        return Err("BOOST requires closing )".into());
+    }
+    *i += 1;
+    Ok((field, factor))
+}
+
+/// `DECAY(field, half_life=days)` - temporal decay.
+fn parse_decay_clause(tokens: &[Token], i: &mut usize) -> Result<(String, f32), String> {
+    expect_ident(tokens, i, "DECAY")?;
+    if !matches!(tokens.get(*i), Some(Token::LParen)) {
+        return Err("DECAY requires (field, half_life=N)".into());
+    }
+    *i += 1;
+    let field = ident_at(tokens, *i)
+        .ok_or("DECAY requires a field name")?
+        .to_lowercase();
+    *i += 1;
+    if !matches!(tokens.get(*i), Some(Token::Comma)) {
+        return Err("DECAY requires (field, half_life=N)".into());
+    }
+    *i += 1;
+    // optional `half_life` keyword
+    if matches!(tokens.get(*i), Some(Token::Ident(k)) if k.eq_ignore_ascii_case("half_life")) {
+        *i += 1;
+        if matches!(tokens.get(*i), Some(Token::Eq)) {
+            *i += 1;
+        }
+    }
+    let half_life = number_at_f32(tokens, i).ok_or("DECAY half_life must be a number")?;
+    if !matches!(tokens.get(*i), Some(Token::RParen)) {
+        return Err("DECAY requires closing )".into());
+    }
+    *i += 1;
+    Ok((field, half_life))
+}
+
 fn parse_float_list(tokens: &[Token], i: &mut usize) -> Result<Vec<f32>, String> {
     if !matches!(tokens.get(*i), Some(Token::LBracket)) {
         return Err("ANN vector literal requires [...]".into());
@@ -460,11 +513,25 @@ fn parse_vector_search(
     Ok((true, vector_query, vector_text))
 }
 
+fn number_at_f32(tokens: &[Token], i: &mut usize) -> Option<f32> {
+    match tokens.get(*i) {
+        Some(Token::Float(f)) => {
+            *i += 1;
+            Some(*f)
+        }
+        Some(Token::Number(n)) => {
+            *i += 1;
+            Some(*n as f32)
+        }
+        _ => None,
+    }
+}
+
 fn parse_sparse_search(
     tokens: &[Token],
     i: &mut usize,
-) -> Result<(Option<String>, Option<String>), String> {
-    // SPARSE SEARCH <col> BM25 ( 'query' )
+) -> Result<(Option<String>, Option<String>, Option<f32>, Option<f32>), String> {
+    // SPARSE SEARCH <col> BM25 ( 'query' [, k1=1.5] [, b=0.6] )
     expect_ident(tokens, i, "SPARSE")?;
     expect_ident(tokens, i, "SEARCH")?;
     if ident_at(tokens, *i).is_some() {
@@ -482,17 +549,40 @@ fn parse_sparse_search(
         *i += 1;
     }
     let mut query = None;
+    let mut k1 = None;
+    let mut b = None;
     if matches!(tokens.get(*i), Some(Token::LParen)) {
         *i += 1;
         if let Some(Token::String(q)) = tokens.get(*i) {
             query = Some(q.clone());
             *i += 1;
         }
+        while matches!(tokens.get(*i), Some(Token::Comma)) {
+            *i += 1;
+            let name = ident_at(tokens, *i).map(|s| s.to_lowercase());
+            match name.as_deref() {
+                Some(p @ ("k1" | "b")) => {
+                    let is_k1 = p == "k1";
+                    *i += 1;
+                    if matches!(tokens.get(*i), Some(Token::Eq)) {
+                        *i += 1;
+                    }
+                    let val = number_at_f32(tokens, i)
+                        .ok_or("BM25 k1/b requires a number")?;
+                    if is_k1 {
+                        k1 = Some(val);
+                    } else {
+                        b = Some(val);
+                    }
+                }
+                _ => return Err("BM25 only accepts k1= and b= params".into()),
+            }
+        }
         if matches!(tokens.get(*i), Some(Token::RParen)) {
             *i += 1;
         }
     }
-    Ok((method, query))
+    Ok((method, query, k1, b))
 }
 
 fn parse_qualified_column(tokens: &[Token], i: &mut usize) -> Result<(String, String), String> {
@@ -585,6 +675,10 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
     let mut where_clause = None;
     let mut having_clause = None;
     let mut facets = Vec::new();
+    let mut bm25_k1: Option<f32> = None;
+    let mut bm25_b: Option<f32> = None;
+    let mut field_boosts: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+    let mut decay: Option<(String, f32)> = None;
     while *i < tokens.len() && !matches!(tokens.get(*i), Some(Token::Eof) | Some(Token::RParen)) {
         match tokens.get(*i) {
             Some(Token::Ident(k)) if k == "HYDE" => {
@@ -628,9 +722,15 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
                 *i += 1;
             }
             Some(Token::Ident(k)) if k == "SPARSE" => {
-                let (method, query) = parse_sparse_search(tokens, i)?;
+                let (method, query, k1, b) = parse_sparse_search(tokens, i)?;
                 sparse = method.or(Some("bm25".into()));
                 sparse_query = query;
+                if k1.is_some() {
+                    bm25_k1 = k1;
+                }
+                if b.is_some() {
+                    bm25_b = b;
+                }
             }
             Some(Token::Ident(k)) if k == "VECTOR" => {
                 let (v, vq, vt) = parse_vector_search(tokens, i)?;
@@ -667,6 +767,13 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
             Some(Token::Ident(k)) if k == "FACETS" => {
                 facets = parse_facets_clause(tokens, i)?;
             }
+            Some(Token::Ident(k)) if k == "BOOST" => {
+                let (field, factor) = parse_boost_clause(tokens, i)?;
+                field_boosts.insert(field, factor);
+            }
+            Some(Token::Ident(k)) if k == "DECAY" => {
+                decay = Some(parse_decay_clause(tokens, i)?);
+            }
             Some(Token::Semi) | Some(Token::Eof) | Some(Token::RParen) => break,
             _ => *i += 1,
         }
@@ -697,6 +804,10 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
         where_clause,
         having_clause,
         facets,
+        bm25_k1,
+        bm25_b,
+        field_boosts,
+        decay,
     })
 }
 

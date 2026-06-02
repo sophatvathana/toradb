@@ -22,6 +22,7 @@ fn turboquant_sidecar_respects_env_flag() {
             text: "vec doc".into(),
             metadata: Default::default(),
             vector: Some(vec![0.5, 1.0, 1.5, 2.0]),
+            sparse: None,
         }],
     )
     .unwrap();
@@ -40,6 +41,7 @@ fn turboquant_sidecar_respects_env_flag() {
             text: format!("vec doc {i}"),
             metadata: Default::default(),
             vector: Some(make_vec(i as u64)),
+            sparse: None,
         })
         .collect();
     dag.add_documents("emb_tq", docs).unwrap();

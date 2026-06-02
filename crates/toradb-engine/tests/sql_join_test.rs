@@ -16,11 +16,13 @@ fn sql_search_join_filters_by_metadata_match() {
                     text: "Nikola Tesla alternating current motor".into(),
                     metadata: [("paper_id".into(), "p1".into())].into(),
                     vector: None,
+                    sparse: None,
                 },
                 IngestDoc {
                     text: "Nikola Tesla wireless power".into(),
                     metadata: [("paper_id".into(), "p2".into())].into(),
                     vector: None,
+                    sparse: None,
                 },
             ],
         )
@@ -31,6 +33,7 @@ fn sql_search_join_filters_by_metadata_match() {
                 text: "citation for p1".into(),
                 metadata: [("paper_id".into(), "p1".into())].into(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("citations");
@@ -84,6 +87,7 @@ fn sql_with_join_combines_cte_and_metadata_join() {
                 text: "Tesla coil paper".into(),
                 metadata: [("paper_id".into(), "p1".into())].into(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("papers");
@@ -93,6 +97,7 @@ fn sql_with_join_combines_cte_and_metadata_join() {
                 text: "citation".into(),
                 metadata: [("paper_id".into(), "p1".into())].into(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("citations");

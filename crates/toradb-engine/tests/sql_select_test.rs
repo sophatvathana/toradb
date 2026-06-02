@@ -15,11 +15,13 @@ fn sql_select_runs_sparse_search() {
                 text: "Nikola Tesla alternating current motor".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "Marie Curie radioactivity".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
         ],
     )
@@ -103,11 +105,13 @@ fn sql_select_with_cte_supports_analytics() {
                 text: "Nikola Tesla".into(),
                 metadata: [("tag".into(), "science".into())].into(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "Marie Curie".into(),
                 metadata: [("tag".into(), "science".into())].into(),
                 vector: None,
+                sparse: None,
             },
         ],
     )

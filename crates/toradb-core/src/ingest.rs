@@ -8,6 +8,8 @@ pub struct IngestOptions {
     pub defer_compaction: bool,
     /// Skip in-memory BM25 updates per doc (segment sidecars built on flush; merged at finish).
     pub defer_bm25: bool,
+    /// Skip in-memory learned-sparse updates per doc (rebuilt from stored maps at finish).
+    pub defer_sparse: bool,
     /// Skip sequential graph edge inserts between adjacent doc ids.
     pub defer_graph: bool,
     /// Append WAL flush records without fsync until bulk finish (group commit).
@@ -22,6 +24,7 @@ impl IngestOptions {
             defer_table_indexes: true,
             defer_compaction: true,
             defer_bm25: true,
+            defer_sparse: true,
             defer_graph: true,
             defer_wal_fsync: true,
         }

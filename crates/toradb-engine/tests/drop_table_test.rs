@@ -14,6 +14,7 @@ fn drop_table_removes_disk_and_corpus() {
                 text: "to delete".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .expect("add");

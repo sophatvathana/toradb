@@ -15,11 +15,13 @@ fn vector_sidecar_written_on_flush_and_used_on_reload() {
                     text: "alpha".into(),
                     metadata: Default::default(),
                     vector: Some(vec![1.0, 0.0, 0.0, 0.0]),
+                    sparse: None,
                 },
                 IngestDoc {
                     text: "beta".into(),
                     metadata: Default::default(),
                     vector: Some(vec![0.0, 1.0, 0.0, 0.0]),
+                    sparse: None,
                 },
             ],
         )
@@ -62,6 +64,7 @@ fn reload_uses_per_segment_vectors_when_table_sidecar_missing() {
                 text: "gamma".into(),
                 metadata: Default::default(),
                 vector: Some(vec![0.5, 0.5]),
+                sparse: None,
             }],
         )
         .expect("add");

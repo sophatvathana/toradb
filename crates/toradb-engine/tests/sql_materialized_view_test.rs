@@ -16,11 +16,13 @@ fn materialized_view_create_select_and_refresh() {
                     text: "Nikola Tesla motor".into(),
                     metadata: Default::default(),
                     vector: None,
+                    sparse: None,
                 },
                 IngestDoc {
                     text: "Marie Curie radioactivity".into(),
                     metadata: Default::default(),
                     vector: None,
+                    sparse: None,
                 },
             ],
         )
@@ -61,6 +63,7 @@ fn materialized_view_create_select_and_refresh() {
             text: "Nikola Tesla coil".into(),
             metadata: Default::default(),
             vector: None,
+            sparse: None,
         }],
     )
     .expect("add more");

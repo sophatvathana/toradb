@@ -12,10 +12,14 @@ pub fn format_select(sel: &SelectStmt) -> String {
     }
     if let Some(ref q) = sel.sparse_query {
         let method = sel.sparse.as_deref().unwrap_or("bm25");
-        parts.push(format!(
-            "SPARSE SEARCH body {}('{q}')",
-            method.to_uppercase()
-        ));
+        let mut args = format!("'{q}'");
+        if let Some(k1) = sel.bm25_k1 {
+            args.push_str(&format!(", k1={k1}"));
+        }
+        if let Some(b) = sel.bm25_b {
+            args.push_str(&format!(", b={b}"));
+        }
+        parts.push(format!("SPARSE SEARCH body {}({args})", method.to_uppercase()));
     }
     if sel.vector {
         if let Some(ref v) = sel.vector_query {
@@ -42,6 +46,14 @@ pub fn format_select(sel: &SelectStmt) -> String {
     }
     if !sel.facets.is_empty() {
         parts.push(format!("FACETS ({})", sel.facets.join(", ")));
+    }
+    let mut boost_fields: Vec<(&String, &f32)> = sel.field_boosts.iter().collect();
+    boost_fields.sort_by(|a, b| a.0.cmp(b.0));
+    for (field, factor) in boost_fields {
+        parts.push(format!("BOOST({field}, {factor})"));
+    }
+    if let Some((ref field, half_life)) = sel.decay {
+        parts.push(format!("DECAY({field}, half_life={half_life})"));
     }
     parts.push(format!("LIMIT {}", sel.limit));
     if sel.offset > 0 {

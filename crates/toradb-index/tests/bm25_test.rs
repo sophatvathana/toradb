@@ -13,11 +13,13 @@ fn bm25_ranks_matching_document_first() {
                 text: "Nikola Tesla invented the alternating current induction motor and polyphase AC systems".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "Marie Curie studied radioactivity and won two Nobel prizes in physics and chemistry".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
         ],
         4,

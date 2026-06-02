@@ -16,6 +16,7 @@ fn compact_table_merges_small_segments() {
                 text: format!("doc {i}"),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             }],
         )
         .unwrap();
@@ -53,6 +54,7 @@ fn compact_table_sql() {
             text: "a".into(),
             metadata: Default::default(),
             vector: None,
+            sparse: None,
         }],
     )
     .unwrap();
@@ -62,6 +64,7 @@ fn compact_table_sql() {
             text: "b".into(),
             metadata: Default::default(),
             vector: None,
+            sparse: None,
         }],
     )
     .unwrap();
@@ -91,11 +94,13 @@ fn compact_preserves_documents() {
                 text: "one".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
             IngestDoc {
                 text: "two".into(),
                 metadata: Default::default(),
                 vector: None,
+                sparse: None,
             },
         ],
     )
@@ -106,6 +111,7 @@ fn compact_preserves_documents() {
             text: "three".into(),
             metadata: Default::default(),
             vector: None,
+            sparse: None,
         }],
     )
     .unwrap();
@@ -219,6 +225,7 @@ fn make_doc(text: &str) -> IngestDoc {
         text: text.to_string(),
         metadata: Default::default(),
         vector: None,
+        sparse: None,
     }
 }
 
