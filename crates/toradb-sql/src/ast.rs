@@ -91,11 +91,7 @@ impl Expr {
             Expr::Column(c) => c.clone(),
             Expr::Literal(l) => l.clone(),
             Expr::Func { name, args } => {
-                let inner = args
-                    .iter()
-                    .map(|a| a.alias())
-                    .collect::<Vec<_>>()
-                    .join(",");
+                let inner = args.iter().map(|a| a.alias()).collect::<Vec<_>>().join(",");
                 format!("{name}({inner})")
             }
         }
@@ -127,9 +123,7 @@ impl SelectExpr {
             SelectExpr::Column { name, alias } => {
                 Some(alias.clone().unwrap_or_else(|| name.clone()))
             }
-            SelectExpr::Func { expr, alias } => {
-                Some(alias.clone().unwrap_or_else(|| expr.alias()))
-            }
+            SelectExpr::Func { expr, alias } => Some(alias.clone().unwrap_or_else(|| expr.alias())),
             SelectExpr::Aggregate { .. } => None,
         }
     }

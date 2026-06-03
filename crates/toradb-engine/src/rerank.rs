@@ -28,7 +28,14 @@ pub fn apply_ranking_knobs(
         .into_iter()
         .collect();
 
-    apply_ranking_knobs_with_docs(candidates, &docs, field_boosts, decay, now_unix_millis, prov);
+    apply_ranking_knobs_with_docs(
+        candidates,
+        &docs,
+        field_boosts,
+        decay,
+        now_unix_millis,
+        prov,
+    );
     Ok(())
 }
 

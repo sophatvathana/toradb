@@ -226,7 +226,13 @@ pub async fn list_connections(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ConnectionResponse>>, ApiError> {
     let store = lock_store(&state)?;
-    Ok(Json(store.connections().iter().map(connection_response).collect()))
+    Ok(Json(
+        store
+            .connections()
+            .iter()
+            .map(connection_response)
+            .collect(),
+    ))
 }
 
 pub async fn create_connection(
@@ -259,7 +265,10 @@ pub async fn upload_connection(
     {
         match field.name().unwrap_or("") {
             "name" => {
-                name = field.text().await.map_err(|e| ApiError::bad_request(e.to_string()))?
+                name = field
+                    .text()
+                    .await
+                    .map_err(|e| ApiError::bad_request(e.to_string()))?
             }
             "file" => {
                 filename = field.file_name().unwrap_or("upload.db").to_string();
@@ -296,16 +305,14 @@ pub async fn upload_connection(
     let path = dir.join(&stamped);
     std::fs::write(&path, &bytes).map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let abs = path
-        .canonicalize()
-        .unwrap_or(path)
-        .display()
-        .to_string();
+    let abs = path.canonicalize().unwrap_or(path).display().to_string();
     let url = format!("sqlite://{abs}?mode=ro");
 
     if let Err(e) = toradb_pipe::validate_sqlite(&url).await {
         let _ = std::fs::remove_file(&dir.join(&stamped));
-        return Err(ApiError::bad_request(format!("not a valid SQLite database: {e}")));
+        return Err(ApiError::bad_request(format!(
+            "not a valid SQLite database: {e}"
+        )));
     }
 
     let mut store = lock_store(&state)?;
@@ -445,7 +452,9 @@ pub async fn list_pipelines(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<PipelineResponse>>, ApiError> {
     let store = lock_store(&state)?;
-    Ok(Json(store.pipelines().iter().map(pipeline_response).collect()))
+    Ok(Json(
+        store.pipelines().iter().map(pipeline_response).collect(),
+    ))
 }
 
 pub async fn get_pipeline(
@@ -632,9 +641,7 @@ pub struct EmbedResponse {
     vector: Vec<f32>,
 }
 
-pub async fn embed_query(
-    Json(body): Json<EmbedBody>,
-) -> Result<Json<EmbedResponse>, ApiError> {
+pub async fn embed_query(Json(body): Json<EmbedBody>) -> Result<Json<EmbedResponse>, ApiError> {
     let vector = toradb_pipe::embed_query(&body.embedder, &body.text)
         .await
         .map_err(ApiError::internal)?;
@@ -648,7 +655,15 @@ struct ApiSyncReporter {
 
 impl JobReporter for ApiSyncReporter {
     fn progress(&self, phase: &str, rows: u64, pct: Option<u8>) {
-        update_sync_job(&self.state, self.job_id, "running", Some(phase.to_string()), None, pct, Some(rows));
+        update_sync_job(
+            &self.state,
+            self.job_id,
+            "running",
+            Some(phase.to_string()),
+            None,
+            pct,
+            Some(rows),
+        );
     }
     fn is_cancelled(&self) -> bool {
         self.state
@@ -734,7 +749,15 @@ pub fn spawn_sync_job(state: &AppState, pipeline_id: &str) -> Option<u64> {
         };
 
         let Some(url) = url else {
-            update_sync_job(&state2, job_id, "failed", Some("failed".into()), Some("connection not found".into()), None, None);
+            update_sync_job(
+                &state2,
+                job_id,
+                "failed",
+                Some("failed".into()),
+                Some("connection not found".into()),
+                None,
+                None,
+            );
             return;
         };
 
@@ -755,7 +778,13 @@ pub fn spawn_sync_job(state: &AppState, pipeline_id: &str) -> Option<u64> {
                 if let Ok(mut s) = state2.pipe_store.lock() {
                     let _ = s.set_last_cursor(&pid, outcome.cursor_after.clone());
                     if let Some(rid) = run_id {
-                        s.finish_run(rid, &outcome.state, outcome.rows, None, outcome.cursor_after);
+                        s.finish_run(
+                            rid,
+                            &outcome.state,
+                            outcome.rows,
+                            None,
+                            outcome.cursor_after,
+                        );
                     }
                 }
                 let final_state = if outcome.state == "cancelled" {
@@ -763,7 +792,15 @@ pub fn spawn_sync_job(state: &AppState, pipeline_id: &str) -> Option<u64> {
                 } else {
                     "done"
                 };
-                update_sync_job(&state2, job_id, final_state, Some(final_state.into()), None, Some(100), Some(outcome.rows));
+                update_sync_job(
+                    &state2,
+                    job_id,
+                    final_state,
+                    Some(final_state.into()),
+                    None,
+                    Some(100),
+                    Some(outcome.rows),
+                );
             }
             Err(e) => {
                 if let Ok(mut s) = state2.pipe_store.lock() {
@@ -771,7 +808,15 @@ pub fn spawn_sync_job(state: &AppState, pipeline_id: &str) -> Option<u64> {
                         s.finish_run(rid, "failed", 0, Some(e.clone()), None);
                     }
                 }
-                update_sync_job(&state2, job_id, "failed", Some("failed".into()), Some(e), None, None);
+                update_sync_job(
+                    &state2,
+                    job_id,
+                    "failed",
+                    Some("failed".into()),
+                    Some(e),
+                    None,
+                    None,
+                );
             }
         }
         // Clear any cancel flag for this job id.
@@ -843,13 +888,14 @@ pub async fn auth_login(
     };
     match token {
         Some(token) => {
-            let cookie = format!(
-                "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800"
-            );
+            let cookie =
+                format!("{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800");
             let mut resp = Json(serde_json::json!({ "ok": true })).into_response();
             resp.headers_mut().insert(
                 header::SET_COOKIE,
-                cookie.parse().map_err(|_| ApiError::internal("bad cookie"))?,
+                cookie
+                    .parse()
+                    .map_err(|_| ApiError::internal("bad cookie"))?,
             );
             Ok(resp)
         }
@@ -862,7 +908,9 @@ pub async fn auth_logout() -> Result<Response, ApiError> {
     let mut resp = Json(serde_json::json!({ "ok": true })).into_response();
     resp.headers_mut().insert(
         header::SET_COOKIE,
-        cookie.parse().map_err(|_| ApiError::internal("bad cookie"))?,
+        cookie
+            .parse()
+            .map_err(|_| ApiError::internal("bad cookie"))?,
     );
     Ok(resp)
 }
@@ -881,7 +929,9 @@ pub async fn list_api_keys(
     State(_state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Keys are write-only (hashed); we don't list raw values.
-    Ok(Json(serde_json::json!({ "note": "API keys are shown once at creation" })))
+    Ok(Json(
+        serde_json::json!({ "note": "API keys are shown once at creation" }),
+    ))
 }
 
 pub async fn create_api_key(
@@ -892,7 +942,9 @@ pub async fn create_api_key(
         .auth
         .lock()
         .map_err(|_| ApiError::internal("auth lock poisoned"))?;
-    let raw = auth.create_api_key(&body.name).map_err(ApiError::internal)?;
+    let raw = auth
+        .create_api_key(&body.name)
+        .map_err(ApiError::internal)?;
     Ok(Json(serde_json::json!({ "key": raw })))
 }
 
@@ -900,7 +952,8 @@ fn cookie_value<'a>(headers: &'a axum::http::HeaderMap, name: &str) -> Option<&'
     let raw = headers.get(header::COOKIE)?.to_str().ok()?;
     raw.split(';').find_map(|kv| {
         let kv = kv.trim();
-        kv.strip_prefix(name).and_then(|rest| rest.strip_prefix('='))
+        kv.strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix('='))
     })
 }
 
@@ -942,7 +995,10 @@ pub async fn auth_middleware(
     if ok {
         next.run(request).await
     } else {
-        (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "unauthorized" })))
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "unauthorized" })),
+        )
             .into_response()
     }
 }

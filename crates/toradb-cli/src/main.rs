@@ -223,8 +223,8 @@ fn main() -> Result<(), String> {
 fn run_pipe(cmd: PipeCommand) -> Result<(), String> {
     use std::sync::Mutex;
     use toradb_pipe::{
-        install_drivers, open_sql_source, run_pipeline, ColumnMapping, JobReporter, Pipeline,
-        PipeStore, SyncMode,
+        install_drivers, open_sql_source, run_pipeline, ColumnMapping, JobReporter, PipeStore,
+        Pipeline, SyncMode,
     };
 
     struct CliReporter;

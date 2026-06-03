@@ -129,7 +129,7 @@ pub fn metadata_matches(
             };
             let lv = eval_expr(lhs, &row, col_types, now_millis);
             let Some(stored) = lv.as_string() else {
-                return false;  
+                return false;
             };
             let ty = match lhs {
                 Expr::Column(c) => col_types.get(c).copied().unwrap_or(ColumnType::Text),

@@ -275,7 +275,9 @@ pub fn run_table_search(
                         .collect(),
                 ),
             };
-        let docs = shared_docs.as_ref().unwrap_or_else(|| page_docs.as_ref().expect("page docs"));
+        let docs = shared_docs
+            .as_ref()
+            .unwrap_or_else(|| page_docs.as_ref().expect("page docs"));
         page.ids
             .iter()
             .map(|id| {

@@ -1,13 +1,18 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use argon2::password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::password_hash::{
+    rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
+};
 use argon2::Argon2;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 const SESSION_TTL_SECS: u64 = 60 * 60 * 24 * 7; // 7 days
@@ -60,7 +65,11 @@ fn hash_secret(raw: &str) -> Result<String, String> {
 fn verify_secret(raw: &str, hash: &str) -> bool {
     PasswordHash::new(hash)
         .ok()
-        .map(|parsed| Argon2::default().verify_password(raw.as_bytes(), &parsed).is_ok())
+        .map(|parsed| {
+            Argon2::default()
+                .verify_password(raw.as_bytes(), &parsed)
+                .is_ok()
+        })
         .unwrap_or(false)
 }
 
@@ -150,7 +159,11 @@ impl AuthStore {
         if !constant_time_eq(sig, &expected) {
             return None;
         }
-        self.file.users.iter().find(|u| u.id == uid).map(|u| u.id.clone())
+        self.file
+            .users
+            .iter()
+            .find(|u| u.id == uid)
+            .map(|u| u.id.clone())
     }
 
     pub fn create_api_key(&mut self, name: &str) -> Result<String, String> {
@@ -167,11 +180,18 @@ impl AuthStore {
     }
 
     pub fn verify_api_key(&self, raw: &str) -> bool {
-        self.file.api_keys.iter().any(|k| verify_secret(raw, &k.key_hash))
+        self.file
+            .api_keys
+            .iter()
+            .any(|k| verify_secret(raw, &k.key_hash))
     }
 
     pub fn user_name(&self, id: &str) -> Option<String> {
-        self.file.users.iter().find(|u| u.id == id).map(|u| u.name.clone())
+        self.file
+            .users
+            .iter()
+            .find(|u| u.id == id)
+            .map(|u| u.name.clone())
     }
 }
 

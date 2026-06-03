@@ -97,7 +97,10 @@ fn apply_distinct(
             match item {
                 SelectExpr::All => {
                     key.push(id.to_string());
-                    key.push(format!("{:.6}", candidates.scores.get(i).copied().unwrap_or(0.0)));
+                    key.push(format!(
+                        "{:.6}",
+                        candidates.scores.get(i).copied().unwrap_or(0.0)
+                    ));
                     key.push(doc.map(|d| d.text.clone()).unwrap_or_default());
                 }
                 SelectExpr::Column { name, .. } => key.push(match name.as_str() {
@@ -320,26 +323,40 @@ pub fn project_retrieval_columns(
     let text_col = || {
         SqlProjectedColumn::Str(
             ids.iter()
-                .map(|id| docs_by_id.get(id).map(|d| d.text.clone()).unwrap_or_default())
+                .map(|id| {
+                    docs_by_id
+                        .get(id)
+                        .map(|d| d.text.clone())
+                        .unwrap_or_default()
+                })
                 .collect(),
         )
     };
 
     let mut out: Vec<(String, SqlProjectedColumn)> = Vec::new();
-    let push_unique = |out: &mut Vec<(String, SqlProjectedColumn)>, name: String, data: SqlProjectedColumn| {
-        if !out.iter().any(|(c, _)| *c == name) {
-            out.push((name, data));
-        }
-    };
+    let push_unique =
+        |out: &mut Vec<(String, SqlProjectedColumn)>, name: String, data: SqlProjectedColumn| {
+            if !out.iter().any(|(c, _)| *c == name) {
+                out.push((name, data));
+            }
+        };
     if sel.select_items.is_empty() {
         push_unique(&mut out, "id".into(), SqlProjectedColumn::U64(ids.to_vec()));
-        push_unique(&mut out, "score".into(), SqlProjectedColumn::F32(scores.to_vec()));
+        push_unique(
+            &mut out,
+            "score".into(),
+            SqlProjectedColumn::F32(scores.to_vec()),
+        );
     }
     for item in &sel.select_items {
         match item {
             SelectExpr::All => {
                 push_unique(&mut out, "id".into(), SqlProjectedColumn::U64(ids.to_vec()));
-                push_unique(&mut out, "score".into(), SqlProjectedColumn::F32(scores.to_vec()));
+                push_unique(
+                    &mut out,
+                    "score".into(),
+                    SqlProjectedColumn::F32(scores.to_vec()),
+                );
                 push_unique(&mut out, "text".into(), text_col());
             }
             SelectExpr::Column { name, .. } => {
@@ -763,8 +780,7 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
     }
     let knobs = crate::rerank::knobs_active(&batch.field_boosts, &batch.decay);
     let order_by_metadata = sel.order_by.as_ref().filter(|ob| ob.column != "score");
-    let want_docs =
-        knobs || order_by_metadata.is_some() || sel.distinct || !sel.facets.is_empty();
+    let want_docs = knobs || order_by_metadata.is_some() || sel.distinct || !sel.facets.is_empty();
     let shared_docs: Option<HashMap<u64, toradb_index::IngestDoc>> = if want_docs {
         Some(
             dag.fetch_documents(&sel.table, &candidates.ids)?
@@ -776,7 +792,9 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
     };
 
     if knobs {
-        let docs = shared_docs.as_ref().expect("docs fetched when knobs active");
+        let docs = shared_docs
+            .as_ref()
+            .expect("docs fetched when knobs active");
         crate::rerank::apply_ranking_knobs_with_docs(
             &mut candidates,
             docs,

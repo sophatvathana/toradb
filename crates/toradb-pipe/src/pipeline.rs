@@ -1,11 +1,10 @@
-
 use std::sync::{Arc, Mutex};
 
 use toradb_engine::DagRunner;
 
 use crate::model::{Pipeline, SyncMode};
 use crate::source::{row_to_doc, Batch, Cursor, Source};
-    
+
 pub trait JobReporter: Send + Sync {
     fn progress(&self, phase: &str, rows: u64, pct: Option<u8>);
     fn is_cancelled(&self) -> bool {
@@ -61,12 +60,11 @@ pub async fn run_pipeline(
 
     loop {
         if reporter.is_cancelled() {
-            return finish_session(&dag, &table, total, false)
-                .map(|_| RunOutcome {
-                    rows: total,
-                    cursor_after: max_cursor.clone(),
-                    state: "cancelled".into(),
-                });
+            return finish_session(&dag, &table, total, false).map(|_| RunOutcome {
+                rows: total,
+                cursor_after: max_cursor.clone(),
+                state: "cancelled".into(),
+            });
         }
 
         let Batch { rows, next } = source.fetch_batch(&cursor, batch_size).await?;

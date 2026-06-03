@@ -143,7 +143,10 @@ fn column_alias_explicit_and_bare() {
 
     // no alias keeps the column name
     let sel = select("SELECT category FROM docs");
-    assert_eq!(sel.select_items[0].output_name().as_deref(), Some("category"));
+    assert_eq!(
+        sel.select_items[0].output_name().as_deref(),
+        Some("category")
+    );
 }
 
 #[test]

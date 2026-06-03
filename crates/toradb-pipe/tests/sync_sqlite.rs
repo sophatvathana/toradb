@@ -2,8 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use toradb_engine::DagRunner;
 use toradb_pipe::{
-    install_drivers, open_sql_source, run_pipeline, ColumnMapping, NullReporter, Pipeline,
-    SyncMode,
+    install_drivers, open_sql_source, run_pipeline, ColumnMapping, NullReporter, Pipeline, SyncMode,
 };
 
 async fn make_source_db(dir: &std::path::Path, rows: &[(i64, &str, &str, &str)]) -> String {
@@ -12,12 +11,10 @@ async fn make_source_db(dir: &std::path::Path, rows: &[(i64, &str, &str, &str)])
     let db_file = dir.join("source.db");
     let url = format!("sqlite://{}?mode=rwc", db_file.display());
     let pool = AnyPool::connect(&url).await.expect("connect source");
-    sqlx::query(
-        "CREATE TABLE docs (id INTEGER PRIMARY KEY, body TEXT, tag TEXT, emb TEXT)",
-    )
-    .execute(&pool)
-    .await
-    .expect("create table");
+    sqlx::query("CREATE TABLE docs (id INTEGER PRIMARY KEY, body TEXT, tag TEXT, emb TEXT)")
+        .execute(&pool)
+        .await
+        .expect("create table");
     for (id, body, tag, emb) in rows {
         sqlx::query("INSERT INTO docs (id, body, tag, emb) VALUES (?, ?, ?, ?)")
             .bind(*id)
@@ -92,10 +89,16 @@ async fn full_sync_maps_text_metadata_vector() {
         .unwrap()
         .into_iter()
         .collect();
-    let alpha = docs.values().find(|doc| doc.text == "alpha").expect("alpha doc");
+    let alpha = docs
+        .values()
+        .find(|doc| doc.text == "alpha")
+        .expect("alpha doc");
     assert_eq!(alpha.metadata.get("tag").map(String::as_str), Some("x"));
     assert_eq!(alpha.vector, Some(vec![0.1, 0.2, 0.3]));
-    let beta = docs.values().find(|doc| doc.text == "beta").expect("beta doc");
+    let beta = docs
+        .values()
+        .find(|doc| doc.text == "beta")
+        .expect("beta doc");
     assert!(
         beta.vector.as_ref().map(|v| v.is_empty()).unwrap_or(true),
         "beta should have no populated vector, got {:?}",
@@ -108,7 +111,11 @@ async fn incremental_sync_advances_watermark() {
     let dir = tempfile::tempdir().unwrap();
     let url = make_source_db(
         dir.path(),
-        &[(1, "one", "a", ""), (2, "two", "a", ""), (3, "three", "b", "")],
+        &[
+            (1, "one", "a", ""),
+            (2, "two", "a", ""),
+            (3, "three", "b", ""),
+        ],
     )
     .await;
 
@@ -224,16 +231,16 @@ async fn sqlite_datetime_column_syncs() {
     let db = dir.path().join("dt.db");
     let url = format!("sqlite://{}?mode=rwc", db.display());
     let pool = SqlitePool::connect(&url).await.unwrap();
+    sqlx::query("CREATE TABLE pages (id INTEGER PRIMARY KEY, body TEXT, scraped_at DATETIME)")
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query(
-        "CREATE TABLE pages (id INTEGER PRIMARY KEY, body TEXT, scraped_at DATETIME)",
+        "INSERT INTO pages (id, body, scraped_at) VALUES (1, 'hello', '2024-06-01 12:00:00')",
     )
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query("INSERT INTO pages (id, body, scraped_at) VALUES (1, 'hello', '2024-06-01 12:00:00')")
-        .execute(&pool)
-        .await
-        .unwrap();
     pool.close().await;
 
     let tdb_dir = dir.path().join("tdb");
@@ -249,7 +256,12 @@ async fn sqlite_datetime_column_syncs() {
 
     let mut d = dag.lock().unwrap();
     d.ensure_table_queryable("docs").unwrap();
-    let (_, doc) = d.fetch_documents("docs", &[0]).unwrap().into_iter().next().unwrap();
+    let (_, doc) = d
+        .fetch_documents("docs", &[0])
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
     assert_eq!(doc.text, "hello");
     assert_eq!(
         doc.metadata.get("scraped_at").map(String::as_str),

@@ -51,13 +51,10 @@ impl Embedder for HttpEmbedder {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
-        let mut req = self
-            .client
-            .post(&self.endpoint)
-            .json(&EmbedRequest {
-                model: &self.model,
-                input: texts,
-            });
+        let mut req = self.client.post(&self.endpoint).json(&EmbedRequest {
+            model: &self.model,
+            input: texts,
+        });
         if let Some(key) = &self.api_key {
             req = req.bearer_auth(key);
         }

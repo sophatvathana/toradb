@@ -101,13 +101,19 @@ pub async fn list_tables(url: &str) -> Result<Vec<String>, String> {
     };
     let out = match &pool {
         DbPool::Any(p) => {
-            let rows = sqlx::query(&sql).fetch_all(p).await.map_err(|e| e.to_string())?;
+            let rows = sqlx::query(&sql)
+                .fetch_all(p)
+                .await
+                .map_err(|e| e.to_string())?;
             rows.iter()
                 .filter_map(|r| r.try_get::<String, _>(0).ok())
                 .collect()
         }
         DbPool::Sqlite(p) => {
-            let rows = sqlx::query(&sql).fetch_all(p).await.map_err(|e| e.to_string())?;
+            let rows = sqlx::query(&sql)
+                .fetch_all(p)
+                .await
+                .map_err(|e| e.to_string())?;
             rows.iter()
                 .filter_map(|r| r.try_get::<String, _>(0).ok())
                 .collect()
@@ -263,11 +269,7 @@ fn row_to_raw_sqlite(row: &SqliteRow) -> RawRow {
 }
 
 fn safe_ident(name: &str) -> Result<&str, String> {
-    if !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+    if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         Ok(name)
     } else {
         Err(format!("unsafe column name: {name:?}"))

@@ -33,7 +33,10 @@ fn str_col(r: &sql_exec::SqlSearchResult, name: &str) -> Vec<String> {
             }
         }
     }
-    panic!("string column {name} not found in {:?}", r.projected.iter().map(|(c, _)| c).collect::<Vec<_>>());
+    panic!(
+        "string column {name} not found in {:?}",
+        r.projected.iter().map(|(c, _)| c).collect::<Vec<_>>()
+    );
 }
 
 fn fresh(name: &str) -> (std::path::PathBuf, DagRunner) {
@@ -72,7 +75,10 @@ fn where_function_filtering() {
         "docs",
         vec![
             doc("a", &[("status", "Active"), ("title", "short")]),
-            doc("b", &[("status", "inactive"), ("title", "a much longer title")]),
+            doc(
+                "b",
+                &[("status", "inactive"), ("title", "a much longer title")],
+            ),
             doc("c", &[("status", "ACTIVE"), ("title", "tiny")]),
         ],
     )
@@ -97,10 +103,10 @@ fn order_by_function() {
     dag.add_documents(
         "docs",
         vec![
-            doc("a", &[("title", "bbb")]),       // len 3
-            doc("b", &[("title", "a")]),         // len 1
-            doc("c", &[("title", "cccc")]),      // len 4
-            doc("d", &[("title", "dd")]),        // len 2
+            doc("a", &[("title", "bbb")]),  // len 3
+            doc("b", &[("title", "a")]),    // len 1
+            doc("c", &[("title", "cccc")]), // len 4
+            doc("d", &[("title", "dd")]),   // len 2
         ],
     )
     .expect("add");

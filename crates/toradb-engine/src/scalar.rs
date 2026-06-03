@@ -237,7 +237,11 @@ fn eval_substr(args: &[ScalarValue]) -> ScalarValue {
     let chars: Vec<char> = s.chars().collect();
     // 1-based start, SQL semantics; clamp to bounds.
     let start_1 = args[1].as_f64().map(|f| f as i64).unwrap_or(1);
-    let start = if start_1 < 1 { 0 } else { (start_1 - 1) as usize };
+    let start = if start_1 < 1 {
+        0
+    } else {
+        (start_1 - 1) as usize
+    };
     if start >= chars.len() {
         return ScalarValue::Str(String::new());
     }
@@ -357,9 +361,18 @@ mod tests {
 
     #[test]
     fn string_funcs() {
-        assert_eq!(ev(&func("lower", vec![lit("AbC")])), ScalarValue::Str("abc".into()));
-        assert_eq!(ev(&func("upper", vec![lit("AbC")])), ScalarValue::Str("ABC".into()));
-        assert_eq!(ev(&func("trim", vec![lit("  hi ")])), ScalarValue::Str("hi".into()));
+        assert_eq!(
+            ev(&func("lower", vec![lit("AbC")])),
+            ScalarValue::Str("abc".into())
+        );
+        assert_eq!(
+            ev(&func("upper", vec![lit("AbC")])),
+            ScalarValue::Str("ABC".into())
+        );
+        assert_eq!(
+            ev(&func("trim", vec![lit("  hi ")])),
+            ScalarValue::Str("hi".into())
+        );
         assert_eq!(ev(&func("length", vec![lit("héllo")])), ScalarValue::Int(5));
         assert_eq!(
             ev(&func("substr", vec![lit("abcdef"), lit("2"), lit("3")])),
@@ -382,22 +395,36 @@ mod tests {
         assert_eq!(ev(&func("floor", vec![lit("3.9")])), ScalarValue::Int(3));
         assert_eq!(ev(&func("ceil", vec![lit("3.1")])), ScalarValue::Int(4));
         assert_eq!(ev(&func("round", vec![lit("3.6")])), ScalarValue::Int(4));
-        assert_eq!(ev(&func("round", vec![lit("3.14159"), lit("2")])), ScalarValue::Float(3.14));
+        assert_eq!(
+            ev(&func("round", vec![lit("3.14159"), lit("2")])),
+            ScalarValue::Float(3.14)
+        );
         // Literal args are untyped strings → float arithmetic; the Int branch is
         // reserved for typed-column values. Display still renders "1".
-        assert_eq!(ev(&func("mod", vec![lit("7"), lit("3")])), ScalarValue::Float(1.0));
         assert_eq!(
-            ev(&func("mod", vec![lit("7"), lit("3")])).as_string().unwrap(),
+            ev(&func("mod", vec![lit("7"), lit("3")])),
+            ScalarValue::Float(1.0)
+        );
+        assert_eq!(
+            ev(&func("mod", vec![lit("7"), lit("3")]))
+                .as_string()
+                .unwrap(),
             "1"
         );
-        assert_eq!(ev(&func("mod", vec![lit("7"), lit("0")])), ScalarValue::Null);
+        assert_eq!(
+            ev(&func("mod", vec![lit("7"), lit("0")])),
+            ScalarValue::Null
+        );
         // Typed Int args take the integer modulo path.
         assert_eq!(
             eval_func("mod", &[ScalarValue::Int(7), ScalarValue::Int(3)], 0),
             ScalarValue::Int(1)
         );
         // nested
-        assert_eq!(ev(&func("round", vec![func("abs", vec![lit("-3.6")])])), ScalarValue::Int(4));
+        assert_eq!(
+            ev(&func("round", vec![func("abs", vec![lit("-3.6")])])),
+            ScalarValue::Int(4)
+        );
         // non-numeric → null
         assert_eq!(ev(&func("abs", vec![lit("foo")])), ScalarValue::Null);
     }
@@ -408,9 +435,18 @@ mod tests {
             ev(&func("coalesce", vec![lit("x"), lit("y")])),
             ScalarValue::Str("x".into())
         );
-        assert_eq!(ev(&func("ifnull", vec![lit("a"), lit("b")])), ScalarValue::Str("a".into()));
-        assert_eq!(ev(&func("nullif", vec![lit("5"), lit("5")])), ScalarValue::Null);
-        assert_eq!(ev(&func("nullif", vec![lit("5"), lit("6")])), ScalarValue::Str("5".into()));
+        assert_eq!(
+            ev(&func("ifnull", vec![lit("a"), lit("b")])),
+            ScalarValue::Str("a".into())
+        );
+        assert_eq!(
+            ev(&func("nullif", vec![lit("5"), lit("5")])),
+            ScalarValue::Null
+        );
+        assert_eq!(
+            ev(&func("nullif", vec![lit("5"), lit("6")])),
+            ScalarValue::Str("5".into())
+        );
     }
 
     #[test]
@@ -444,11 +480,23 @@ mod tests {
             ev(&func("date_trunc", vec![lit("month"), lit(ts)])),
             ScalarValue::Str("2023-11-01T00:00:00".into())
         );
-        assert_eq!(ev(&func("extract", vec![lit("year"), lit(ts)])), ScalarValue::Int(2023));
-        assert_eq!(ev(&func("extract", vec![lit("day"), lit(ts)])), ScalarValue::Int(14));
-        assert_eq!(ev(&func("extract", vec![lit("hour"), lit(ts)])), ScalarValue::Int(22));
+        assert_eq!(
+            ev(&func("extract", vec![lit("year"), lit(ts)])),
+            ScalarValue::Int(2023)
+        );
+        assert_eq!(
+            ev(&func("extract", vec![lit("day"), lit(ts)])),
+            ScalarValue::Int(14)
+        );
+        assert_eq!(
+            ev(&func("extract", vec![lit("hour"), lit(ts)])),
+            ScalarValue::Int(22)
+        );
         // now() returns the threaded clock
-        assert_eq!(ev(&func("now", vec![])), ScalarValue::Int(1_700_000_000_000));
+        assert_eq!(
+            ev(&func("now", vec![])),
+            ScalarValue::Int(1_700_000_000_000)
+        );
         // age() = now - ts
         let age = ev(&func("age", vec![lit(ts)]));
         assert_eq!(age, ScalarValue::Int(0));

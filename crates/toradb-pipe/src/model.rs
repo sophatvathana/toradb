@@ -50,9 +50,7 @@ impl ColumnMapping {
         if name == self.text_column {
             return false;
         }
-        if self.metadata_columns.is_empty()
-            || self.metadata_columns.iter().any(|c| c == "*")
-        {
+        if self.metadata_columns.is_empty() || self.metadata_columns.iter().any(|c| c == "*") {
             return true;
         }
         self.metadata_columns.iter().any(|c| c == name)

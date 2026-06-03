@@ -27,8 +27,8 @@ fn llm_env() -> (Option<String>, Option<String>, Option<String>) {
 
 pub async fn chat_config() -> Result<Json<ChatConfigResponse>, ApiError> {
     let (base, key, model) = llm_env();
-    let proxy_available = base.as_ref().is_some_and(|b| !b.is_empty())
-        && key.as_ref().is_some_and(|k| !k.is_empty());
+    let proxy_available =
+        base.as_ref().is_some_and(|b| !b.is_empty()) && key.as_ref().is_some_and(|k| !k.is_empty());
     Ok(Json(ChatConfigResponse {
         proxy_available,
         default_model: model,
@@ -49,7 +49,10 @@ pub async fn chat_completions(
         ApiError::service_unavailable("LLM proxy: TORADB_LLM_API_KEY is not set.")
     })?;
 
-    let stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+    let stream = body
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let mut upstream_body = body;
     if upstream_body.get("model").is_none() {
@@ -60,10 +63,7 @@ pub async fn chat_completions(
         }
     }
 
-    let url = format!(
-        "{}/chat/completions",
-        base_url.trim_end_matches('/')
-    );
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let client = Client::new();
     let mut req = client.post(&url).bearer_auth(&api_key).json(&upstream_body);
 
@@ -77,8 +77,7 @@ pub async fn chat_completions(
         .await
         .map_err(|e| ApiError::internal(format!("LLM upstream request failed: {e}")))?;
 
-    let status = StatusCode::from_u16(resp.status().as_u16())
-        .unwrap_or(StatusCode::BAD_GATEWAY);
+    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let content_type = resp
         .headers()
         .get(header::CONTENT_TYPE)
@@ -91,16 +90,11 @@ pub async fn chat_completions(
         .to_string();
 
     if stream {
-        let byte_stream = resp.bytes_stream().map(|result| {
-            result.map_err(|e| std::io::Error::other(e.to_string()))
-        });
+        let byte_stream = resp
+            .bytes_stream()
+            .map(|result| result.map_err(|e| std::io::Error::other(e.to_string())));
         let body = Body::from_stream(byte_stream);
-        return Ok((
-            status,
-            [(header::CONTENT_TYPE, content_type)],
-            body,
-        )
-            .into_response());
+        return Ok((status, [(header::CONTENT_TYPE, content_type)], body).into_response());
     }
 
     let bytes = resp

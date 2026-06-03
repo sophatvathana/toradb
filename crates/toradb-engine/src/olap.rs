@@ -136,12 +136,14 @@ fn group_key_eval(
     group_cols
         .iter()
         .enumerate()
-        .map(|(i, col)| match group_exprs.get(i).and_then(|e| e.as_ref()) {
-            Some(expr) => eval_expr(expr, row, col_types, now_millis)
-                .as_string()
-                .unwrap_or_else(|| "_null".into()),
-            None => metadata_field_value(col, row.id, row.metadata),
-        })
+        .map(
+            |(i, col)| match group_exprs.get(i).and_then(|e| e.as_ref()) {
+                Some(expr) => eval_expr(expr, row, col_types, now_millis)
+                    .as_string()
+                    .unwrap_or_else(|| "_null".into()),
+                None => metadata_field_value(col, row.id, row.metadata),
+            },
+        )
         .collect::<Vec<_>>()
         .join("|")
 }
@@ -194,11 +196,11 @@ pub fn count_facets_for_ids(
         .iter()
         .zip(counts.into_iter())
         .map(|(field, map)| {
-            let cmp = |a: &(u64, &str), b: &(u64, &str)| {
-                b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1))
-            };
-            let mut entries: Vec<(u64, &str)> =
-                map.into_iter().map(|(value, count)| (count, value)).collect();
+            let cmp = |a: &(u64, &str), b: &(u64, &str)| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1));
+            let mut entries: Vec<(u64, &str)> = map
+                .into_iter()
+                .map(|(value, count)| (count, value))
+                .collect();
             if top_n > 0 && top_n < entries.len() {
                 entries.select_nth_unstable_by(top_n - 1, cmp);
                 entries.truncate(top_n);
@@ -259,9 +261,9 @@ fn aggregate_specs(sel: &SelectStmt) -> Result<Vec<AggSpec>, String> {
 }
 
 fn agg_value_name(spec: &AggSpec) -> String {
-    spec.alias
-        .clone()
-        .unwrap_or_else(|| value_column_name(&spec.func, spec.arg.as_ref().map(|e| e.alias()).as_deref()))
+    spec.alias.clone().unwrap_or_else(|| {
+        value_column_name(&spec.func, spec.arg.as_ref().map(|e| e.alias()).as_deref())
+    })
 }
 
 enum GroupAccum {

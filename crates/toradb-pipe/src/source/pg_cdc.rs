@@ -22,7 +22,10 @@ impl PgCdcSource {
             escape_ident(slot)?,
             escape_ident(slot)?
         );
-        client.batch_execute(&create).await.map_err(|e| e.to_string())?;
+        client
+            .batch_execute(&create)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(Self {
             client,
             slot: slot.to_string(),
@@ -50,8 +53,14 @@ impl Source for PgCdcSource {
 
     async fn introspect(&self) -> Result<Vec<FieldInfo>, String> {
         Ok(vec![
-            FieldInfo { name: "lsn".into(), data_type: "text".into() },
-            FieldInfo { name: "data".into(), data_type: "text".into() },
+            FieldInfo {
+                name: "lsn".into(),
+                data_type: "text".into(),
+            },
+            FieldInfo {
+                name: "data".into(),
+                data_type: "text".into(),
+            },
         ])
     }
 
@@ -78,7 +87,9 @@ impl Source for PgCdcSource {
         }
         Ok(Batch {
             rows: out,
-            next: last_lsn.map(Cursor::Value).unwrap_or_else(|| _cursor.clone()),
+            next: last_lsn
+                .map(Cursor::Value)
+                .unwrap_or_else(|| _cursor.clone()),
         })
     }
 }

@@ -28,9 +28,8 @@ pub struct PipeStore {
 
 fn read_json<T: DeserializeOwned + Default>(path: &Path) -> Result<T, String> {
     match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| {
-            format!("toradb-pipe: corrupt {}: {e}", path.display())
-        }),
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(|e| format!("toradb-pipe: corrupt {}: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
         Err(e) => Err(e.to_string()),
     }
@@ -245,7 +244,11 @@ impl PipeStore {
     }
 
     fn cap_runs(&mut self, pipeline_id: &str) {
-        let count = self.runs.iter().filter(|r| r.pipeline_id == pipeline_id).count();
+        let count = self
+            .runs
+            .iter()
+            .filter(|r| r.pipeline_id == pipeline_id)
+            .count();
         if count <= MAX_RUNS_PER_PIPELINE {
             return;
         }

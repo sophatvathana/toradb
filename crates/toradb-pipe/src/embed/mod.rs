@@ -15,7 +15,10 @@ pub enum EmbedderConfig {
         #[serde(default)]
         dim: Option<usize>,
     },
-    Local { model_path: String, dim: usize },
+    Local {
+        model_path: String,
+        dim: usize,
+    },
 }
 
 #[async_trait]

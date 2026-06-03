@@ -11,12 +11,10 @@ pub mod store;
 
 pub use auth::AuthStore;
 pub use embed::{build_embedder, Embedder, EmbedderConfig};
-pub use secret::SecretBox;
-pub use model::{
-    ColumnMapping, Connection, Pipeline, PipelineRun, Schedule, SourceKind, SyncMode,
-};
+pub use model::{ColumnMapping, Connection, Pipeline, PipelineRun, Schedule, SourceKind, SyncMode};
 pub use pipeline::{run_pipeline, JobReporter, NullReporter, RunOutcome};
 pub use scheduler::{spawn_scheduler, RunGuard, RunningSet};
+pub use secret::SecretBox;
 pub use source::sql::{
     install_drivers, list_columns, list_tables, test_connection, validate_sqlite, SqlSource,
 };
@@ -26,13 +24,11 @@ pub use store::PipeStore;
 pub async fn embed_query(config: &EmbedderConfig, text: &str) -> Result<Vec<f32>, String> {
     let embedder = build_embedder(config)?;
     let mut out = embedder.embed(&[text.to_string()]).await?;
-    out.pop().ok_or_else(|| "embedder returned no vector".to_string())
+    out.pop()
+        .ok_or_else(|| "embedder returned no vector".to_string())
 }
 
-pub async fn open_sql_source(
-    url: &str,
-    pipeline: &Pipeline,
-) -> Result<Box<dyn Source>, String> {
+pub async fn open_sql_source(url: &str, pipeline: &Pipeline) -> Result<Box<dyn Source>, String> {
     let src = SqlSource::open(
         url,
         pipeline.query.clone(),
