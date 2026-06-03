@@ -390,6 +390,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn numeric_funcs() {
         assert_eq!(ev(&func("abs", vec![lit("-5")])), ScalarValue::Float(5.0));
         assert_eq!(ev(&func("floor", vec![lit("3.9")])), ScalarValue::Int(3));
@@ -397,7 +398,7 @@ mod tests {
         assert_eq!(ev(&func("round", vec![lit("3.6")])), ScalarValue::Int(4));
         assert_eq!(
             ev(&func("round", vec![lit("3.14159"), lit("2")])),
-            ScalarValue::Float(std::f64::consts::PI)
+            ScalarValue::Float(3.14)
         );
         // Literal args are untyped strings → float arithmetic; the Int branch is
         // reserved for typed-column values. Display still renders "1".
