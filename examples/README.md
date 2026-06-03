@@ -2,7 +2,13 @@
 
 ## Setup
 
-From the repo root:
+Install ToraDB from [PyPI](https://pypi.org/project/toradb/):
+
+```bash
+pip install toradb
+```
+
+Or, from the repo root for a source build:
 
 ```bash
 python3 -m venv .venv

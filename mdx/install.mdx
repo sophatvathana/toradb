@@ -1,10 +1,46 @@
 ---
 title: "Install"
-description: "Prerequisites and local setup for ToraDB"
+description: "Install ToraDB from PyPI or build from source"
 icon: "download"
 ---
 
-## Prerequisites
+ToraDB is published on [PyPI](https://pypi.org/project/toradb/) as the `toradb` package (prebuilt wheels for macOS, Linux, and Windows). Use **pip** for normal use; build from source only when you are developing ToraDB itself.
+
+## Install from PyPI
+
+<Steps>
+  <Step title="Create a virtual environment (recommended)">
+    ```bash
+    python3 -m venv .venv
+    source .venv/bin/activate   # Windows: .venv\Scripts\activate
+    pip install --upgrade pip
+    ```
+  </Step>
+  <Step title="Install ToraDB">
+    ```bash
+    pip install toradb
+    ```
+
+    Optional extras:
+
+    ```bash
+    pip install "toradb[embeddings]"   # sentence-transformers
+    pip install "toradb[openai]"       # OpenAI embeddings client
+    ```
+  </Step>
+  <Step title="Verify installation">
+    ```bash
+    python -c "import toradb; print('toradb import ok')"
+    toradb smoke
+    ```
+  </Step>
+</Steps>
+
+## Build from source
+
+Use this path when you need unreleased changes or you are contributing to the Rust/Python codebase.
+
+### Prerequisites
 
 - Rust stable toolchain (`rustup`, `cargo`)
 - Python 3.8+
@@ -50,7 +86,7 @@ The repo pins Rust to stable via `rust-toolchain.toml`.
 
 ## Run tests
 
-Rust tests:
+Rust tests (source tree only):
 
 ```bash
 cargo test
@@ -70,6 +106,7 @@ cargo bench -p toradb-storage --bench segment_read
 
 ## Troubleshooting
 
+- If `pip install toradb` fails on an unsupported platform, try [build from source](#build-from-source) on that machine.
 - If `maturin develop` fails, confirm the virtual environment is activated.
-- If Python cannot import `toradb`, rerun `maturin develop`.
+- If Python cannot import `toradb` after a source build, rerun `maturin develop`.
 - If the `toradb` command is not found, ensure the venv `bin` directory is on your `PATH` (activation usually handles this).

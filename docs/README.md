@@ -4,6 +4,7 @@
 
 | | |
 |---|---|
+| **Install (PyPI)** | [pypi.org/project/toradb](https://pypi.org/project/toradb/) — `pip install toradb` |
 | **Browse docs** | [https://toradb.mintlify.app](https://toradb.mintlify.app) *(update this URL after you connect Mintlify)* |
 | **Edit locally** | [`mdx/README.md`](../mdx/README.md) — `cd mdx && mint dev` |
 

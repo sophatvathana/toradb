@@ -4,9 +4,13 @@
 
 This guide gets you from install to your first retrieval query.
 
-## 1) Install locally
+## 1) Install
 
-Follow [INSTALL.md](INSTALL.md), then return to repo root.
+```bash
+pip install toradb
+```
+
+See [INSTALL.md](INSTALL.md) for optional extras and source builds. Clone this repo to run `examples/full_example.py`.
 
 ## 2) Run the bundled example
 

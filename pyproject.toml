@@ -38,9 +38,11 @@ dynamic = ["version"]
 
 [project.urls]
 Homepage = "https://github.com/sophatvathana/toradb"
+Documentation = "https://toradb.mintlify.app"
 Repository = "https://github.com/sophatvathana/toradb"
 Issues = "https://github.com/sophatvathana/toradb/issues"
 Changelog = "https://github.com/sophatvathana/toradb/blob/main/CHANGELOG.md"
+PyPI = "https://pypi.org/project/toradb/"
 
 [project.optional-dependencies]
 embeddings = ["sentence-transformers"]

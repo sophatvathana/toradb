@@ -6,7 +6,7 @@ Thanks for your interest in contributing to ToraDB.
 
 ## Development setup
 
-1. Complete [INSTALL.md](INSTALL.md).
+1. Complete [INSTALL.md](INSTALL.md) — use **Build from source** for development (PyPI is for end users).
 2. Create a feature branch from `main`.
 
 ```bash

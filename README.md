@@ -13,20 +13,31 @@ Retrieval-focused database for local text, vector, and hybrid search — with a 
 
 ## Quick start
 
+Install from [PyPI](https://pypi.org/project/toradb/):
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install maturin
-maturin develop
+pip install toradb
 
 toradb smoke
+```
+
+Clone the repo to run the bundled example:
+
+```bash
+git clone https://github.com/sophatvathana/toradb.git
+cd toradb
 python examples/full_example.py
 ```
+
+To hack on ToraDB itself, see [Install](mdx/install.mdx) (build from source with `maturin develop`).
 
 ## Documentation
 
 | Topic | Link |
 |-------|------|
+| **PyPI** | [pypi.org/project/toradb](https://pypi.org/project/toradb/) |
 | **Docs site** | [toradb.mintlify.app](https://toradb.mintlify.app) *(Mintlify; update URL after deploy)* |
 | GitHub hub | [docs/README.md](docs/README.md) |
 | Install | [mdx/install](mdx/install.mdx) or published `/install` |
