@@ -397,7 +397,7 @@ mod tests {
         assert_eq!(ev(&func("round", vec![lit("3.6")])), ScalarValue::Int(4));
         assert_eq!(
             ev(&func("round", vec![lit("3.14159"), lit("2")])),
-            ScalarValue::Float(3.14)
+            ScalarValue::Float(std::f64::consts::PI)
         );
         // Literal args are untyped strings → float arithmetic; the Int branch is
         // reserved for typed-column values. Display still renders "1".
