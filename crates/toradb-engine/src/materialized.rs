@@ -179,6 +179,12 @@ pub fn query_materialized_view(
     }
 
     if let Some(ref ob) = sel.order_by {
+        if ob.key.is_some() {
+            return Err(
+                "ORDER BY <function> is not supported on materialized views (cached rows lack source columns)"
+                    .into(),
+            );
+        }
         if ob.column == "score" {
             candidates.sort_by_score(ob.descending);
         }

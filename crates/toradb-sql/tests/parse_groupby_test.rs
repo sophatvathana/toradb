@@ -8,10 +8,14 @@ fn parse_group_by_select_list() {
     };
     assert_eq!(sel.table, "docs");
     assert_eq!(sel.group_by, vec!["tag".to_string()]);
-    assert!(sel.select_items.contains(&SelectExpr::Column("tag".into())));
+    assert!(sel.select_items.contains(&SelectExpr::Column {
+        name: "tag".into(),
+        alias: None,
+    }));
     assert!(sel.select_items.contains(&SelectExpr::Aggregate {
         func: AggFunc::CountStar,
-        column: None,
+        arg: None,
+        alias: None,
     }));
 }
 
@@ -56,6 +60,7 @@ fn parse_sum_aggregate() {
     };
     assert!(sel.select_items.contains(&SelectExpr::Aggregate {
         func: AggFunc::Sum,
-        column: Some("score".into()),
+        arg: Some(toradb_sql::ast::Expr::Column("score".into())),
+        alias: None,
     }));
 }

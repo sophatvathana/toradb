@@ -22,4 +22,6 @@ pub use ingest::IngestOptions;
 pub use metrics::QueryMetrics;
 pub use provenance::{DropStage, ProvenanceCollector, ProvenanceRecord, ScoreBreakdown, TierTrace};
 pub use schema::{ColumnDef, ColumnKind, ColumnType, ColumnTypeSpec, DocId, Schema, SegmentId};
-pub use typed_compare::{parse_timestamp_millis, typed_cmp};
+pub use typed_compare::{
+    civil_from_days, parse_bool, parse_date_days, parse_timestamp_millis, typed_cmp,
+};

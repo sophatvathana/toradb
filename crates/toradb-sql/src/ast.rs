@@ -79,13 +79,60 @@ pub enum AggFunc {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Expr {
+    Column(String),
+    Literal(String),
+    Func { name: String, args: Vec<Expr> },
+}
+
+impl Expr {
+    pub fn alias(&self) -> String {
+        match self {
+            Expr::Column(c) => c.clone(),
+            Expr::Literal(l) => l.clone(),
+            Expr::Func { name, args } => {
+                let inner = args
+                    .iter()
+                    .map(|a| a.alias())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("{name}({inner})")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelectExpr {
     All,
-    Column(String),
+    Column {
+        name: String,
+        alias: Option<String>,
+    },
     Aggregate {
         func: AggFunc,
-        column: Option<String>,
+        arg: Option<Expr>,
+        alias: Option<String>,
     },
+    Func {
+        expr: Expr,
+        alias: Option<String>,
+    },
+}
+
+impl SelectExpr {
+    pub fn output_name(&self) -> Option<String> {
+        match self {
+            SelectExpr::All => None,
+            SelectExpr::Column { name, alias } => {
+                Some(alias.clone().unwrap_or_else(|| name.clone()))
+            }
+            SelectExpr::Func { expr, alias } => {
+                Some(alias.clone().unwrap_or_else(|| expr.alias()))
+            }
+            SelectExpr::Aggregate { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +149,11 @@ pub enum CompareOp {
 pub enum WherePred {
     Compare {
         column: String,
+        op: CompareOp,
+        value: String,
+    },
+    ExprCompare {
+        lhs: Expr,
         op: CompareOp,
         value: String,
     },
@@ -128,6 +180,7 @@ pub enum WherePred {
 pub struct OrderBy {
     pub column: String,
     pub descending: bool,
+    pub key: Option<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -179,6 +232,9 @@ pub struct SelectStmt {
     /// When true, return a plan only (`EXPLAIN`); do not execute retrieval.
     pub explain: bool,
     pub group_by: Vec<String>,
+    /// Aligned by index with `group_by`: `Some(expr)` when the group key is a
+    /// scalar function (the `group_by` entry then holds its alias), else `None`.
+    pub group_by_exprs: Vec<Option<Expr>>,
     pub where_clause: Option<WherePred>,
     pub having_clause: Option<WherePred>,
     pub facets: Vec<String>,

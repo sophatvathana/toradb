@@ -100,7 +100,7 @@ fn parse_aggregate(tokens: &[Token], i: &mut usize) -> Result<SelectExpr, String
         None => return Err("expected aggregate function".into()),
     };
     *i += 1;
-    let mut column = None;
+    let mut arg = None;
     if matches!(tokens.get(*i), Some(Token::LParen)) {
         *i += 1;
         if matches!(tokens.get(*i), Some(Token::RParen)) {
@@ -112,21 +112,42 @@ fn parse_aggregate(tokens: &[Token], i: &mut usize) -> Result<SelectExpr, String
                 return Err("aggregate * only supported for COUNT".into());
             }
             *i += 1;
-        } else if let Some(col) = ident_at(tokens, *i) {
-            column = Some(col.to_lowercase());
-            *i += 1;
         } else {
-            return Err("aggregate requires column or )".into());
+            // A column or a nested scalar function, e.g. SUM(abs(x)).
+            arg = Some(parse_primary_expr(tokens, i)?);
         }
         if !matches!(tokens.get(*i), Some(Token::RParen)) {
             return Err("expected ) after aggregate".into());
         }
         *i += 1;
     }
-    if !matches!(func, AggFunc::CountStar) && column.is_none() {
+    if !matches!(func, AggFunc::CountStar) && arg.is_none() {
         return Err("aggregate requires a column argument".into());
     }
-    Ok(SelectExpr::Aggregate { func, column })
+    Ok(SelectExpr::Aggregate {
+        func,
+        arg,
+        alias: None,
+    })
+}
+
+fn parse_optional_alias(tokens: &[Token], i: &mut usize) -> Result<Option<String>, String> {
+    if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "AS") {
+        *i += 1;
+        let alias = ident_at(tokens, *i).ok_or("AS requires an alias name".to_string())?;
+        if alias == "FROM" {
+            return Err("AS requires an alias name".into());
+        }
+        *i += 1;
+        Ok(Some(alias.to_lowercase()))
+    } else if matches!(tokens.get(*i), Some(Token::Ident(k)) if k != "FROM") {
+        // Bare alias: `SELECT col alias`.
+        let alias = ident_at(tokens, *i).expect("ident");
+        *i += 1;
+        Ok(Some(alias.to_lowercase()))
+    } else {
+        Ok(None)
+    }
 }
 
 fn parse_select_exprs(tokens: &[Token], i: &mut usize) -> Result<Vec<SelectExpr>, String> {
@@ -135,20 +156,34 @@ fn parse_select_exprs(tokens: &[Token], i: &mut usize) -> Result<Vec<SelectExpr>
         if matches!(tokens.get(*i), Some(Token::Ident(k)) if k == "FROM") {
             break;
         }
-        if matches!(
+        let item = if matches!(
             tokens.get(*i),
             Some(Token::Ident(k)) if matches!(k.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
         ) {
-            items.push(parse_aggregate(tokens, i)?);
+            let agg = parse_aggregate(tokens, i)?;
+            let alias = parse_optional_alias(tokens, i)?;
+            match agg {
+                SelectExpr::Aggregate { func, arg, .. } => {
+                    SelectExpr::Aggregate { func, arg, alias }
+                }
+                other => other,
+            }
         } else if matches!(tokens.get(*i), Some(Token::Star)) {
-            items.push(SelectExpr::All);
             *i += 1;
+            SelectExpr::All
+        } else if is_func_call(tokens, *i) {
+            let expr = parse_primary_expr(tokens, i)?;
+            let alias = parse_optional_alias(tokens, i)?;
+            SelectExpr::Func { expr, alias }
         } else if let Some(col) = ident_at(tokens, *i) {
-            items.push(SelectExpr::Column(col.to_lowercase()));
             *i += 1;
+            let name = col.to_lowercase();
+            let alias = parse_optional_alias(tokens, i)?;
+            SelectExpr::Column { name, alias }
         } else {
             return Err("expected select expression".into());
-        }
+        };
+        items.push(item);
         if matches!(tokens.get(*i), Some(Token::Comma)) {
             *i += 1;
             continue;
@@ -179,6 +214,112 @@ fn parse_literal(tokens: &[Token], i: &mut usize) -> Result<String, String> {
     }
 }
 
+const SCALAR_FUNCTIONS: &[(&str, usize, usize)] = &[
+    // String
+    ("lower", 1, 1),
+    ("upper", 1, 1),
+    ("length", 1, 1),
+    ("trim", 1, 1),
+    ("substr", 2, 3),
+    ("concat", 1, usize::MAX),
+    ("coalesce", 1, usize::MAX),
+    // Numeric / math
+    ("abs", 1, 1),
+    ("round", 1, 2),
+    ("floor", 1, 1),
+    ("ceil", 1, 1),
+    ("mod", 2, 2),
+    // Date / time
+    ("now", 0, 0),
+    ("date_trunc", 2, 2),
+    ("extract", 2, 2),
+    ("age", 1, 1),
+    // Conditional
+    ("nullif", 2, 2),
+    ("ifnull", 2, 2),
+];
+
+pub fn validate_func(name: &str, args: &[Expr]) -> Result<(), String> {
+    match SCALAR_FUNCTIONS.iter().find(|(n, _, _)| *n == name) {
+        Some((_, min, max)) => {
+            let n = args.len();
+            if n < *min || n > *max {
+                Err(format!(
+                    "function {name} expects {} argument(s), got {n}",
+                    if min == max {
+                        min.to_string()
+                    } else if *max == usize::MAX {
+                        format!("at least {min}")
+                    } else {
+                        format!("{min}..{max}")
+                    }
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        None => Err(format!("unknown function {name}")),
+    }
+}
+
+fn is_func_call(tokens: &[Token], i: usize) -> bool {
+    matches!(tokens.get(i), Some(Token::Ident(_)))
+        && matches!(tokens.get(i + 1), Some(Token::LParen))
+}
+
+fn parse_primary_expr(tokens: &[Token], i: &mut usize) -> Result<Expr, String> {
+    match tokens.get(*i) {
+        Some(Token::String(s)) => {
+            *i += 1;
+            Ok(Expr::Literal(s.clone()))
+        }
+        Some(Token::Number(n)) => {
+            *i += 1;
+            Ok(Expr::Literal(n.to_string()))
+        }
+        Some(Token::Float(f)) => {
+            *i += 1;
+            Ok(Expr::Literal(f.to_string()))
+        }
+        Some(Token::Ident(word)) => {
+            let name = word.to_lowercase();
+            if matches!(tokens.get(*i + 1), Some(Token::LParen)) {
+                *i += 2; // consume ident + (
+                let args = parse_arglist(tokens, i)?;
+                validate_func(&name, &args)?;
+                Ok(Expr::Func { name, args })
+            } else {
+                *i += 1;
+                Ok(Expr::Column(name))
+            }
+        }
+        _ => Err("expected expression".into()),
+    }
+}
+
+fn parse_arglist(tokens: &[Token], i: &mut usize) -> Result<Vec<Expr>, String> {
+    let mut args = Vec::new();
+    if matches!(tokens.get(*i), Some(Token::RParen)) {
+        *i += 1;
+        return Ok(args);
+    }
+    loop {
+        args.push(parse_primary_expr(tokens, i)?);
+        match tokens.get(*i) {
+            Some(Token::Comma) => {
+                *i += 1;
+                continue;
+            }
+            Some(Token::RParen) => {
+                *i += 1;
+                break;
+            }
+            _ => return Err("expected , or ) in function arguments".into()),
+        }
+    }
+    Ok(args)
+}
+
 fn parse_compare_op(token: &Token) -> Option<CompareOp> {
     match token {
         Token::Eq => Some(CompareOp::Eq),
@@ -201,6 +342,17 @@ fn where_clause_boundary(tokens: &[Token], i: usize) -> bool {
 }
 
 fn parse_leaf_predicate(tokens: &[Token], i: &mut usize) -> Result<WherePred, String> {
+    if is_func_call(tokens, *i) {
+        let lhs = parse_primary_expr(tokens, i)?;
+        let op = tokens
+            .get(*i)
+            .and_then(parse_compare_op)
+            .ok_or("function predicate requires a comparison operator".to_string())?;
+        *i += 1;
+        let value = parse_literal(tokens, i)?;
+        return Ok(WherePred::ExprCompare { lhs, op, value });
+    }
+
     let column = ident_at(tokens, *i)
         .ok_or("predicate requires column name".to_string())?
         .to_lowercase();
@@ -337,23 +489,33 @@ fn parse_having_clause(tokens: &[Token], i: &mut usize) -> Result<WherePred, Str
     parse_predicate_clause(tokens, i, "HAVING")
 }
 
-fn parse_group_by_clause(tokens: &[Token], i: &mut usize) -> Result<Vec<String>, String> {
+fn parse_group_by_clause(
+    tokens: &[Token],
+    i: &mut usize,
+) -> Result<(Vec<String>, Vec<Option<Expr>>), String> {
     expect_ident(tokens, i, "GROUP")?;
     expect_ident(tokens, i, "BY")?;
-    let mut out = Vec::new();
+    let mut cols = Vec::new();
+    let mut exprs = Vec::new();
     loop {
-        let Some(col) = ident_at(tokens, *i) else {
+        if is_func_call(tokens, *i) {
+            let expr = parse_primary_expr(tokens, i)?;
+            cols.push(expr.alias());
+            exprs.push(Some(expr));
+        } else if let Some(col) = ident_at(tokens, *i) {
+            cols.push(col.to_lowercase());
+            exprs.push(None);
+            *i += 1;
+        } else {
             return Err("GROUP BY requires at least one column".into());
-        };
-        out.push(col.to_lowercase());
-        *i += 1;
+        }
         if matches!(tokens.get(*i), Some(Token::Comma)) {
             *i += 1;
             continue;
         }
         break;
     }
-    Ok(out)
+    Ok((cols, exprs))
 }
 
 fn parse_facets_clause(tokens: &[Token], i: &mut usize) -> Result<Vec<String>, String> {
@@ -691,6 +853,7 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
     let mut stream = false;
     let mut explain = false;
     let mut group_by = Vec::new();
+    let mut group_by_exprs: Vec<Option<Expr>> = Vec::new();
     let mut where_clause = None;
     let mut having_clause = None;
     let mut facets = Vec::new();
@@ -777,7 +940,9 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
                 order_by = Some(parse_order_by(tokens, i)?);
             }
             Some(Token::Ident(k)) if k == "GROUP" => {
-                group_by = parse_group_by_clause(tokens, i)?;
+                let (cols, exprs) = parse_group_by_clause(tokens, i)?;
+                group_by = cols;
+                group_by_exprs = exprs;
             }
             Some(Token::Ident(k)) if k == "WHERE" => {
                 where_clause = Some(parse_where_clause(tokens, i)?);
@@ -826,6 +991,7 @@ pub fn parse_select_stmt(tokens: &[Token], i: &mut usize) -> Result<SelectStmt, 
         stream,
         explain,
         group_by,
+        group_by_exprs,
         where_clause,
         having_clause,
         facets,
@@ -892,10 +1058,16 @@ fn parse_qualified_table(
 fn parse_order_by(tokens: &[Token], i: &mut usize) -> Result<OrderBy, String> {
     expect_ident(tokens, i, "ORDER")?;
     expect_ident(tokens, i, "BY")?;
-    let column = ident_at(tokens, *i)
-        .ok_or("ORDER BY requires a column name or SCORE")?
-        .to_lowercase();
-    *i += 1;
+    let (column, key) = if is_func_call(tokens, *i) {
+        let expr = parse_primary_expr(tokens, i)?;
+        (expr.alias(), Some(expr))
+    } else {
+        let col = ident_at(tokens, *i)
+            .ok_or("ORDER BY requires a column name or SCORE")?
+            .to_lowercase();
+        *i += 1;
+        (col, None)
+    };
     let default_desc = column == "score";
     let descending = match ident_at(tokens, *i).as_deref() {
         Some("ASC") => {
@@ -908,7 +1080,11 @@ fn parse_order_by(tokens: &[Token], i: &mut usize) -> Result<OrderBy, String> {
         }
         _ => default_desc,
     };
-    Ok(OrderBy { column, descending })
+    Ok(OrderBy {
+        column,
+        descending,
+        key,
+    })
 }
 
 pub fn parse(input: &str) -> Result<Vec<Stmt>, String> {

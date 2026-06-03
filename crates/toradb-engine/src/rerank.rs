@@ -17,7 +17,7 @@ pub fn apply_ranking_knobs(
     field_boosts: &HashMap<String, f32>,
     decay: &Option<DecaySpec>,
     now_unix_millis: i64,
-    mut prov: Option<&mut ProvenanceCollector>,
+    prov: Option<&mut ProvenanceCollector>,
 ) -> Result<(), String> {
     if candidates.ids.is_empty() || !knobs_active(field_boosts, decay) {
         return Ok(());
@@ -27,6 +27,22 @@ pub fn apply_ranking_knobs(
         .fetch_documents(table, &candidates.ids)?
         .into_iter()
         .collect();
+
+    apply_ranking_knobs_with_docs(candidates, &docs, field_boosts, decay, now_unix_millis, prov);
+    Ok(())
+}
+
+pub fn apply_ranking_knobs_with_docs(
+    candidates: &mut CandidateSet,
+    docs: &HashMap<u64, toradb_index::IngestDoc>,
+    field_boosts: &HashMap<String, f32>,
+    decay: &Option<DecaySpec>,
+    now_unix_millis: i64,
+    mut prov: Option<&mut ProvenanceCollector>,
+) {
+    if candidates.ids.is_empty() || !knobs_active(field_boosts, decay) {
+        return;
+    }
 
     let mut breakdown: Vec<ScoreBreakdown> = Vec::with_capacity(candidates.ids.len());
     for i in 0..candidates.ids.len() {
@@ -73,5 +89,4 @@ pub fn apply_ranking_knobs(
     if let Some(p) = prov.as_mut() {
         p.set_score_breakdown(breakdown);
     }
-    Ok(())
 }

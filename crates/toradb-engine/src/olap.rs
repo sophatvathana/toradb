@@ -1,9 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
-use toradb_sql::ast::{AggFunc, CompareOp, SelectExpr, SelectStmt, WherePred};
+use toradb_sql::ast::{AggFunc, CompareOp, Expr, SelectExpr, SelectStmt, WherePred};
+
+use toradb_index::IngestDoc;
 
 use crate::dag::DagRunner;
 use crate::metadata_filter::metadata_matches;
+use crate::scalar::{eval_expr, Row};
 use crate::sql_exec::run_search;
 
 #[derive(Debug, Clone)]
@@ -32,6 +35,7 @@ fn having_matches(
         WherePred::Or(parts) => parts
             .iter()
             .any(|p| having_matches(p, group_key, values, value_col_lookup, group_cols)),
+        WherePred::ExprCompare { .. } => false,
         WherePred::Compare { column, op, value } => {
             if let Some(idx) = value_col_lookup.get(column) {
                 let b = parse_numeric_metadata(value).unwrap_or(0.0);
@@ -119,13 +123,25 @@ pub(crate) fn metadata_field_value(
     }
 }
 
-fn group_key(group_cols: &[String], id: u64, metadata: &HashMap<String, String>) -> String {
+fn group_key_eval(
+    group_cols: &[String],
+    group_exprs: &[Option<Expr>],
+    row: &Row,
+    col_types: &HashMap<String, toradb_core::ColumnType>,
+    now_millis: i64,
+) -> String {
     if group_cols.is_empty() {
         return "_all".into();
     }
     group_cols
         .iter()
-        .map(|col| metadata_field_value(col, id, metadata))
+        .enumerate()
+        .map(|(i, col)| match group_exprs.get(i).and_then(|e| e.as_ref()) {
+            Some(expr) => eval_expr(expr, row, col_types, now_millis)
+                .as_string()
+                .unwrap_or_else(|| "_null".into()),
+            None => metadata_field_value(col, row.id, row.metadata),
+        })
         .collect::<Vec<_>>()
         .join("|")
 }
@@ -144,6 +160,65 @@ pub struct FacetResult {
     pub values: Vec<FacetValue>,
 }
 
+pub fn count_facets_for_ids(
+    fields: &[String],
+    docs: &HashMap<u64, IngestDoc>,
+    ids: &[u64],
+    top_n: usize,
+) -> Vec<FacetResult> {
+    if fields.is_empty() {
+        return Vec::new();
+    }
+    const NULL: &str = "_null";
+    let want_id = fields.iter().any(|f| f.eq_ignore_ascii_case("id"));
+    let id_strs: Vec<String> = if want_id {
+        ids.iter().map(|id| id.to_string()).collect()
+    } else {
+        Vec::new()
+    };
+    let mut counts: Vec<HashMap<&str, u64>> = vec![HashMap::new(); fields.len()];
+
+    for (pos, &id) in ids.iter().enumerate() {
+        let Some(doc) = docs.get(&id) else { continue };
+        for (fi, field) in fields.iter().enumerate() {
+            let key: &str = if field.eq_ignore_ascii_case("id") {
+                id_strs[pos].as_str()
+            } else {
+                doc.metadata.get(field).map(String::as_str).unwrap_or(NULL)
+            };
+            *counts[fi].entry(key).or_insert(0) += 1;
+        }
+    }
+
+    fields
+        .iter()
+        .zip(counts.into_iter())
+        .map(|(field, map)| {
+            let cmp = |a: &(u64, &str), b: &(u64, &str)| {
+                b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1))
+            };
+            let mut entries: Vec<(u64, &str)> =
+                map.into_iter().map(|(value, count)| (count, value)).collect();
+            if top_n > 0 && top_n < entries.len() {
+                entries.select_nth_unstable_by(top_n - 1, cmp);
+                entries.truncate(top_n);
+            }
+            entries.sort_by(cmp);
+            let values = entries
+                .into_iter()
+                .map(|(count, value)| FacetValue {
+                    value: value.to_string(),
+                    count,
+                })
+                .collect();
+            FacetResult {
+                field: field.clone(),
+                values,
+            }
+        })
+        .collect()
+}
+
 pub fn count_facets(
     dag: &mut DagRunner,
     table: &str,
@@ -155,49 +230,38 @@ pub fn count_facets(
         return Ok(Vec::new());
     }
     dag.ensure_table(table);
-    let mut counts: Vec<HashMap<String, u64>> = vec![HashMap::new(); fields.len()];
-    dag.scan_table_id_metadata(table, |id, metadata| {
-        if !candidates.contains(&id) {
-            return Ok(());
-        }
-        for (fi, field) in fields.iter().enumerate() {
-            let value = metadata_field_value(field, id, metadata);
-            *counts[fi].entry(value).or_insert(0) += 1;
-        }
-        Ok(())
-    })?;
-
-    Ok(fields
-        .iter()
-        .zip(counts.into_iter())
-        .map(|(field, map)| {
-            let mut values: Vec<FacetValue> = map
-                .into_iter()
-                .map(|(value, count)| FacetValue { value, count })
-                .collect();
-            values.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value)));
-            if top_n > 0 {
-                values.truncate(top_n);
-            }
-            FacetResult {
-                field: field.clone(),
-                values,
-            }
-        })
-        .collect())
+    let ids: Vec<u64> = candidates.iter().copied().collect();
+    let docs: HashMap<u64, IngestDoc> = dag.fetch_documents(table, &ids)?.into_iter().collect();
+    Ok(count_facets_for_ids(fields, &docs, &ids, top_n))
 }
 
-fn aggregate_specs(sel: &SelectStmt) -> Result<Vec<(AggFunc, Option<String>)>, String> {
+struct AggSpec {
+    func: AggFunc,
+    arg: Option<Expr>,
+    alias: Option<String>,
+}
+
+fn aggregate_specs(sel: &SelectStmt) -> Result<Vec<AggSpec>, String> {
     let mut aggs = Vec::new();
     for item in &sel.select_items {
-        if let SelectExpr::Aggregate { func, column } = item {
-            aggs.push((func.clone(), column.clone()));
+        if let SelectExpr::Aggregate { func, arg, alias } = item {
+            aggs.push(AggSpec {
+                func: func.clone(),
+                arg: arg.clone(),
+                alias: alias.clone(),
+            });
         }
     }
     if aggs.is_empty() {
         return Err("analytics SELECT requires at least one aggregate expression".into());
     }
     Ok(aggs)
+}
+
+fn agg_value_name(spec: &AggSpec) -> String {
+    spec.alias
+        .clone()
+        .unwrap_or_else(|| value_column_name(&spec.func, spec.arg.as_ref().map(|e| e.alias()).as_deref()))
 }
 
 enum GroupAccum {
@@ -271,15 +335,14 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
     if sel.group_by.is_empty()
         && agg_specs
             .iter()
-            .any(|(func, _)| !matches!(func, AggFunc::CountStar))
+            .any(|s| !matches!(s.func, AggFunc::CountStar))
     {
         return Err("analytics SELECT without GROUP BY supports only COUNT(*)".into());
     }
     let group_cols = sel.group_by.clone();
-    let value_columns = agg_specs
-        .iter()
-        .map(|(func, col)| value_column_name(func, col.as_deref()))
-        .collect::<Vec<_>>();
+    let group_exprs = sel.group_by_exprs.clone();
+    let value_columns = agg_specs.iter().map(agg_value_name).collect::<Vec<_>>();
+    let now = crate::sql_exec::now_millis();
 
     let filter_ids: Option<HashSet<u64>> = if sel.sparse_query.is_some()
         || sel.vector
@@ -287,7 +350,10 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
         || sel.vector_text.is_some()
     {
         let mut retrieval = sel.clone();
-        retrieval.select_items = vec![SelectExpr::Column("id".into())];
+        retrieval.select_items = vec![SelectExpr::Column {
+            name: "id".into(),
+            alias: None,
+        }];
         retrieval.group_by.clear();
         retrieval.having_clause = None;
         let sparse = sel.sparse_query.as_ref().is_some_and(|q| !q.is_empty());
@@ -315,10 +381,10 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
         let rows = dag.table_row_count(&sel.table)? as u64;
         let mut accs = agg_specs
             .iter()
-            .map(|(func, _)| GroupAccum::new(func))
+            .map(|s| GroupAccum::new(&s.func))
             .collect::<Vec<_>>();
-        for (idx, (func, _)) in agg_specs.iter().enumerate() {
-            match (&mut accs[idx], func) {
+        for (idx, spec) in agg_specs.iter().enumerate() {
+            match (&mut accs[idx], &spec.func) {
                 (GroupAccum::Count(n), AggFunc::CountStar) => *n = rows,
                 (slot, func) => slot.update(func, None, None),
             }
@@ -332,27 +398,33 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
                 }
             }
             if let Some(ref pred) = sel.where_clause {
-                if !metadata_matches(pred, metadata, &col_types) {
+                if !metadata_matches(pred, metadata, &col_types, now) {
                     return Ok(());
                 }
             }
-            let key = group_key(&group_cols, id, metadata);
+            let row = Row {
+                id,
+                metadata,
+                text: None,
+                score: None,
+            };
+            let key = group_key_eval(&group_cols, &group_exprs, &row, &col_types, now);
             let entry = groups.entry(key).or_insert_with(|| {
                 agg_specs
                     .iter()
-                    .map(|(func, _)| GroupAccum::new(func))
+                    .map(|s| GroupAccum::new(&s.func))
                     .collect::<Vec<_>>()
             });
-            for (idx, (func, col)) in agg_specs.iter().enumerate() {
-                if matches!(func, AggFunc::CountStar) {
-                    entry[idx].update(func, None, None);
+            for (idx, spec) in agg_specs.iter().enumerate() {
+                if matches!(spec.func, AggFunc::CountStar) {
+                    entry[idx].update(&spec.func, None, None);
                     continue;
                 }
-                let numeric = col
-                    .as_deref()
-                    .and_then(|c| metadata.get(c))
-                    .and_then(|v| parse_numeric_metadata(v));
-                entry[idx].update(func, col.as_deref(), numeric);
+                let numeric = spec
+                    .arg
+                    .as_ref()
+                    .and_then(|e| eval_expr(e, &row, &col_types, now).as_f64());
+                entry[idx].update(&spec.func, None, numeric);
             }
             Ok(())
         })?;
@@ -364,7 +436,7 @@ pub fn run_aggregate(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlAggrega
             let values = accs
                 .into_iter()
                 .zip(agg_specs.iter())
-                .map(|(acc, (func, _))| acc.finish(func))
+                .map(|(acc, spec)| acc.finish(&spec.func))
                 .collect::<Vec<_>>();
             (k, values)
         })

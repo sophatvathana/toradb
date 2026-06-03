@@ -33,7 +33,7 @@ pub fn typed_cmp(ty: ColumnType, a: &str, b: &str) -> Option<Ordering> {
     }
 }
 
-fn parse_bool(s: &str) -> Option<bool> {
+pub fn parse_bool(s: &str) -> Option<bool> {
     match s.trim().to_ascii_lowercase().as_str() {
         "true" | "t" | "1" | "yes" | "y" => Some(true),
         "false" | "f" | "0" | "no" | "n" => Some(false),
@@ -41,7 +41,7 @@ fn parse_bool(s: &str) -> Option<bool> {
     }
 }
 
-fn parse_date_days(s: &str) -> Option<i64> {
+pub fn parse_date_days(s: &str) -> Option<i64> {
     let s = s.trim();
     let bytes = s.as_bytes();
     if bytes.len() < 10 {
@@ -67,6 +67,19 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1; // [0, 365]
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
     era * 146097 + doe - 719468
+}
+
+pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 pub fn parse_timestamp_millis(s: &str) -> Option<i64> {

@@ -23,7 +23,8 @@ fn parses_order_by_score_desc() {
         sel.order_by,
         Some(OrderBy {
             column: "score".into(),
-            descending: true
+            descending: true,
+            key: None,
         })
     );
     assert_eq!(sel.limit, 5);
@@ -35,7 +36,8 @@ fn parses_order_by_score_asc() {
         order_by("SELECT id FROM emb VECTOR SEARCH embedding ANN([1.0, 0.0]) ORDER BY score ASC"),
         Some(OrderBy {
             column: "score".into(),
-            descending: false
+            descending: false,
+            key: None,
         })
     );
 }
@@ -46,7 +48,8 @@ fn parses_order_by_score_defaults_to_desc() {
         order_by("SELECT id FROM docs SPARSE SEARCH body BM25('x') ORDER BY score LIMIT 1"),
         Some(OrderBy {
             column: "score".into(),
-            descending: true
+            descending: true,
+            key: None,
         })
     );
 }
@@ -57,7 +60,8 @@ fn parses_order_by_metadata_column_defaults_to_asc() {
         order_by("SELECT id FROM docs SPARSE SEARCH body BM25('x') ORDER BY published LIMIT 5"),
         Some(OrderBy {
             column: "published".into(),
-            descending: false
+            descending: false,
+            key: None,
         })
     );
 }
@@ -70,7 +74,8 @@ fn parses_order_by_metadata_column_desc() {
         ),
         Some(OrderBy {
             column: "published".into(),
-            descending: true
+            descending: true,
+            key: None,
         })
     );
 }

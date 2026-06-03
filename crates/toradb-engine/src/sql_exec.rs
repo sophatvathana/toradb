@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use toradb_core::{Batch, ExecCtx, QueryMetrics};
 use toradb_index::dense::query_embed::lexical_proxy_vector;
-use toradb_sql::ast::{CompareOp, SelectExpr, SelectStmt, WherePred};
+use toradb_sql::ast::{CompareOp, Expr, SelectExpr, SelectStmt, WherePred};
 
 use crate::dag::DagRunner;
 use crate::join::apply_metadata_join;
@@ -10,6 +10,119 @@ use crate::materialized;
 use crate::metadata_filter::filter_candidates_by_where;
 use crate::olap::{run_aggregate, SqlAggregateResult};
 use crate::persist;
+
+pub(crate) fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn order_by_metadata_sort(
+    candidates: &mut toradb_core::CandidateSet,
+    ob: &toradb_sql::ast::OrderBy,
+    docs: &HashMap<u64, toradb_index::IngestDoc>,
+    col_types: &HashMap<String, toradb_core::ColumnType>,
+    now_millis: i64,
+) {
+    let empty_meta: HashMap<String, String> = HashMap::new();
+    let keys: Vec<(String, toradb_core::ColumnType)> = candidates
+        .ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| match &ob.key {
+            Some(expr) => {
+                let doc = docs.get(id);
+                let row = crate::scalar::Row {
+                    id: *id,
+                    metadata: doc.map(|d| &d.metadata).unwrap_or(&empty_meta),
+                    text: doc.map(|d| d.text.as_str()),
+                    score: candidates.scores.get(i).copied(),
+                };
+                let v = crate::scalar::eval_expr(expr, &row, col_types, now_millis);
+                (v.as_string().unwrap_or_default(), v.column_type())
+            }
+            None => {
+                let v = docs
+                    .get(id)
+                    .and_then(|d| d.metadata.get(&ob.column))
+                    .cloned()
+                    .unwrap_or_default();
+                let ty = col_types
+                    .get(&ob.column)
+                    .copied()
+                    .unwrap_or(toradb_core::ColumnType::Text);
+                (v, ty)
+            }
+        })
+        .collect();
+
+    let mut idx: Vec<usize> = (0..candidates.ids.len()).collect();
+    idx.sort_by(|&a, &b| {
+        let (va, ty) = (&keys[a].0, keys[a].1);
+        let vb = &keys[b].0;
+        let ord = toradb_core::typed_cmp(ty, va, vb).unwrap_or_else(|| va.cmp(vb));
+        if ob.descending {
+            ord.reverse()
+        } else {
+            ord
+        }
+    });
+    candidates.reorder(&idx);
+}
+
+fn apply_distinct(
+    candidates: &mut toradb_core::CandidateSet,
+    sel: &SelectStmt,
+    docs: Option<&HashMap<u64, toradb_index::IngestDoc>>,
+    col_types: &HashMap<String, toradb_core::ColumnType>,
+    now_millis: i64,
+) {
+    let empty_meta: HashMap<String, String> = HashMap::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut keep = Vec::with_capacity(candidates.ids.len());
+    for (i, id) in candidates.ids.iter().enumerate() {
+        let doc = docs.and_then(|m| m.get(id));
+        let row = crate::scalar::Row {
+            id: *id,
+            metadata: doc.map(|d| &d.metadata).unwrap_or(&empty_meta),
+            text: doc.map(|d| d.text.as_str()),
+            score: candidates.scores.get(i).copied(),
+        };
+        let mut key: Vec<String> = Vec::new();
+        if sel.select_items.is_empty() {
+            key.push(id.to_string());
+        }
+        for item in &sel.select_items {
+            match item {
+                SelectExpr::All => {
+                    key.push(id.to_string());
+                    key.push(format!("{:.6}", candidates.scores.get(i).copied().unwrap_or(0.0)));
+                    key.push(doc.map(|d| d.text.clone()).unwrap_or_default());
+                }
+                SelectExpr::Column { name, .. } => key.push(match name.as_str() {
+                    "id" => id.to_string(),
+                    "score" => format!("{:.6}", candidates.scores.get(i).copied().unwrap_or(0.0)),
+                    "text" => doc.map(|d| d.text.clone()).unwrap_or_default(),
+                    meta => doc
+                        .and_then(|d| d.metadata.get(meta))
+                        .cloned()
+                        .unwrap_or_default(),
+                }),
+                SelectExpr::Func { expr, .. } => key.push(
+                    crate::scalar::eval_expr(expr, &row, col_types, now_millis)
+                        .as_string()
+                        .unwrap_or_default(),
+                ),
+                SelectExpr::Aggregate { .. } => {}
+            }
+        }
+        if seen.insert(key) {
+            keep.push(i);
+        }
+    }
+    candidates.retain_indices(&keep);
+}
 
 fn ids_from_delete_pred(pred: &WherePred) -> Result<Vec<u64>, String> {
     fn parse_id(s: &str) -> Result<u64, String> {
@@ -73,6 +186,7 @@ fn expand_cte_select_depth(sel: &SelectStmt, max_depth: u32) -> Result<SelectStm
     };
     expanded.select_items = sel.select_items.clone();
     expanded.group_by = sel.group_by.clone();
+    expanded.group_by_exprs = sel.group_by_exprs.clone();
     expanded.where_clause = sel.where_clause.clone();
     expanded.having_clause = sel.having_clause.clone();
     expanded.facets = sel.facets.clone();
@@ -124,34 +238,41 @@ pub struct SqlSearchResult {
     pub facets: Vec<crate::olap::FacetResult>,
 }
 
-fn resolve_retrieval_columns(sel: &SelectStmt) -> Result<Vec<String>, String> {
-    if sel.select_items.is_empty() {
-        return Ok(vec!["id".into(), "score".into()]);
+fn collect_columns(e: &Expr, out: &mut Vec<String>) {
+    match e {
+        Expr::Column(c) => {
+            if c != "id" && c != "score" && !out.iter().any(|x| x == c) {
+                out.push(c.clone());
+            }
+        }
+        Expr::Literal(_) => {}
+        Expr::Func { args, .. } => {
+            for a in args {
+                collect_columns(a, out);
+            }
+        }
     }
+}
+
+fn retrieval_fetch_columns(sel: &SelectStmt) -> Vec<String> {
     let mut cols = Vec::new();
     for item in &sel.select_items {
         match item {
             SelectExpr::All => {
-                for name in ["id", "score", "text"] {
-                    if !cols.iter().any(|c| c == name) {
-                        cols.push(name.into());
-                    }
+                if !cols.iter().any(|c| c == "text") {
+                    cols.push("text".to_string());
                 }
             }
-            SelectExpr::Column(name) => {
+            SelectExpr::Column { name, .. } if name != "id" && name != "score" => {
                 if !cols.iter().any(|c| c == name) {
                     cols.push(name.clone());
                 }
             }
-            SelectExpr::Aggregate { .. } => {
-                return Err(
-                    "aggregates in SELECT run as analytics (use COUNT(*) for total rows or GROUP BY for grouped results)"
-                        .into(),
-                );
-            }
+            SelectExpr::Func { expr, .. } => collect_columns(expr, &mut cols),
+            _ => {}
         }
     }
-    Ok(cols)
+    cols
 }
 
 fn needs_document_fetch(columns: &[String]) -> bool {
@@ -165,42 +286,96 @@ pub fn project_retrieval_columns(
     ids: &[u64],
     scores: &[f32],
 ) -> Result<Vec<(String, SqlProjectedColumn)>, String> {
-    let columns = resolve_retrieval_columns(sel)?;
+    let fetch_cols = retrieval_fetch_columns(sel);
     let docs_by_id: HashMap<u64, toradb_index::IngestDoc> =
-        if needs_document_fetch(&columns) || sel.highlight {
+        if needs_document_fetch(&fetch_cols) || sel.highlight {
             dag.fetch_documents(table, ids)?.into_iter().collect()
         } else {
             HashMap::new()
         };
 
-    let mut out = Vec::with_capacity(columns.len() + sel.highlight as usize);
-    for col in columns {
-        let data = match col.as_str() {
-            "id" => SqlProjectedColumn::U64(ids.to_vec()),
-            "score" => SqlProjectedColumn::F32(scores.to_vec()),
-            "text" => SqlProjectedColumn::Str(
-                ids.iter()
-                    .map(|id| {
-                        docs_by_id
-                            .get(id)
-                            .map(|d| d.text.clone())
+    let has_func = sel
+        .select_items
+        .iter()
+        .any(|i| matches!(i, SelectExpr::Func { .. }));
+    let (col_types, now) = if has_func {
+        (dag.column_types_for(table), now_millis())
+    } else {
+        (HashMap::new(), 0)
+    };
+    let empty_meta: HashMap<String, String> = HashMap::new();
+    let str_col = |key: &str| {
+        SqlProjectedColumn::Str(
+            ids.iter()
+                .map(|id| {
+                    docs_by_id
+                        .get(id)
+                        .and_then(|d| d.metadata.get(key))
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .collect(),
+        )
+    };
+    let text_col = || {
+        SqlProjectedColumn::Str(
+            ids.iter()
+                .map(|id| docs_by_id.get(id).map(|d| d.text.clone()).unwrap_or_default())
+                .collect(),
+        )
+    };
+
+    let mut out: Vec<(String, SqlProjectedColumn)> = Vec::new();
+    let push_unique = |out: &mut Vec<(String, SqlProjectedColumn)>, name: String, data: SqlProjectedColumn| {
+        if !out.iter().any(|(c, _)| *c == name) {
+            out.push((name, data));
+        }
+    };
+    if sel.select_items.is_empty() {
+        push_unique(&mut out, "id".into(), SqlProjectedColumn::U64(ids.to_vec()));
+        push_unique(&mut out, "score".into(), SqlProjectedColumn::F32(scores.to_vec()));
+    }
+    for item in &sel.select_items {
+        match item {
+            SelectExpr::All => {
+                push_unique(&mut out, "id".into(), SqlProjectedColumn::U64(ids.to_vec()));
+                push_unique(&mut out, "score".into(), SqlProjectedColumn::F32(scores.to_vec()));
+                push_unique(&mut out, "text".into(), text_col());
+            }
+            SelectExpr::Column { name, .. } => {
+                let data = match name.as_str() {
+                    "id" => SqlProjectedColumn::U64(ids.to_vec()),
+                    "score" => SqlProjectedColumn::F32(scores.to_vec()),
+                    "text" => text_col(),
+                    key => str_col(key),
+                };
+                let out_name = item.output_name().expect("column has output name");
+                push_unique(&mut out, out_name, data);
+            }
+            SelectExpr::Func { expr, .. } => {
+                let values: Vec<String> = ids
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, id)| {
+                        let doc = docs_by_id.get(id);
+                        let row = crate::scalar::Row {
+                            id: *id,
+                            metadata: doc.map(|d| &d.metadata).unwrap_or(&empty_meta),
+                            text: doc.map(|d| d.text.as_str()),
+                            score: scores.get(idx).copied(),
+                        };
+                        crate::scalar::eval_expr(expr, &row, &col_types, now)
+                            .as_string()
                             .unwrap_or_default()
                     })
-                    .collect(),
-            ),
-            meta_key => SqlProjectedColumn::Str(
-                ids.iter()
-                    .map(|id| {
-                        docs_by_id
-                            .get(id)
-                            .and_then(|d| d.metadata.get(meta_key))
-                            .cloned()
-                            .unwrap_or_default()
-                    })
-                    .collect(),
-            ),
-        };
-        out.push((col, data));
+                    .collect();
+                let out_name = item.output_name().expect("func has output name");
+                push_unique(&mut out, out_name, SqlProjectedColumn::Str(values));
+            }
+            SelectExpr::Aggregate { .. } => {
+                return Err("aggregates require GROUP BY (analytics path)".into());
+            }
+        }
     }
     if sel.highlight {
         let max_chars = sel.snippet_len.unwrap_or(160) as usize;
@@ -283,8 +458,9 @@ pub(crate) fn run_scan(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSearc
     };
     candidates.scores = vec![0.0; candidates.ids.len()];
 
+    let now = now_millis();
     if let Some(ref pred) = sel.where_clause {
-        filter_candidates_by_where(dag, &sel.table, pred, &mut candidates)?;
+        filter_candidates_by_where(dag, &sel.table, pred, &mut candidates, now)?;
     }
     if let Some(ref join) = sel.join {
         apply_metadata_join(dag, &sel.table, join, &mut candidates)?;
@@ -304,59 +480,12 @@ pub(crate) fn run_scan(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSearc
     if let Some(ob) = order_by_metadata {
         let docs = shared_docs.as_ref().expect("metadata fetched for ORDER BY");
         let col_types = dag.column_types_for(&sel.table);
-        let ty = col_types
-            .get(&ob.column)
-            .copied()
-            .unwrap_or(toradb_core::ColumnType::Text);
-        let mut idx: Vec<usize> = (0..candidates.ids.len()).collect();
-        idx.sort_by(|&a, &b| {
-            let va = docs
-                .get(&candidates.ids[a])
-                .and_then(|d| d.metadata.get(&ob.column))
-                .map(String::as_str)
-                .unwrap_or("");
-            let vb = docs
-                .get(&candidates.ids[b])
-                .and_then(|d| d.metadata.get(&ob.column))
-                .map(String::as_str)
-                .unwrap_or("");
-            let ord = toradb_core::typed_cmp(ty, va, vb).unwrap_or_else(|| va.cmp(vb));
-            if ob.descending {
-                ord.reverse()
-            } else {
-                ord
-            }
-        });
-        candidates.reorder(&idx);
+        order_by_metadata_sort(&mut candidates, ob, docs, &col_types, now);
     }
 
     if sel.distinct {
-        let docs = shared_docs.as_ref();
-        let cols = resolve_retrieval_columns(sel)?;
-        let mut seen = std::collections::HashSet::new();
-        let mut keep = Vec::with_capacity(candidates.ids.len());
-        for (i, id) in candidates.ids.iter().enumerate() {
-            let key: Vec<String> = cols
-                .iter()
-                .map(|c| match c.as_str() {
-                    "id" => id.to_string(),
-                    "score" => "0".into(),
-                    "text" => docs
-                        .and_then(|m| m.get(id))
-                        .map(|d| d.text.clone())
-                        .unwrap_or_default(),
-                    meta => docs
-                        .and_then(|m| m.get(id))
-                        .and_then(|d| d.metadata.get(meta))
-                        .cloned()
-                        .unwrap_or_default(),
-                })
-                .collect();
-            if seen.insert(key) {
-                keep.push(i);
-            }
-        }
-        candidates.retain_indices(&keep);
+        let col_types = dag.column_types_for(&sel.table);
+        apply_distinct(&mut candidates, sel, shared_docs.as_ref(), &col_types, now);
     }
 
     let limit = sel.limit.max(1) as usize;
@@ -624,114 +753,63 @@ pub(crate) fn run_search(dag: &mut DagRunner, sel: &SelectStmt) -> Result<SqlSea
         page_size,
     );
     let metrics = dag.run(&mut batch, &ctx);
+    let now = now_millis();
     let mut candidates = batch.candidates;
     if let Some(ref pred) = sel.where_clause {
-        filter_candidates_by_where(dag, &sel.table, pred, &mut candidates)?;
+        filter_candidates_by_where(dag, &sel.table, pred, &mut candidates, now)?;
     }
     if let Some(ref join) = sel.join {
         apply_metadata_join(dag, &sel.table, join, &mut candidates)?;
     }
-    if crate::rerank::knobs_active(&batch.field_boosts, &batch.decay) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
-        crate::rerank::apply_ranking_knobs(
-            dag,
-            &sel.table,
+    let knobs = crate::rerank::knobs_active(&batch.field_boosts, &batch.decay);
+    let order_by_metadata = sel.order_by.as_ref().filter(|ob| ob.column != "score");
+    let want_docs =
+        knobs || order_by_metadata.is_some() || sel.distinct || !sel.facets.is_empty();
+    let shared_docs: Option<HashMap<u64, toradb_index::IngestDoc>> = if want_docs {
+        Some(
+            dag.fetch_documents(&sel.table, &candidates.ids)?
+                .into_iter()
+                .collect(),
+        )
+    } else {
+        None
+    };
+
+    if knobs {
+        let docs = shared_docs.as_ref().expect("docs fetched when knobs active");
+        crate::rerank::apply_ranking_knobs_with_docs(
             &mut candidates,
+            docs,
             &batch.field_boosts,
             &batch.decay,
             now,
             None,
-        )?;
+        );
     }
-
-    let order_by_metadata = sel.order_by.as_ref().filter(|ob| ob.column != "score");
-    let shared_docs: Option<HashMap<u64, toradb_index::IngestDoc>> =
-        if order_by_metadata.is_some() || sel.distinct {
-            Some(
-                dag.fetch_documents(&sel.table, &candidates.ids)?
-                    .into_iter()
-                    .collect(),
-            )
-        } else {
-            None
-        };
 
     match sel.order_by.as_ref() {
         Some(ob) if ob.column == "score" => candidates.sort_by_score(ob.descending),
         Some(ob) => {
             let docs = shared_docs.as_ref().expect("metadata fetched for ORDER BY");
             let col_types = dag.column_types_for(&sel.table);
-            let ty = col_types
-                .get(&ob.column)
-                .copied()
-                .unwrap_or(toradb_core::ColumnType::Text);
-            let mut idx: Vec<usize> = (0..candidates.ids.len()).collect();
-            idx.sort_by(|&a, &b| {
-                let va = docs
-                    .get(&candidates.ids[a])
-                    .and_then(|d| d.metadata.get(&ob.column))
-                    .map(String::as_str)
-                    .unwrap_or("");
-                let vb = docs
-                    .get(&candidates.ids[b])
-                    .and_then(|d| d.metadata.get(&ob.column))
-                    .map(String::as_str)
-                    .unwrap_or("");
-                let ord = toradb_core::typed_cmp(ty, va, vb).unwrap_or_else(|| va.cmp(vb));
-                if ob.descending {
-                    ord.reverse()
-                } else {
-                    ord
-                }
-            });
-            candidates.reorder(&idx);
+            order_by_metadata_sort(&mut candidates, ob, docs, &col_types, now);
         }
         None => candidates.sort_by_score(true),
     }
 
     if sel.distinct {
-        let docs = shared_docs.as_ref();
-        let projected_cols = resolve_retrieval_columns(sel)?;
-        let mut seen = std::collections::HashSet::new();
-        let mut keep = Vec::with_capacity(candidates.ids.len());
-        for (i, id) in candidates.ids.iter().enumerate() {
-            let key: Vec<String> = projected_cols
-                .iter()
-                .map(|c| match c.as_str() {
-                    "id" => id.to_string(),
-                    "score" => format!("{:.6}", candidates.scores[i]),
-                    "text" => docs
-                        .and_then(|m| m.get(id))
-                        .map(|d| d.text.clone())
-                        .unwrap_or_default(),
-                    meta => docs
-                        .and_then(|m| m.get(id))
-                        .and_then(|d| d.metadata.get(meta))
-                        .cloned()
-                        .unwrap_or_default(),
-                })
-                .collect();
-            if seen.insert(key) {
-                keep.push(i);
-            }
-        }
-        candidates.retain_indices(&keep);
+        let col_types = dag.column_types_for(&sel.table);
+        apply_distinct(&mut candidates, sel, shared_docs.as_ref(), &col_types, now);
     }
 
-    let facets = if sel.facets.is_empty() {
-        Vec::new()
-    } else {
-        let ids: std::collections::HashSet<u64> = candidates.ids.iter().copied().collect();
-        crate::olap::count_facets(
-            dag,
-            &sel.table,
+    let facets = match (&shared_docs, sel.facets.is_empty()) {
+        (Some(docs), false) => crate::olap::count_facets_for_ids(
             &sel.facets,
-            &ids,
+            docs,
+            &candidates.ids,
             crate::olap::DEFAULT_FACET_TOP_N,
-        )?
+        ),
+        _ => Vec::new(),
     };
 
     let page = candidates.slice_range(offset as usize, limit as usize);

@@ -202,22 +202,33 @@ pub fn run_table_search(
     let t0 = std::time::Instant::now();
     let metrics = dag.run(&mut batch, &ctx);
 
-    if crate::rerank::knobs_active(&batch.field_boosts, &batch.decay) {
-        let now = now_unix_millis();
-        let mut candidates = std::mem::take(&mut batch.candidates);
-        let mut prov = batch.provenance.take();
-        crate::rerank::apply_ranking_knobs(
-            dag,
-            &opts.table,
-            &mut candidates,
-            &batch.field_boosts,
-            &batch.decay,
-            now,
-            prov.as_mut(),
-        )?;
-        batch.candidates = candidates;
-        batch.provenance = prov;
-    }
+    let knobs = crate::rerank::knobs_active(&batch.field_boosts, &batch.decay);
+    let want_facets = !opts.facets.is_empty();
+    let shared_docs: Option<std::collections::HashMap<u64, toradb_index::IngestDoc>> =
+        if knobs || want_facets {
+            let mut candidates = std::mem::take(&mut batch.candidates);
+            let docs: std::collections::HashMap<u64, toradb_index::IngestDoc> = dag
+                .fetch_documents(&opts.table, &candidates.ids)?
+                .into_iter()
+                .collect();
+            if knobs {
+                let now = now_unix_millis();
+                let mut prov = batch.provenance.take();
+                crate::rerank::apply_ranking_knobs_with_docs(
+                    &mut candidates,
+                    &docs,
+                    &batch.field_boosts,
+                    &batch.decay,
+                    now,
+                    prov.as_mut(),
+                );
+                batch.provenance = prov;
+            }
+            batch.candidates = candidates;
+            Some(docs)
+        } else {
+            None
+        };
     let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     let top_k = opts.top_k.unwrap_or(20) as usize;
@@ -240,13 +251,12 @@ pub fn run_table_search(
         None
     };
 
-    let facets = if opts.facets.is_empty() {
-        Vec::new()
-    } else {
-        let candidate_ids: std::collections::HashSet<u64> =
-            batch.candidates.ids.iter().copied().collect();
-        let top_n = opts.facet_top_n.unwrap_or(crate::olap::DEFAULT_FACET_TOP_N);
-        crate::olap::count_facets(dag, &opts.table, &opts.facets, &candidate_ids, top_n)?
+    let facets = match (&shared_docs, want_facets) {
+        (Some(docs), true) => {
+            let top_n = opts.facet_top_n.unwrap_or(crate::olap::DEFAULT_FACET_TOP_N);
+            crate::olap::count_facets_for_ids(&opts.facets, docs, &batch.candidates.ids, top_n)
+        }
+        _ => Vec::new(),
     };
 
     let snippets = if opts.highlight && !page.ids.is_empty() {
@@ -256,10 +266,16 @@ pub fn run_table_search(
             opts.snippet_len as usize
         };
         let qtokens = crate::snippets::snippet_query_tokens(&opts.query);
-        let docs: std::collections::HashMap<u64, toradb_index::IngestDoc> = dag
-            .fetch_documents(&opts.table, &page.ids)?
-            .into_iter()
-            .collect();
+        let page_docs: Option<std::collections::HashMap<u64, toradb_index::IngestDoc>> =
+            match &shared_docs {
+                Some(_) => None,
+                None => Some(
+                    dag.fetch_documents(&opts.table, &page.ids)?
+                        .into_iter()
+                        .collect(),
+                ),
+            };
+        let docs = shared_docs.as_ref().unwrap_or_else(|| page_docs.as_ref().expect("page docs"));
         page.ids
             .iter()
             .map(|id| {

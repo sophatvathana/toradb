@@ -4,9 +4,10 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use toradb_core::{CandidateSet, ColumnType};
-use toradb_sql::ast::{CompareOp, WherePred};
+use toradb_sql::ast::{CompareOp, Expr, WherePred};
 
 use crate::dag::DagRunner;
+use crate::scalar::{eval_expr, func_return_type, Row};
 
 fn parse_numeric_metadata(value: &str) -> Option<f64> {
     value.trim().parse().ok()
@@ -28,6 +29,37 @@ pub fn ordered(
             toradb_core::typed_cmp(*ty, stored, literal).or_else(|| untyped_cmp(stored, literal))
         }
         _ => untyped_cmp(stored, literal),
+    }
+}
+
+fn ordered_ty(ty: ColumnType, stored: &str, literal: &str) -> Option<Ordering> {
+    if ty != ColumnType::Text {
+        toradb_core::typed_cmp(ty, stored, literal).or_else(|| untyped_cmp(stored, literal))
+    } else {
+        untyped_cmp(stored, literal).or_else(|| Some(stored.cmp(literal)))
+    }
+}
+
+fn compare_typed(ty: ColumnType, op: &CompareOp, stored: &str, literal: &str) -> bool {
+    match op {
+        CompareOp::Eq => match ordered_ty(ty, stored, literal) {
+            Some(o) => o == Ordering::Equal,
+            None => stored == literal,
+        },
+        CompareOp::Ne => match ordered_ty(ty, stored, literal) {
+            Some(o) => o != Ordering::Equal,
+            None => stored != literal,
+        },
+        CompareOp::Lt => matches!(ordered_ty(ty, stored, literal), Some(Ordering::Less)),
+        CompareOp::Lte => matches!(
+            ordered_ty(ty, stored, literal),
+            Some(Ordering::Less | Ordering::Equal)
+        ),
+        CompareOp::Gt => matches!(ordered_ty(ty, stored, literal), Some(Ordering::Greater)),
+        CompareOp::Gte => matches!(
+            ordered_ty(ty, stored, literal),
+            Some(Ordering::Greater | Ordering::Equal)
+        ),
     }
 }
 
@@ -75,14 +107,37 @@ pub fn metadata_matches(
     pred: &WherePred,
     metadata: &HashMap<String, String>,
     col_types: &HashMap<String, ColumnType>,
+    now_millis: i64,
 ) -> bool {
     match pred {
         WherePred::And(parts) => parts
             .iter()
-            .all(|p| metadata_matches(p, metadata, col_types)),
+            .all(|p| metadata_matches(p, metadata, col_types, now_millis)),
         WherePred::Or(parts) => parts
             .iter()
-            .any(|p| metadata_matches(p, metadata, col_types)),
+            .any(|p| metadata_matches(p, metadata, col_types, now_millis)),
+        WherePred::ExprCompare { lhs, op, value } => {
+            let id = metadata
+                .get("id")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+            let row = Row {
+                id,
+                metadata,
+                text: metadata.get("text").map(String::as_str),
+                score: None,
+            };
+            let lv = eval_expr(lhs, &row, col_types, now_millis);
+            let Some(stored) = lv.as_string() else {
+                return false;  
+            };
+            let ty = match lhs {
+                Expr::Column(c) => col_types.get(c).copied().unwrap_or(ColumnType::Text),
+                Expr::Func { name, .. } => func_return_type(name, &[]),
+                Expr::Literal(_) => lv.column_type(),
+            };
+            compare_typed(ty, op, &stored, value)
+        }
         WherePred::Compare { column, op, value } => {
             let Some(v) = metadata.get(column) else {
                 return false;
@@ -174,6 +229,7 @@ pub fn filter_candidates_by_where(
     table: &str,
     pred: &WherePred,
     candidates: &mut CandidateSet,
+    now_millis: i64,
 ) -> Result<(), String> {
     if candidates.is_empty() {
         return Ok(());
@@ -190,7 +246,7 @@ pub fn filter_candidates_by_where(
         };
         let mut meta = doc.metadata.clone();
         meta.insert("id".to_string(), id.to_string());
-        if metadata_matches(pred, &meta, &col_types) {
+        if metadata_matches(pred, &meta, &col_types, now_millis) {
             kept_ids.push(*id);
             kept_scores.push(candidates.scores[i]);
         }

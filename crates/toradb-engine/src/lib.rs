@@ -15,6 +15,7 @@ pub mod olap;
 pub mod operator;
 pub mod persist;
 pub mod rerank;
+pub mod scalar;
 pub mod scheduler;
 pub mod snippets;
 pub mod sql_exec;
