@@ -1,0 +1,118 @@
+---
+title: "Functions & aliases"
+description: "Built-in scalar functions and column aliases in SELECT, WHERE, ORDER BY, and GROUP BY"
+---
+
+ToraDB SQL supports **built-in scalar functions** (string, numeric, date/time, conditional) and **column aliases**. Functions are usable in `SELECT`, `WHERE`, `ORDER BY`, and `GROUP BY`, and can be nested (`lower(trim(title))`). Arguments are columns, literals, or other functions.
+
+## Column aliases
+
+Rename an output column with `AS`. The `AS` keyword is optional.
+
+```sql
+SELECT category AS cat, lower(title) AS name FROM docs
+SELECT category cat FROM docs            -- bare alias, no AS
+SELECT SUM(amount) AS total FROM docs GROUP BY tag
+```
+
+The alias becomes the output column name (the JSON key in API/SDK responses). Without an alias, a column keeps its name, a function uses its canonical text (`lower(title)`), and an aggregate uses its default name (`sum_amount`, `count`).
+
+<Note>
+Aliases only rename output columns. They are **not** referenceable from `WHERE`, `ORDER BY`, or `GROUP BY` — repeat the expression there instead. `SELECT DISTINCT` dedupes on the underlying expression, not the alias.
+</Note>
+
+## Scalar functions in SELECT
+
+```sql
+SELECT id, upper(category) AS shout, length(trim(title)) AS len
+FROM docs
+```
+
+Each function is evaluated per row; the columns it references are fetched automatically.
+
+## Scalar functions in WHERE
+
+```sql
+SELECT id FROM docs WHERE lower(status) = 'active'
+SELECT id FROM docs WHERE length(title) > 5
+```
+
+The function is evaluated for each candidate, then compared against the literal. A `NULL` result never matches.
+
+## Scalar functions in ORDER BY
+
+```sql
+SELECT id FROM docs ORDER BY length(title) DESC
+SELECT id FROM docs ORDER BY lower(title) ASC
+```
+
+`ORDER BY score` (relevance) remains the default for retrieval queries.
+
+## Scalar functions in GROUP BY
+
+```sql
+SELECT date_trunc('month', created) AS month, COUNT(*)
+FROM docs
+GROUP BY date_trunc('month', created)
+```
+
+Aggregates can also wrap a function:
+
+```sql
+SELECT tag, SUM(abs(amount)) AS net FROM docs GROUP BY tag
+```
+
+## Function reference
+
+### String
+
+| Function | Arity | Returns | Notes |
+|----------|-------|---------|-------|
+| `lower(x)` | 1 | text | |
+| `upper(x)` | 1 | text | |
+| `length(x)` | 1 | int | character count |
+| `trim(x)` | 1 | text | |
+| `substr(x, start[, len])` | 2–3 | text | 1-based `start` |
+| `concat(a, b, ...)` | ≥1 | text | `NULL` treated as `''` |
+| `coalesce(a, b, ...)` | ≥1 | first non-null | |
+
+### Numeric
+
+| Function | Arity | Returns | Notes |
+|----------|-------|---------|-------|
+| `abs(x)` | 1 | number | |
+| `round(x[, d])` | 1–2 | number | `round(x)` → int; `round(x, d)` → float |
+| `floor(x)` | 1 | int | |
+| `ceil(x)` | 1 | int | |
+| `mod(a, b)` | 2 | number | `NULL` when `b = 0` |
+
+### Date / time
+
+| Function | Arity | Returns | Notes |
+|----------|-------|---------|-------|
+| `now()` | 0 | int | query time, epoch milliseconds |
+| `date_trunc(unit, ts)` | 2 | text | `unit` ∈ `year`, `month`, `day`, `hour`, `minute` → ISO timestamp |
+| `extract(field, ts)` | 2 | int | `field` ∈ `year`, `month`, `day`, `hour`, `minute`, `second`, `epoch` |
+| `age(ts)` | 1 | int | `now() − ts`, in milliseconds |
+
+Timestamps are parsed from stored `Date`/`Timestamp` columns (ISO `YYYY-MM-DD[THH:MM:SS]`).
+
+### Conditional
+
+| Function | Arity | Returns | Notes |
+|----------|-------|---------|-------|
+| `coalesce(a, b, ...)` | ≥1 | first non-null | |
+| `ifnull(a, b)` | 2 | `a` if non-null, else `b` | |
+| `nullif(a, b)` | 2 | `NULL` if `a = b`, else `a` | |
+
+## NULL handling
+
+A missing column evaluates to `NULL`. Functions propagate `NULL` (a `NULL` argument yields `NULL`) **except** `coalesce`/`ifnull` (which skip nulls), `nullif`, and `concat` (which treats `NULL` as the empty string). In projection, `NULL` renders as an empty string.
+
+## Limitations
+
+- Functions on the left of `IN`, `BETWEEN`, `LIKE`, and in `HAVING` are not supported yet — use a plain comparison (`func(x) = 'y'`).
+- `ORDER BY <function>` is not supported on materialized views (cached rows lack the source columns).
+- Aggregate over a function (`SUM(abs(x))`) cannot reference `text` in the GROUP BY scan path.
+
+Unknown function names and wrong argument counts are rejected at parse time.

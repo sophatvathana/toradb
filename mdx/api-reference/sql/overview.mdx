@@ -11,8 +11,9 @@ ToraDB SQL supports **catalog**, **DDL**, **retrieval SELECT**, and **analytics 
 |----------|----------|
 | Catalog | `SHOW TABLES`, `DESCRIBE t`, `SHOW MATERIALIZED VIEWS` |
 | DDL | `CREATE TABLE`, `CREATE INDEX`, `DROP TABLE`, `COMPACT TABLE` |
-| Retrieval | `SELECT ... SPARSE SEARCH ...`, `VECTOR SEARCH ...` |
-| Analytics | `SELECT agg ... GROUP BY`, `WHERE` |
+| Retrieval | `SELECT ... SPARSE SEARCH ...`, `VECTOR SEARCH ...`, `BOOST`, `DECAY`, `FACETS`, `HIGHLIGHT` |
+| Analytics | `SELECT agg ... GROUP BY`, `WHERE`, `HAVING` |
+| Functions | scalar functions (`lower`, `length`, `date_trunc`, …) and `AS` aliases |
 | Views | `CREATE MATERIALIZED VIEW`, `REFRESH`, `DROP` |
 
 ## Result shapes
@@ -25,6 +26,7 @@ ToraDB SQL supports **catalog**, **DDL**, **retrieval SELECT**, and **analytics 
 
 - [DDL](/api-reference/sql/ddl)
 - [Retrieval](/api-reference/sql/retrieval)
+- [Functions & aliases](/api-reference/sql/functions)
 - [Analytics](/api-reference/sql/analytics)
 - [Materialized views](/api-reference/sql/materialized-views)
 

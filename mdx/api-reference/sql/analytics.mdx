@@ -29,13 +29,23 @@ GROUP BY tag
 
 Comparison operators: `=`, `!=`, `<`, `<=`, `>`, `>=`.
 
-## IN
+## IN, BETWEEN, LIKE
 
 ```sql
 SELECT tag, COUNT(*) FROM articles
 WHERE tag IN ('patent', 'science')
 GROUP BY tag
+
+SELECT tag, COUNT(*) FROM articles
+WHERE year BETWEEN 2000 AND 2010
+GROUP BY tag
+
+SELECT tag, COUNT(*) FROM articles
+WHERE title LIKE '%Tesla%'
+GROUP BY tag
 ```
+
+`NOT BETWEEN` and `NOT LIKE` are supported. `LIKE` uses `%` (any run) and `_` (single char) and is case-sensitive.
 
 ## Aggregates
 
@@ -46,6 +56,44 @@ GROUP BY tag
 | `AVG(col)` | `SELECT tag, AVG(score) FROM t GROUP BY tag` |
 | `MIN(col)` | `SELECT tag, MIN(score) FROM t GROUP BY tag` |
 | `MAX(col)` | `SELECT tag, MAX(score) FROM t GROUP BY tag` |
+
+### Aggregate over a function
+
+Aggregates can wrap a [scalar function](/api-reference/sql/functions):
+
+```sql
+SELECT tag, SUM(abs(amount)) AS net FROM ledger GROUP BY tag
+```
+
+### Aliases
+
+Name the output value column with `AS`:
+
+```sql
+SELECT tag, COUNT(*) AS n, AVG(score) AS mean FROM articles GROUP BY tag
+```
+
+## GROUP BY a function
+
+Group by a computed key, e.g. bucket timestamps by month:
+
+```sql
+SELECT date_trunc('month', created) AS month, COUNT(*)
+FROM events
+GROUP BY date_trunc('month', created)
+```
+
+## HAVING
+
+Filter groups after aggregation. Reference the aggregate **value column** by its output name (`count`, `sum_<col>`, `avg_<col>`, …, or an alias) or the group key column:
+
+```sql
+SELECT tag, COUNT(*) FROM articles
+GROUP BY tag
+HAVING count > 2
+```
+
+Comparison operators, `IN`, `BETWEEN`, and `LIKE` are supported in `HAVING`. Use the value column name (`count`, `sum_score`) — not the `COUNT(*)`/`SUM(...)` expression.
 
 ## Retrieval + analytics
 

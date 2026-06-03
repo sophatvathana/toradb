@@ -1,6 +1,6 @@
 ---
 title: "SQL retrieval"
-description: "SPARSE SEARCH, VECTOR SEARCH, ORDER BY, EXPLAIN"
+description: "SPARSE SEARCH, VECTOR SEARCH, ranking knobs, facets, ORDER BY, EXPLAIN"
 ---
 
 ## Sparse search
@@ -21,6 +21,18 @@ LIMIT 2
 
 `ANN(...)` accepts a float list or a text literal for lexical proxy embedding when no vector is stored.
 
+## BM25 tuning
+
+Override the BM25 `k1` and `b` parameters per query:
+
+```sql
+SELECT id FROM articles
+SPARSE SEARCH body BM25('Nikola Tesla', k1=1.5, b=0.6)
+LIMIT 5
+```
+
+`k1` controls term-frequency saturation; `b` controls length normalization. Both are optional and default to the index settings.
+
 ## Combined sparse + vector
 
 ```sql
@@ -39,7 +51,60 @@ ORDER BY score DESC
 LIMIT 3
 ```
 
-`ORDER BY score ASC` is also supported.
+`ORDER BY score ASC` is also supported. You can also order by a metadata column or a [scalar function](/api-reference/sql/functions) — see [Functions & aliases](/api-reference/sql/functions).
+
+## Ranking knobs
+
+Re-rank retrieved candidates after the base relevance score with **field boosts** and **temporal decay**. Both widen the candidate window so the re-rank covers the full result set, not just the page.
+
+### BOOST
+
+`BOOST(field, factor)` multiplies a document's score by `factor` when `field` is present and non-empty. Repeat the clause for multiple fields (boosts multiply).
+
+```sql
+SELECT id FROM articles
+SPARSE SEARCH body BM25('Nikola Tesla')
+BOOST(title, 2.0)
+BOOST(verified, 1.5)
+LIMIT 10
+```
+
+### DECAY
+
+`DECAY(field, half_life=days)` applies exponential time decay based on a timestamp field: `score *= 0.5 ^ (age_days / half_life_days)`. The `half_life` keyword is optional.
+
+```sql
+SELECT id FROM articles
+SPARSE SEARCH body BM25('Nikola Tesla')
+DECAY(published_at, half_life=30)
+LIMIT 10
+```
+
+Combine boosts and decay freely. With `EXPLAIN`, the per-document score breakdown (base / boost / decay / final) appears in the provenance trace.
+
+## Facets
+
+`FACETS(col1, col2, ...)` returns per-value counts over the **full matched set** (not just the returned page). Counts are exposed as `facets` on the result (`SearchResults` in Python).
+
+```sql
+SELECT id FROM articles
+SPARSE SEARCH body BM25('Nikola Tesla')
+FACETS(tag, author)
+LIMIT 10
+```
+
+Each facet field returns up to the top 20 values by count (ties broken by value).
+
+## HIGHLIGHT
+
+`HIGHLIGHT(len)` adds a `snippet` column with the matched query terms wrapped in `<em>...</em>`, truncated to `len` characters.
+
+```sql
+SELECT id FROM articles
+SPARSE SEARCH body BM25('alternating current')
+HIGHLIGHT(160)
+LIMIT 5
+```
 
 ## OFFSET / LIMIT
 
