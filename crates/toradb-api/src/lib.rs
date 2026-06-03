@@ -26,6 +26,8 @@ use toradb_sql::{
 };
 use tower_http::services::{ServeDir, ServeFile};
 
+mod pipe_api;
+
 const MAX_UPLOAD_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Clone)]
@@ -45,6 +47,13 @@ struct AppState {
     ingest_jobs: Arc<Mutex<Vec<IngestJob>>>,
     next_ingest_job_id: Arc<AtomicU64>,
     ingest_cancel: Arc<Mutex<HashSet<u64>>>,
+    pipe_store: Arc<Mutex<toradb_pipe::PipeStore>>,
+    sync_jobs: Arc<Mutex<Vec<IngestJob>>>,
+    next_sync_job_id: Arc<AtomicU64>,
+    sync_cancel: Arc<Mutex<HashSet<u64>>>,
+    scheduler_running: toradb_pipe::RunningSet,
+    auth: Arc<Mutex<toradb_pipe::AuthStore>>,
+    auth_enabled: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -361,7 +370,12 @@ pub fn serve_blocking(config: ServeConfig) -> Result<(), String> {
         ));
     }
 
+    toradb_pipe::install_drivers();
     let dag = DagRunner::open_with_reload(&config.db_path, false)?;
+    let pipe_store = toradb_pipe::PipeStore::open(&config.db_path)?;
+    let auth = toradb_pipe::AuthStore::open(&config.db_path)?;
+    let require_auth =
+        auth.has_users() || std::env::var("TORADB_REQUIRE_AUTH").as_deref() == Ok("1");
     let state = AppState {
         db_path: config.db_path.clone(),
         dag: Arc::new(Mutex::new(dag)),
@@ -371,10 +385,19 @@ pub fn serve_blocking(config: ServeConfig) -> Result<(), String> {
         ingest_jobs: Arc::new(Mutex::new(Vec::new())),
         next_ingest_job_id: Arc::new(AtomicU64::new(1)),
         ingest_cancel: Arc::new(Mutex::new(HashSet::new())),
+        pipe_store: Arc::new(Mutex::new(pipe_store)),
+        sync_jobs: Arc::new(Mutex::new(Vec::new())),
+        next_sync_job_id: Arc::new(AtomicU64::new(1)),
+        sync_cancel: Arc::new(Mutex::new(HashSet::new())),
+        scheduler_running: Arc::new(Mutex::new(HashSet::new())),
+        auth: Arc::new(Mutex::new(auth)),
+        auth_enabled: Arc::new(std::sync::atomic::AtomicBool::new(require_auth)),
     };
 
     let static_service = ServeDir::new(&config.static_dir)
         .fallback(ServeFile::new(config.static_dir.join("index.html")));
+
+    let scheduler_state = state.clone();
 
     let app = Router::new()
         .route("/api/health", get(health))
@@ -410,12 +433,64 @@ pub fn serve_blocking(config: ServeConfig) -> Result<(), String> {
         .route("/api/ingest/jobs/{id}", get(get_ingest_job))
         .route("/api/ingest/jobs/{id}/cancel", post(cancel_ingest_job))
         .route("/api/ingest/finish", post(ingest_finish))
+        .route(
+            "/api/connections",
+            get(pipe_api::list_connections).post(pipe_api::create_connection),
+        )
+        .route(
+            "/api/connections/{id}",
+            axum::routing::delete(pipe_api::delete_connection),
+        )
+        .route("/api/connections/test", post(pipe_api::test_connection))
+        .route("/api/connections/upload", post(pipe_api::upload_connection))
+        .route(
+            "/api/connections/{id}/introspect",
+            get(pipe_api::introspect_connection),
+        )
+        .route(
+            "/api/connections/{id}/tables",
+            get(pipe_api::list_connection_tables),
+        )
+        .route(
+            "/api/connections/{id}/tables/{table}/columns",
+            get(pipe_api::list_connection_columns),
+        )
+        .route(
+            "/api/pipelines",
+            get(pipe_api::list_pipelines).post(pipe_api::create_pipeline),
+        )
+        .route(
+            "/api/pipelines/{id}",
+            get(pipe_api::get_pipeline)
+                .patch(pipe_api::patch_pipeline)
+                .delete(pipe_api::delete_pipeline),
+        )
+        .route("/api/pipelines/{id}/run", post(pipe_api::run_pipeline_now))
+        .route("/api/pipelines/{id}/runs", get(pipe_api::pipeline_runs))
+        .route("/api/sync/jobs", get(pipe_api::list_sync_jobs))
+        .route("/api/sync/jobs/{id}", get(pipe_api::get_sync_job))
+        .route("/api/sync/jobs/{id}/cancel", post(pipe_api::cancel_sync_job))
+        .route("/api/embed", post(pipe_api::embed_query))
+        .route("/api/auth/login", post(pipe_api::auth_login))
+        .route("/api/auth/logout", post(pipe_api::auth_logout))
+        .route("/api/auth/me", get(pipe_api::auth_me))
+        .route("/api/auth/bootstrap", post(pipe_api::auth_bootstrap))
+        .route(
+            "/api/auth/keys",
+            get(pipe_api::list_api_keys).post(pipe_api::create_api_key),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            pipe_api::auth_middleware,
+        ))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .with_state(state)
         .fallback_service(static_service);
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async move {
+        // Start the toraPipe scheduler now that a reactor is running.
+        pipe_api::spawn_pipe_scheduler(scheduler_state);
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| e.to_string())?;
@@ -927,16 +1002,7 @@ fn spawn_compact_task(state: &AppState, table: String, full: bool) -> u64 {
     );
 
     let db_path = state.db_path.clone();
-    let snapshot = AppState {
-        db_path: state.db_path.clone(),
-        dag: Arc::clone(&state.dag),
-        query_history: Arc::clone(&state.query_history),
-        tasks: Arc::clone(&state.tasks),
-        next_task_id: Arc::clone(&state.next_task_id),
-        ingest_jobs: Arc::clone(&state.ingest_jobs),
-        next_ingest_job_id: Arc::clone(&state.next_ingest_job_id),
-        ingest_cancel: Arc::clone(&state.ingest_cancel),
-    };
+    let snapshot = state.clone();
 
     thread::spawn(move || {
         let result = (|| {
@@ -979,20 +1045,7 @@ fn spawn_index_task(state: &AppState, table: String, kind: &'static str, compact
     );
 
     let db_path = state.db_path.clone();
-    let tasks = Arc::clone(&state.tasks);
-    let dag_arc = Arc::clone(&state.dag);
-    let next_id = Arc::clone(&state.next_task_id);
-
-    let snapshot = AppState {
-        db_path: state.db_path.clone(),
-        dag: dag_arc,
-        query_history: Arc::clone(&state.query_history),
-        tasks,
-        next_task_id: next_id,
-        ingest_jobs: Arc::clone(&state.ingest_jobs),
-        next_ingest_job_id: Arc::clone(&state.next_ingest_job_id),
-        ingest_cancel: Arc::clone(&state.ingest_cancel),
-    };
+    let snapshot = state.clone();
 
     thread::spawn(move || {
         let result = (|| {

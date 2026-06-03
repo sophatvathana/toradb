@@ -9,9 +9,12 @@ import {
   Database,
   Gauge,
   Layers,
+  Plug,
+  RefreshCw,
   ScrollText,
   Search,
   ServerCog,
+  Settings,
   Table2,
   Upload,
 } from "lucide-react";
@@ -36,7 +39,10 @@ const NAV_ITEMS = [
   { href: "/schema", icon: ServerCog, title: "Schema" },
   { href: "/views", icon: Layers, title: "Materialized Views" },
   { href: "/ingest", icon: Upload, title: "Ingest" },
+  { href: "/connections", icon: Plug, title: "Connections" },
+  { href: "/sync", icon: RefreshCw, title: "Sync" },
   { href: "/jobs", icon: Activity, title: "Background Jobs" },
+  { href: "/settings", icon: Settings, title: "Settings" },
 ] as const;
 
 function isNavActive(pathname: string, href: string): boolean {

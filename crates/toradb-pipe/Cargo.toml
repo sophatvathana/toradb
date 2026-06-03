@@ -1,0 +1,42 @@
+[package]
+name = "toradb-pipe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+toradb-core = { workspace = true }
+toradb-engine = { workspace = true }
+toradb-index = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+aes-gcm = "0.10"
+argon2 = "0.5"
+rand = "0.8"
+base64 = "0.22"
+sha2 = "0.10"
+chrono = "0.4"
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio-rustls",
+    "any",
+    "postgres",
+    "mysql",
+    "sqlite",
+    "chrono",
+] }
+
+tokio-postgres = { version = "0.7", optional = true }
+futures-util = { version = "0.3", optional = true }
+
+[features]
+default = []
+# Local ONNX/Candle embedding (heavy native deps); off by default.
+local-embed = []
+# Postgres logical replication CDC (requires a live PG with wal_level=logical).
+pg-cdc = ["dep:tokio-postgres", "dep:futures-util"]
+
+[dev-dependencies]
+tempfile = "3"

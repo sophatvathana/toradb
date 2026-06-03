@@ -8,6 +8,7 @@ members = [
     "crates/toradb-distributed",
     "crates/toradb-engine",
     "crates/toradb-sql",
+    "crates/toradb-pipe",
     "crates/toradb-sdk",
     "crates/toradb-cli",
     "crates/toradb-api",
@@ -20,6 +21,7 @@ default-members = [
     "crates/toradb-index",
     "crates/toradb-engine",
     "crates/toradb-sql",
+    "crates/toradb-pipe",
     "crates/toradb-cli",
     "crates/toradb-api",
 ]
@@ -37,6 +39,7 @@ toradb-index = { path = "crates/toradb-index" }
 toradb-distributed = { path = "crates/toradb-distributed" }
 toradb-engine = { path = "crates/toradb-engine" }
 toradb-sql = { path = "crates/toradb-sql" }
+toradb-pipe = { path = "crates/toradb-pipe" }
 toradb-api = { path = "crates/toradb-api" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
@@ -47,6 +50,6 @@ memmap2 = "0.9"
 arrow = { version = "58.3.0", default-features = false, features = ["ipc"] }
 parquet = { version = "58.3.0", default-features = false, features = ["arrow", "snap", "zstd"] }
 rayon = "1.12.0"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 axum = "0.8"
 tower-http = { version = "0.6", features = ["fs", "trace"] }

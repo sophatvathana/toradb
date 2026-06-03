@@ -1,10 +1,43 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { PlatformShell } from "@/components/platform-shell";
 import { ToastProvider, useToast } from "@/components/toast-provider";
+import { fetchAuthStatus, fetchConnections } from "@/lib/api";
 import { usePlatformStore } from "@/stores/platform-store";
+
+/// Redirect to /login when auth is enabled and the current session is invalid.
+function useAuthGuard(): boolean {
+  const router = useRouter();
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const status = await fetchAuthStatus();
+        if (!status.auth_enabled) {
+          if (!cancelled) setReady(true);
+          return;
+        }
+        // Auth enabled: probe a protected endpoint; 401 -> redirect to login.
+        try {
+          await fetchConnections();
+          if (!cancelled) setReady(true);
+        } catch {
+          router.replace("/login");
+        }
+      } catch {
+        if (!cancelled) setReady(true); // server unreachable; let pages surface errors
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+  return ready;
+}
 
 function TaskToastWatcher() {
   const { toast } = useToast();
@@ -37,14 +70,25 @@ export function PlatformLayoutClient({ children }: { children: React.ReactNode }
   const stopPolling = usePlatformStore((s) => s.stopPolling);
   const stopIngestJobWatch = usePlatformStore((s) => s.stopIngestJobWatch);
 
+  const authReady = useAuthGuard();
+
   useEffect(() => {
+    if (!authReady) return;
     void hydrate();
     startPolling(5000);
     return () => {
       stopPolling();
       stopIngestJobWatch();
     };
-  }, [hydrate, startPolling, stopPolling, stopIngestJobWatch]);
+  }, [authReady, hydrate, startPolling, stopPolling, stopIngestJobWatch]);
+
+  if (!authReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+        Loading…
+      </div>
+    );
+  }
 
   return (
     <ToastProvider>

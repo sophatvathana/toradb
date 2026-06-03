@@ -48,6 +48,58 @@ enum Commands {
         #[command(subcommand)]
         command: PlatformCommand,
     },
+    Pipe {
+        #[command(subcommand)]
+        command: PipeCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum PipeCommand {
+    Test(PipeTestArgs),
+    Sync(PipeSyncArgs),
+    List(PipeListArgs),
+}
+
+#[derive(Parser)]
+struct PipeTestArgs {
+    /// Source connection URL (postgres://, mysql://, sqlite://...).
+    #[arg(long)]
+    url: String,
+}
+
+#[derive(Parser)]
+struct PipeListArgs {
+    #[arg(long)]
+    db: PathBuf,
+}
+
+#[derive(Parser)]
+struct PipeSyncArgs {
+    #[arg(long)]
+    db: PathBuf,
+    #[arg(long)]
+    url: String,
+    #[arg(long)]
+    query: String,
+    #[arg(long, default_value = "passages")]
+    table: String,
+    #[arg(long)]
+    text_column: String,
+    #[arg(long, num_args = 0..)]
+    metadata_columns: Vec<String>,
+    #[arg(long)]
+    vector_column: Option<String>,
+    #[arg(long)]
+    id_column: Option<String>,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    incremental: bool,
+    #[arg(long)]
+    cursor_column: Option<String>,
+    #[arg(long, default_value = "10000")]
+    batch_size: usize,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    drop_table: bool,
 }
 
 #[derive(Subcommand)]
@@ -164,7 +216,105 @@ fn main() -> Result<(), String> {
         }
         Commands::TqBench(args) => run_tq_bench(args),
         Commands::Platform { command } => run_platform(command),
+        Commands::Pipe { command } => run_pipe(command),
     }
+}
+
+fn run_pipe(cmd: PipeCommand) -> Result<(), String> {
+    use std::sync::Mutex;
+    use toradb_pipe::{
+        install_drivers, open_sql_source, run_pipeline, ColumnMapping, JobReporter, Pipeline,
+        PipeStore, SyncMode,
+    };
+
+    struct CliReporter;
+    impl JobReporter for CliReporter {
+        fn progress(&self, phase: &str, rows: u64, _pct: Option<u8>) {
+            eprintln!("  [{phase}] {rows} rows");
+        }
+    }
+
+    install_drivers();
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    match cmd {
+        PipeCommand::Test(a) => rt.block_on(async move {
+            toradb_pipe::test_connection(&a.url).await?;
+            eprintln!("ok: connection succeeded");
+            Ok(())
+        }),
+        PipeCommand::List(a) => {
+            let store = PipeStore::open(&a.db)?;
+            for p in store.pipelines() {
+                println!(
+                    "{}\t{}\t-> {}\t{:?}\tcursor={:?}",
+                    p.id, p.name, p.target_table, p.mode, p.last_cursor
+                );
+            }
+            Ok(())
+        }
+        PipeCommand::Sync(a) => rt.block_on(async move {
+            let dag = Arc::new(Mutex::new(DagRunner::open_with_reload(&a.db, false)?));
+            let mut store = PipeStore::open(&a.db)?;
+            let mode = if a.incremental {
+                SyncMode::Incremental
+            } else {
+                SyncMode::Full
+            };
+            if a.incremental && a.cursor_column.is_none() {
+                return Err("--incremental requires --cursor-column".into());
+            }
+            // Deterministic id so repeated incremental runs reuse the watermark.
+            let pid = format!("cli_{}_{}", a.table, simple_hash(&a.query));
+            let last_cursor = store.pipeline(&pid).and_then(|p| p.last_cursor.clone());
+            let pipeline = Pipeline {
+                id: pid.clone(),
+                name: format!("cli sync -> {}", a.table),
+                connection_id: String::new(),
+                query: a.query.clone(),
+                target_table: a.table.clone(),
+                mapping: ColumnMapping {
+                    text_column: a.text_column.clone(),
+                    metadata_columns: a.metadata_columns.clone(),
+                    vector_column: a.vector_column.clone(),
+                    id_column: a.id_column.clone(),
+                    cursor_column: a.cursor_column.clone(),
+                },
+                embedder: None,
+                mode,
+                last_cursor,
+                schedule: None,
+                drop_table_on_full: a.drop_table,
+                enabled: true,
+                batch_size: a.batch_size,
+                created_at: 0,
+            };
+            if store.pipeline(&pid).is_some() {
+                store.update_pipeline(&pid, |p| {
+                    p.query = pipeline.query.clone();
+                    p.mapping = pipeline.mapping.clone();
+                    p.mode = pipeline.mode;
+                })?;
+            } else {
+                store.add_pipeline(pipeline.clone())?;
+            }
+
+            let source = open_sql_source(&a.url, &pipeline).await?;
+            let outcome = run_pipeline(dag, source, &pipeline, Arc::new(CliReporter)).await?;
+            store.set_last_cursor(&pid, outcome.cursor_after.clone())?;
+            eprintln!(
+                "ok: synced {} rows ({}), cursor={:?}",
+                outcome.rows, outcome.state, outcome.cursor_after
+            );
+            Ok(())
+        }),
+    }
+}
+
+fn simple_hash(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
 }
 
 fn run_platform(cmd: PlatformCommand) -> Result<(), String> {
