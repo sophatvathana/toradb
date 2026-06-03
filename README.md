@@ -2,6 +2,8 @@
 
 Retrieval-focused database for local text, vector, and hybrid search — with a Python SDK, CLI, and retrieval SQL.
 
+![ToraDB platform](docs/readme.png)
+
 ## Features
 
 - **Local on-disk tables** — Parquet segments, index sidecars, WAL replay

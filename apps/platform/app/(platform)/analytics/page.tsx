@@ -3,7 +3,7 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { BarChart3, LoaderCircle, Play } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
+import { SqlBarChart, sqlResultToBarChart } from "@/components/sql-bar-chart";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -83,18 +83,10 @@ export default function AnalyticsPage() {
     }
   }
 
-  // Identify the value (numeric aggregate) column = last column; group label = first.
-  const chart = useMemo(() => {
-    if (!result || result.columns.length < 2 || result.rows.length === 0) return null;
-    const labelCol = result.columns[0];
-    const valueCol = result.columns[result.columns.length - 1];
-    const points = result.rows.map((r) => ({
-      label: String(r[labelCol] ?? "—"),
-      value: Number(r[valueCol] ?? 0),
-    }));
-    const max = Math.max(...points.map((p) => p.value), 1);
-    return { valueCol, labelCol, points, max };
-  }, [result]);
+  const chart = useMemo(
+    () => (result ? sqlResultToBarChart(result) : null),
+    [result],
+  );
 
   return (
     <div className="space-y-4">
@@ -225,34 +217,7 @@ export default function AnalyticsPage() {
         </div>
       )}
 
-      {chart && (
-        <Card>
-          <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
-            <CardTitle className="text-base">
-              {chart.valueCol} by {chart.labelCol}
-            </CardTitle>
-            <Badge variant="outline">{chart.points.length} groups</Badge>
-          </CardHeader>
-          <CardContent className="space-y-1.5">
-            {chart.points.map((p, i) => (
-              <div key={i} className="flex items-center gap-2 text-xs">
-                <span className="w-32 shrink-0 truncate font-mono" title={p.label}>
-                  {p.label}
-                </span>
-                <div className="h-4 flex-1 overflow-hidden rounded-sm bg-muted">
-                  <div
-                    className="h-full rounded-sm bg-primary/70"
-                    style={{ width: `${Math.max(2, (p.value / chart.max) * 100)}%` }}
-                  />
-                </div>
-                <span className="w-16 shrink-0 text-right font-mono text-muted-foreground">
-                  {p.value.toLocaleString()}
-                </span>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+      {chart && <SqlBarChart chart={chart} />}
 
       {result && (
         <Card>

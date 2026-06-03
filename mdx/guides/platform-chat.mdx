@@ -1,0 +1,65 @@
+---
+title: Platform Chat
+description: Chat with your ToraDB data — search, SQL analytics, charts, and reports.
+---
+
+# Platform Chat
+
+Platform **Chat** (`/chat`) is a data assistant grounded on your ToraDB tables. Ask natural-language questions; the assistant calls search and SQL tools, shows citations and charts, and can produce exportable reports.
+
+## Setup
+
+### Browser LLM (local development)
+
+1. Open **Settings** in the platform.
+2. Under **LLM (Chat)**, choose a provider preset or enter:
+   - **API key** — stored only in your browser (`localStorage`), never sent to ToraDB.
+   - **Base URL** — e.g. `https://api.openai.com/v1` or `http://localhost:11434/v1` for Ollama.
+   - **Model** — e.g. `gpt-4o-mini`.
+3. Click **Test LLM connection**, then open **Chat**.
+
+Local Ollama/LM Studio may require CORS on the LLM HTTP server when using browser mode.
+
+### Server proxy (production)
+
+Configure the ingest/API server:
+
+```bash
+export TORADB_LLM_BASE_URL="https://api.openai.com/v1"
+export TORADB_LLM_API_KEY="sk-…"
+export TORADB_LLM_MODEL="gpt-4o-mini"
+```
+
+Restart `toradb-ingest platform serve`. In Settings, enable **Use server proxy**. API keys stay on the server; the browser only calls `/api/chat/completions`.
+
+### Vector search (optional)
+
+Enable **Embedder** in Settings with an OpenAI-compatible `/embeddings` endpoint so Chat can use dense/hybrid retrieval on vector tables.
+
+## Example prompts
+
+- “How many rows are in `passages`?”
+- “Find documents about wireless power transfer.”
+- “Count records by tag and show a chart.”
+- “Write an executive report on the top themes in this table.”
+
+## Export
+
+From the Chat header:
+
+- **MD** — Markdown report of the thread (queries, tables, citations).
+- **HTML** — Printable single-file report.
+
+## Tools the assistant uses
+
+| Tool | Purpose |
+|------|---------|
+| `list_tables` | Table names and row counts |
+| `describe_table` | Schema and samples |
+| `search` | BM25 / hybrid / strategy-based retrieval |
+| `embed_query` | Query embeddings (when embedder configured) |
+| `run_sql` | Read-only analytics SQL |
+| `render_chart` | Bar charts |
+| `generate_report` | Structured report sections |
+
+SQL mutations (`DROP`, `DELETE`, `CREATE`, etc.) are blocked in Chat.

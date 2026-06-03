@@ -8,6 +8,7 @@
 |------|--------|
 | `/overview` | Metrics, latency trend, MV snippet, active tasks |
 | `/search` | Native `Table.search` UI (POST `/api/search`), strategies, document text |
+| `/chat` | LLM assistant: search/SQL tools, charts, Markdown/HTML reports |
 | `/query` | SQL workbench, saved queries, EXPLAIN, metrics, export CSV/JSON |
 | `/query-log` | Filterable/searchable query history, export CSV |
 | `/catalog` | Table list with search filter, link to create table |
@@ -21,7 +22,7 @@ State: [Zustand](https://github.com/pmndrs/zustand) (`stores/platform-store.ts`)
 
 ## API surface (via `toradb-api`)
 
-Read: `/api/health`, `/api/tables`, `/api/tables/{name}`, `/api/tables/{name}/sample`, `/api/tables/{name}/ddl`, `/api/tables/{name}/indexes`, `/api/materialized-views`, `/api/materialized-views/{name}`, `/api/metrics`, `/api/jobs`, `/api/tasks`, `/api/ingest/jobs`, `/api/ingest/jobs/{id}`, `/api/sql`, `/api/search`, `/api/query-preview`, `/api/query-history`
+Read: `/api/health`, `/api/chat/config`, `/api/tables`, `/api/tables/{name}`, `/api/tables/{name}/sample`, `/api/tables/{name}/ddl`, `/api/tables/{name}/indexes`, `/api/materialized-views`, `/api/materialized-views/{name}`, `/api/metrics`, `/api/jobs`, `/api/tasks`, `/api/ingest/jobs`, `/api/ingest/jobs/{id}`, `/api/sql`, `/api/search`, `/api/query-preview`, `/api/query-history`
 
 Write: `/api/search` (native `Table.search`), `/api/tables/{name}/finish`, `/resume`, `/drop`, `/compact`, `/api/materialized-views` (create), `/api/materialized-views/{name}/refresh`, `/drop`, `/api/ingest/begin`, `/api/ingest/upload`, `/api/ingest/hf` (returns `job_id`), `/api/ingest/jobs/{id}/cancel`, `/api/ingest/finish`
 
@@ -37,7 +38,16 @@ Optional env:
 - `HF_TRANSFER_MAX_CONCURRENCY` — parallel connections (default 8)
 - `HF_TRANSFER_CHUNK_SIZE` — range chunk bytes (default 10MB)
 
-**Security:** No authentication. Bind to localhost only (`127.0.0.1:8787`) in untrusted environments.
+### Platform Chat (LLM)
+
+- Browser mode: configure API key + base URL in **Settings** (stored in `localStorage` only).
+- Server proxy (production): `TORADB_LLM_BASE_URL`, `TORADB_LLM_API_KEY`, `TORADB_LLM_MODEL` on the API process; enable **Use server proxy** in Settings.
+- `POST /api/chat/completions` — OpenAI-compatible proxy when env is set.
+- Optional embedder in Settings for vector/hybrid search in Chat (`POST /api/embed`).
+
+See [Platform Chat guide](../../mdx/guides/platform-chat.mdx).
+
+**Security:** Optional auth via platform login; bind to localhost in untrusted environments. Do not expose LLM proxy keys in client bundles — use server proxy in production.
 
 ## Build Dashboard Assets
 

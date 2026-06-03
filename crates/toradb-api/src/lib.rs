@@ -26,6 +26,7 @@ use toradb_sql::{
 };
 use tower_http::services::{ServeDir, ServeFile};
 
+mod chat_api;
 mod pipe_api;
 
 const MAX_UPLOAD_BYTES: usize = 512 * 1024 * 1024;
@@ -471,6 +472,11 @@ pub fn serve_blocking(config: ServeConfig) -> Result<(), String> {
         .route("/api/sync/jobs/{id}", get(pipe_api::get_sync_job))
         .route("/api/sync/jobs/{id}/cancel", post(pipe_api::cancel_sync_job))
         .route("/api/embed", post(pipe_api::embed_query))
+        .route("/api/chat/config", get(chat_api::chat_config))
+        .route(
+            "/api/chat/completions",
+            post(chat_api::chat_completions),
+        )
         .route("/api/auth/login", post(pipe_api::auth_login))
         .route("/api/auth/logout", post(pipe_api::auth_logout))
         .route("/api/auth/me", get(pipe_api::auth_me))

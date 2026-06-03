@@ -40,7 +40,8 @@
               "guides/sql",
               "guides/cli",
               "guides/reindex-compact",
-              "guides/typed-columns"
+              "guides/typed-columns",
+              "guides/platform-chat"
             ]
           },
           {

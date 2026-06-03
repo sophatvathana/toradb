@@ -12,6 +12,7 @@ import {
   Plug,
   RefreshCw,
   ScrollText,
+  MessageSquare,
   Search,
   ServerCog,
   Settings,
@@ -31,6 +32,7 @@ const SIDEBAR_WIDTH = 248;
 const NAV_ITEMS = [
   { href: "/overview", icon: Gauge, title: "Overview" },
   { href: "/search", icon: Search, title: "Search" },
+  { href: "/chat", icon: MessageSquare, title: "Chat" },
   { href: "/query", icon: Database, title: "Query" },
   { href: "/analytics", icon: BarChart3, title: "Analytics" },
   { href: "/query-log", icon: Clock3, title: "Query Log" },
