@@ -24,6 +24,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          docker-images: true
+          swap-storage: true
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -51,6 +61,16 @@ jobs:
         python-version: ["3.9", "3.12"]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          docker-images: true
+          swap-storage: true
 
       - uses: actions/setup-python@v5
         with:

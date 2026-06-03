@@ -34,7 +34,7 @@ impl<'a> Coordinator<'a> {
             let resp = rpc::call(&worker.addr, &req)?;
             match resp {
                 Response::Ok {
-                    candidates: Some(mut local),
+                    candidates: Some(local),
                     ..
                 } => {
                     for (i, id) in local.ids.iter().enumerate() {

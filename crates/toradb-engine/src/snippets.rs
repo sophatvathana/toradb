@@ -50,7 +50,7 @@ fn scan_tokens(text: &str, query_tokens: &HashSet<String>) -> Vec<TokenSpan> {
     let mut active: Option<Script> = None;
     let mut tok_start = 0usize;
 
-    let mut flush = |buf: &mut String, start: usize, end: usize, spans: &mut Vec<TokenSpan>| {
+    let flush = |buf: &mut String, start: usize, end: usize, spans: &mut Vec<TokenSpan>| {
         if !buf.is_empty() {
             let matched = query_tokens.contains(buf.as_str());
             spans.push(TokenSpan {

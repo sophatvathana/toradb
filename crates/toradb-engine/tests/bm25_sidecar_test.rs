@@ -35,7 +35,7 @@ fn bm25_sidecar_written_on_flush_and_used_on_reload() {
         "per-segment bm25 binary sidecar should exist after flush"
     );
 
-    let mut dag2 = DagRunner::open(&dir).expect("reopen");
+    let dag2 = DagRunner::open(&dir).expect("reopen");
     let mut batch = toradb_core::Batch::new();
     batch.table = "docs".into();
     batch.query = "Nikola Tesla alternating current".into();

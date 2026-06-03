@@ -20,7 +20,7 @@ fn reload_restores_corpus_from_parquet() {
         .expect("add");
     }
 
-    let mut dag2 = DagRunner::open(&dir).expect("reopen");
+    let dag2 = DagRunner::open(&dir).expect("reopen");
     let mut batch = toradb_core::Batch::new();
     batch.table = "papers".into();
     batch.query = "Nikola Tesla alternating current".into();

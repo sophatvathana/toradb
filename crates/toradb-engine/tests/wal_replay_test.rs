@@ -67,7 +67,7 @@ fn open_after_crash_before_manifest_recovers_docs() {
         append_flush(&dir, "docs", "seg_00001.parquet", 0, 1, true).expect("wal");
     }
 
-    let mut dag2 = toradb_engine::DagRunner::open(&dir).expect("reopen");
+    let dag2 = toradb_engine::DagRunner::open(&dir).expect("reopen");
     let mut batch = toradb_core::Batch::new();
     batch.table = "docs".into();
     batch.query = "alternating current".into();
