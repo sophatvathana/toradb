@@ -71,7 +71,7 @@ jobs:
           manylinux: ${{ matrix.manylinux }}
           container: ${{ matrix.container }}
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-linux-${{ matrix.target }}
           path: dist
@@ -104,7 +104,7 @@ jobs:
           sccache: true
           manylinux: musllinux_1_2
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-musllinux-${{ matrix.target }}
           path: dist
@@ -137,7 +137,7 @@ jobs:
           rust-toolchain: stable
           sccache: true
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-windows-${{ matrix.platform.target }}
           path: dist
@@ -167,7 +167,7 @@ jobs:
           rust-toolchain: stable
           sccache: true
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-macos-${{ matrix.platform.target }}
           path: dist
@@ -184,7 +184,7 @@ jobs:
           args: --out dist
           rust-toolchain: stable
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-sdist
           path: dist
@@ -225,7 +225,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path out | Out-Null
           Compress-Archive -Path target/release/toradb-ingest.exe -DestinationPath "out/toradb-ingest-${{ matrix.platform.target }}.zip"
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cli-${{ matrix.platform.target }}
           path: out
